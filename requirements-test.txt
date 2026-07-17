@@ -1,0 +1,4 @@
+# Optional: install for running the smoke test suite.
+#   pip install -r requirements-test.txt
+#   pytest tests/
+pytest>=7.0

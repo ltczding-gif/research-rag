@@ -1,0 +1,12 @@
+# Combined dependency manifest for the default single-venv setup.
+#
+# `setup.sh` (default mode) installs from this file into `.venv/` at the
+# repo root, giving you ONE venv that runs both the scanner and the
+# service stacks. This is the simplest setup and works for ~95% of users.
+#
+# If your machine has a complex Python environment (anaconda + system
+# Python + uv all coexisting, or you've had transitive-dep conflicts
+# before), see `setup.sh --isolated` and the "Advanced installation" section
+# in README.md.
+-r requirements-rag.txt
+-r requirements-scanner.txt

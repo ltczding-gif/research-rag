@@ -1,0 +1,19 @@
+# Service layer dependencies (query_server + ingestion).
+#
+# ChromaDB version: developed and validated against 1.5.5. Any 1.x
+# release is expected to work; if you hit a regression please open an issue
+# noting the version. 1.0+ ships Rust HNSW bindings, so no separate hnswlib
+# install is needed.
+# Avoid 0.x — the persistent index format changed at 1.0 and old data
+# won't read.
+chromadb>=1.0,<2.0
+flask>=2.3,<4.0
+pdfplumber>=0.10
+pyyaml>=6.0
+requests>=2.31
+# Default embedding provider: in-process ONNX (no daemon, no API key).
+# chromadb already depends on onnxruntime, so the marginal footprint is small.
+fastembed>=0.4
+# stdio MCP server (service/mcp_server.py) — the terminal agent spawns it
+# per session; the Flask sidecar stays as a compatibility fallback.
+mcp>=1.0,<2.0

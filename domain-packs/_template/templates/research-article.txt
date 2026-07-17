@@ -1,0 +1,150 @@
+本模板用于 TODO-your-field 领域的实验型 / 数据驱动型研究论文。
+默认 `_universal_rules.txt 与 _domain_quality_rules.txt` 已加载。本文件只负责正文结构与写作要求，不重设计 note frontmatter。
+正文默认使用中文；在能提高精度时，保留必要的英文技术术语、方法标签与框架名称（括号内）。
+
+## 使用边界
+
+本模板适用于：以 TODO-primary-variable 为核心变量的实验型 / empirical TODO-your-field 论文。
+
+不要用于：
+- review、perspective、roadmap、commentary（应路由到 `review-or-perspective`）
+- multi-chapter dissertation（应路由到 `phd-dissertation`）
+- 以理论或形式化推导为主线的论文（应路由到 `foundational-theory`）
+- 难以归入任一专用模板的杂项文档（应路由到 `generic-research-note`）
+
+## 必须输出的正文结构
+
+## 文献基本信息
+这一节必须保留，目的是让笔记在脱离 frontmatter 后依然能被人直接识别、命名和归档。
+
+至少包含以下条目：
+- **推荐保存文件名**：按 `_domain_quality_rules.txt` 中的命名骨架填写
+- **标题**：英文原标题
+- **期刊与年份**
+- **DOI**
+
+## 客观摘要
+写一个高密度中文摘要段，覆盖以下信息（按你的领域调整）：
+- TODO: 研究对象身份与关键特征
+- TODO: 目标问题或目标系统
+- TODO: 方法或数据来源
+- TODO: 支撑主结论的最强证据
+- TODO: 最关键的定量结果
+
+要求：
+- 只要原文提供，就至少写出两个定量数据点
+- 关键英文术语保留括号锚点
+- 必须保留 `value + unit + condition`
+- 不要拆成中文摘要和英文摘要两段
+
+## 研究问题（Research Question）
+说明本文真正要解决的科学问题或工程问题。
+- 明确作者针对的 prior-art limitation 或 knowledge gap
+- 用论文自己的 framing 来写，并用 `[p.X]` 锚定
+- 保持在一到两段，不要扩写成综述
+
+## 体系信息（System / Setup）
+TODO: 用能支撑后续证据解释的方式，概括本文研究对象。
+按你的领域调整字段，例如：
+- TODO: 实验/计算系统的关键参数
+- TODO: 数据集来源、规模、采样口径
+- TODO: 控制条件、边界条件
+- TODO: 任何对复现或解释关键的细节
+
+## 核心方法（Core Methods）
+TODO: 把以下信息完整抽出。缺失项写 `原文未提及`。
+按你的领域调整字段集，例如：
+- TODO: 关键测量或评估方法
+- TODO: 控制变量与对照设计
+- TODO: 分析框架或统计方法
+- TODO: 任何方法学陷阱（参考 `_domain_quality_rules.txt` 的 trap scan）
+
+除了"方法是什么"，还要尽量写"这个方法在本文里承担什么角色"。
+
+## 核心结果与定量指标
+所有关键结果都必须以 `value + unit + condition` 形式保留。
+
+TODO: 按你的领域定义关键指标列表。例如：
+- TODO-metric-1：[给出 value + unit + condition]
+- TODO-metric-2：[给出 value + unit + condition]
+- TODO-metric-3：...
+
+如果文章做了 benchmark、baseline 或 cross-study comparison，必须补一段 **基准可比性判断**，至少检查：
+- TODO: 你的领域内最常被偷换的比较口径
+
+如果不是 apples-to-apples comparison，不要把数值高低直接写成"显著优于"，而要明确写出比较边界。
+
+## 逐图证据路径总结（Figure-by-Figure）
+这一节不是机械图注转写。目标是把每一张关键图重新放回正文论证链里，说明每个 panel 在整篇文章中负责什么工作。
+
+必须细化到 panel-level，而不是只写 `Fig.1`、`Fig.2` 这种整图概括。
+
+每个 panel 都按下面格式写：
+- **该分图的职责**：从下列职责中择其一或多项（TODO: 调整为你领域的常见职责）
+  - structural baseline / object identity
+  - performance claim / outcome support
+  - mechanistic trigger / theoretical support
+  - control / negative result
+  - validation / robustness check
+  - practical relevance / generalization
+- **该分图直接显示了什么**：只写图本身和紧邻正文真正可见的 observation；保留关键定量值，必须标 `[p.X, Fig.1a]`
+- **作者借此想支持什么判断**：指出正文用这一 panel 支撑的是哪个 claim
+- **该分图单独不能证明什么**：明确它还缺哪类 control / replication / time-dependent / structural-sensitive 证据
+- **它和其他分图如何接力**
+
+## 关键主张-证据路径图（claim-support map）
+这一节按"主张 -> 支撑链 -> 验证边界"来写，而不是按图号顺序写。
+
+默认写 1-3 条最重要的主链。优先选那些真正支撑 headline 结论的主链。
+
+每一条主链用一个 `### Claim N` 子节：
+- **发现了什么现象**：先写 observation，必须标 `[p.X, Fig.Y]`
+- **形成了什么推论**：作者由 observation 推到什么解释
+- **设计了什么实验/分析来验证**
+- **补充了哪些表征/证据**
+- **验证边界在哪里**
+- **claim-support map**：用一行紧凑路径总结
+
+## 深度机理 / 解释视角提炼
+TODO: 这一节恢复"提炼后的解释视角"写法。把全文最值得记住的 2-4 个 takeaways 抽出来。
+
+每个 `###` 视角都应具备：
+- **核心结论**：一句话写出这个视角的结论
+- **证据整合**：把至少两类证据或两处图文支撑整合起来
+- **机理 / 解释路径**：只有在因果链真正成立时，才写 `A -> B -> C`
+- **边界 / caveat**：指出这个视角最容易被过度外推的地方
+
+## 方法亮点与陷阱扫描
+**方法亮点**：
+- 列出 3-6 个具体的方法学优势
+- 每一点都必须锚定 `[p.X]`
+
+**Trap Scan**（参照 `_domain_quality_rules.txt` 的 checklist 逐项核查）
+
+## 主观打分
+按 `_universal_rules.txt` 的四轴 + `_domain_quality_rules.txt` 定义的第四轴打分。
+
+- **创新性（0-10）**：[score] — [引用 [p.X] 说明理由]
+- **方法严谨度（0-10）**：[score] — [写出因 trap scan 缺口而扣分的地方]
+- **证据链闭环度（0-10）**：[score] — [说明主结论是直接证据支持，还是部分依赖推断]
+- **TODO-axis-4-name（0-10）**：[score] — [评价你领域定义的相关性维度]
+
+## 核心结论总结
+用一个段落总结：
+- 这篇论文对其子领域真正做出的贡献
+- 主要 caveats 或复现风险
+- 后续读者在复用或扩展这项工作时最该警惕的点
+
+## 写作规则
+
+- 全文尽量遵循"证据 -> 解释 -> 含义"的顺序。
+- 每个关键事实判断都尽量带 `[p.X]` 或 `[p.X, Fig.Y]`。
+- 定量信息必须保留 `value + unit + condition`。
+- 不要让性能 / 结论跑在定量质量前面。
+- 如果原文不支持完整机制链，就直接说明，不要补写想象出来的闭环。
+- 如果正文涉及 comparison，必须显式检查基准可比性。
+
+## 执行约束
+
+本模板受 `_universal_rules.txt`（领域无关）与 `_domain_quality_rules.txt`（领域专属）共同约束。
+所有事实性表述都必须只基于当前附加文档。原文没有出现的内容写 `原文未提及`。

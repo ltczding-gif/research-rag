@@ -1,0 +1,296 @@
+本模板用于理论论文、基础概念论文、数学导向工作，以及那些主要贡献是 conceptual framework、formal derivation 或 explanatory theory，而不是新实验体系的文献。
+默认 `_universal_rules.txt 与 _domain_quality_rules.txt` 已加载。本文件只定义正文结构，不重设 note frontmatter。
+正文默认使用中文；在能提高精度时，保留必要的英文技术术语、theorem name、framework label、符号与 paper identifier。
+
+## 适用边界
+
+当论文的主要贡献属于以下一种或多种时，使用本模板：
+- conceptual framework
+- mathematical derivation
+- unifying explanation
+- abstract mechanism 或 state-space partition
+- 解释逻辑明显重于任何单一 dataset 的 theoretical model
+
+不要用于：
+- 主要仍是实验论文，只是附带少量 model 或 fitting
+- methods 或 materials-synthesis paper
+- review、perspective、commentary
+- 核心证据其实是 performance benchmarking，而不是 theory construction
+- 只有形式化推导、定理陈述或符号整理，但没有提出新的解释框架、有效域或可检验后果的 paper；这类文献不应被自动抬升为强 theory
+- 仅仅把已有直觉换成更漂亮的 notation、重新参数化（reparameterization）或做了局部计算，但没有改变解释顺序或约束结构的文献
+
+边界纪律：
+- 不要把 theory 写成实验 protocol
+- 不要把 model validation 改写成 performance report
+- 如果 source 自己没有把 supporting calculation 作为主线，就不要替它升级为 main narrative
+- 若 source 是 hybrid paper，只有当 theory 确实是 dominant contribution 时，才用本模板
+
+## 开篇摘要
+
+不要给这一段加标题。
+用一个高密度摘要段写清：
+- 论文试图解释、统一或重构的 conceptual problem
+- 核心 framework、model、derivation path 或 explanatory principle
+- 最强主张是什么，以及为什么它不只是 prior idea 的重述
+- 若原文明确给出 milestone theorem、key equation、limit result 或 governing condition，要点出来
+- 这篇论文是在提出 descriptive claim、normative proposal、conjectural agenda，还是更 formal 的结果
+
+## 文献基本信息
+
+本节必须保留，使笔记即使脱离 frontmatter 也能被识别和命名。
+必须包含：
+- 推荐保存文件名
+- 标题
+- 期刊与年份
+- DOI
+
+规则：
+- `推荐保存文件名` 不能省略
+- 文件名要突出年份、期刊、核心概念和主要理论贡献
+- 不要简单重复 PDF 原文件名
+- 不要把整条 theorem、完整 equation 名称或整句哲学判断塞进文件名；优先保留最能代表理论主线的概念化短语。
+- `推荐保存文件名` 必须遵循共享规则中的统一骨架：`年份-期刊缩写-作者主线-核心概念或问题-理论任务类型-关键框架或推导主轴-解决的解释缺口_review_note.md`
+- 即使没有实验对象，也不要把命名骨架压扁成“年份-标题”；应尽量让核心概念、理论任务和贡献焦点各占一个槽位。
+- 若年份、期刊或 DOI 不清楚或冲突，要说明你采用了什么来源，而不是静默跳过
+
+## 核心问题（Core Question）
+
+明确写出这篇论文真正要回答的理论问题。
+要说明：
+- 哪个 prior framework、concept 或 explanation 不足
+- 论文到底在问什么，而不只是“在讲什么主题”
+- 哪些问题是 primary，哪些是 secondary
+- 它是在做 mechanism explanation、conceptual unification、mathematical derivation、paradigm replacement，还是 boundary redrawing
+
+保持简洁，并尽量用 `[p.X]` 锚定关键表述。
+若 source 从未清楚说出问题定义，就写 `原文未明确表述`。
+
+## 框架与假设（Framework / Assumptions）
+
+解释论文使用了什么框架，以及这个框架建立在什么假设上。
+包括：
+- framework type：first-principles / phenomenological / axiomatic / statistical / analogical / unifying framework / hybrid
+- core objects、variables、states、mappings、boundary conditions 和 simplifications
+- 哪些 assumptions 是显式写出的，哪些是隐含的，哪些只能从 derivation path 反推出来
+- 哪些 assumptions 是 load-bearing 的
+- 这个 framework 与旧框架是继承、修补、替换还是竞争关系
+- 把 assumptions 分成至少五类来记账：定义性假设（definition）、辅助假设（auxiliary assumption）、ceteris paribus 条件、观测映射假设（measurement mapping）、近似/理想化（approximation / idealization）
+- 对每个 load-bearing assumption 标出它的角色：必要条件、便利条件、解释条件，还是只是为了让 derivation 走通
+- 如果结论只有在额外假设被悄悄加上以后才成立，要明确记为“结论依赖隐藏假设”，不要把它包装成普适定律
+- 如果 paper 用新的符号、名字或坐标系重写旧框架，但没有改变约束、预测或解释顺序，要标记为 notation-level change 而不是 substantive advance
+- 不要把 source 沉默误读成默认同意；source 没有说出的前提，统一记为 `原文未提及` 或 `(Reader's inference — not in source text)`
+
+不要从背景知识补 assumptions。
+source 沉默时写 `原文未提及`。
+
+## 推导与证据锚点（Derivation / Evidence Anchors）
+
+这是理论论文的证据核心。
+必须把 `formal derivation` 和 `evidence anchors` 分开。
+
+对每个 major step，说明：
+- 起点 premise 是什么
+- 发生了什么 transformation、approximation 或 inferential move
+- 得出了什么 conclusion
+- 哪一部分是数学必然，哪一部分是作者解释，哪一部分只是经验锚点支持
+
+还要写清 theory 的内外部锚点：
+- equations
+- lemmas / propositions / theorems
+- asymptotic limits
+- simulations
+- calibration data
+- examples
+- thought experiments
+- 与已知 regime 的比较
+
+规则：
+- 尽量保留论文自身的逻辑顺序
+- 不要跳过隐藏步骤然后假装闭环完整
+- 若 empirical data 只是校准参数或显示 plausibility，要标成 anchor，而不是 full proof
+- 若 source 没有建立完整 derivation，就写 `原文未建立完整推导链，仅提供部分论证或经验锚点`
+- 每个 major step 还要标注它到底是 deduction、algebraic manipulation、approximation、asymptotic limit、linearization、idealization、simulation、calibration，还是 interpretive leap
+- 形式上的闭合（formal closure）不等于解释上的闭合（explanatory closure）；一个 theorem/proposition 证明了模型内部成立，不自动证明它解释了现象本身
+- 如果 paper 只是证明了存在性、唯一性、稳定性、上界/下界或一致性，就写清楚它证明了什么，不要顺手升级成“理论成立”或“机制已证实”
+- 如果 empirical data 只是 sanity check、parameter fit、plausibility demo 或 illustrative example，要标成 anchor，而不是 proof / validation
+
+## 论证类型分层（Proof / Explanation / Calculation / Analogy）
+
+把理论论文里的论证类型分开记，避免把“符号上能推出”误写成“现实中已解释”。
+包括：
+- mathematical proof：只保证给定前提下的内部有效性；它能支持理论，但不是自动的经验验证
+- derivation / calculation：记录它是在推出什么性质，还是仅仅把已知关系整理得更紧凑；不要把计算密度当成新理论密度
+- explanatory theory：必须说明为什么、在什么假设下、对什么对象、在什么有效域内成立
+- simulation / calibration：只能支持 plausibility、fit 或 regime behavior；如果没有独立检验条件，不要升格为 proof
+- analogy / toy example / thought experiment：只算启发或 heuristic，不能充当强证据
+- 如果 source 明确区分 theorem, proposition, lemma, corollary, assumption, example, remark，要尽量保留原分层，不要合并成一层“结果”
+
+## 有效域（Validity Domain）
+
+说明 theory 在什么条件下成立、在哪些条件下失效。
+包括：
+- scale、parameter range、boundary condition、symmetry assumption、equilibrium / non-equilibrium regime、time / length-scale separation
+- theory 依赖了哪些 approximations
+- 哪些 systems / windows 被明确纳入 scope
+- 哪些 systems / windows 在 scope 外
+- 超出有效域后会发生什么：mismatch、degeneracy、non-identifiability、divergence 或 loss of falsifiability
+- 还要写清楚它是否依赖 identifiability、observability、measurement invariance、ceteris paribus 条件，或某种特定的观测映射
+- 如果作者只在理想化条件下证明结论，要把理想化条件本身写成有效域的一部分，而不是藏在结论后面
+- 如果结论跨尺度、跨 regime、跨对象类别才会失效，要明确是哪一种外推最危险，避免把局部成立写成全域成立
+- 如果 paper 只给出 reader inference 式边界，而没有 author 明说，就单独标记，不要静默吸收进正文结论
+
+若 source 没有显式讨论有效域，写 `原文未提及`。
+如果某个边界只是从逻辑里推出来的，要标注为 `(Reader's inference — not in source text)`。
+
+## 替代框架 / 竞争解释（Alternative Frameworks / Competing Explanations）
+
+若 source 讨论了 competing theories 或替代解释，这一节必须写。
+对每个 alternative，说明：
+- 它解释了什么
+- 它解释不了什么
+- 作者为何偏向或拒绝它
+- 这种比较是 explicit 还是 implicit
+
+若 source 没提 alternatives，就写 `原文未提及`。
+不要把作者偏好的 framework 升级成 field-wide consensus，除非原文明说如此。
+
+## 预测与可检验后果（Predictions / Testable Consequences）
+
+抽出真正可检验的 consequences。
+优先写：
+- author-stated predictions
+- limiting-case behavior
+- falsifiable conditions
+- regime transitions
+- invariant relations
+- 可以被外部检验的 numerical consequence
+- 每条 prediction 都要写清楚：可观察量是什么、变化方向是什么、对照基线是什么、什么结果算削弱、什么结果算直接反驳
+- 如果某个“预测”没有明确观测映射，或者任何结果都能被事后解释回去，就不要叫 prediction；最多叫 conjecture、interpretive claim 或 heuristic expectation
+- 如果理论需要依赖一串辅助假设才能落到观测层面，要把这些辅助假设一并列出来；不要把它们从 falsifiability 里偷走
+- 如果反例只能推翻辅助假设而不能推翻核心理论，也要老实写出这点，不能把它伪装成“理论已经被证伪”
+- 对于 ad hoc 补丁、可随时加装的例外条款、或者会让理论永远不输的弹性定义，要明确标注低 falsifiability 风险
+
+对每条 prediction，说明：
+- 在什么条件下应出现
+- 什么 observation 会削弱它
+- 什么结果会直接挑战它
+- 它是原文明示，还是严谨的 reader inference
+
+若论文没有给出可直接检验的 prediction，就写 `原文未提出可直接检验的明确预测`。
+
+## 含义（Implications）
+
+说明这一 framework 对理解该领域到底改变了什么。
+包括：
+- 它改变了什么 conceptual boundary、explanation order 或 modeling priority
+- 哪些后续研究可以直接复用它
+- 哪些争议被澄清了，哪些只是被重写了
+- 哪些 extensions 有扎实基础，哪些仍是 speculative
+
+不要把“suggestive”写成“已经被证明适用于所有场景”。
+
+## 理论论文审稿人视角（Theory-Specific Reviewer Lens）
+
+必须用 theory-specific lens，而不是 experimental-paper 标准。
+检查：
+- 问题是否真的被写成可回答的理论问题
+- assumptions 是否透明，且与 conclusion 强度匹配
+- derivation 是否闭合，还是存在 hidden leap、circularity 或 concept drift
+- work 是否区分了 notation change 与 substantive advance
+- boundary condition 是否被认真处理
+- predictions 是否具体且可证伪
+- alternative explanation 是否被公平对待
+- empirical anchors 是否足以支撑理论强度
+- fitting、analogy 或 local example 是否被误写成 universal theory
+- experimental validation 是否被误标成“proof”
+- theory term 到 observable 的 mapping 是否被写清楚，还是只是在概念层面自洽、在观测层面悬空
+- 每个关键结论的前提是否都能在文中找到；如果找不到，就说明它依赖 hidden assumption 或 reader inference
+- 论文是否把 theorem/proposition 的内部一致性，误当成了 field-level truth、mechanism proof 或 general validity
+- 是否存在“更漂亮的符号系统 = 更强理论”的偷换；若只是重命名、重排或 reparameterization，没有新约束/新预测/新解释顺序，就不要算 substantive advance
+- 如果作者声称“验证”或“支持”，先检查它到底是 direct test、indirect anchor、local example，还是仅仅 plausibility argument
+- 如果某个 counterexample 会迫使作者引入 ad hoc 条款才能维持主张，要把这一点写成 review 的核心风险，而不是边角备注
+
+若信息不足，写 `原文未提供足够信息，无法强评`。
+并说明这篇文献更像：
+- framework reconstruction
+- testable theory
+- explanatory proposal
+- conceptual commentary
+
+## 局限与开放问题（Limits / Open Questions）
+
+列出论文没有闭合的部分。
+区分：
+- mathematical gaps
+- conceptual gaps
+- evidence gaps
+- scale-transfer gaps
+- normative / interpretive disputes
+- 还要区分：是推导缺口、假设缺口、观测映射缺口，还是外推缺口；不要把这些统统写成“有待未来工作”
+- 如果一个结果只有在作者没有正面讨论的前提下才成立，要把这个前提列进 limit，而不是塞进 interpretation
+- 如果 future work 是为了补足当前结果的 validity，而不是单纯扩展范围，要直接写明这是当前版本的结构性缺口
+- 如果存在 competing regime、counterexample 或 boundary case，只要重要，就算作者没写也要记为开放问题，但必须标成 reader inference
+- 对于只是换了更强符号、更大样本或更复杂拟合就能做的扩展，不要把它们包装成理论开放问题；那只是工程升级
+
+若作者自己写了 limit，要保留那条边界。
+若 limit 只是从逻辑里读出来的，要标成 reader inference。
+对明显重要但缺失的部分，写 `原文未提及`。
+
+## 主观打分
+
+按 theory 最重要的四件事打分：novelty、rigor、closure、transfer value。
+
+评分锚点：
+- 9-10：field-shaping theory，conceptual 与 formal closure 都很强
+- 7-8：solid meaningful advance，有 reusable framework 或强 explanatory power
+- 5-6：合格但推进有限，或 burdened by strong assumptions
+- 3-4：逻辑缺口大、边界不清、闭环弱或 overclaiming
+- 如果出现隐藏假设、边界不清、证明被当成解释、或预测不可证伪，优先拉低理论严谨度和证据 / 推导闭环度，而不是只看文字是否漂亮
+- 如果 empirical anchors 承担了本该由理论自己承担的解释重量，要在“证据 / 推导闭环度”里扣分，而不是把它当成额外加分项
+- 如果 notation 更换大于 substantive advance，要在创新性里降权
+- 如果有效域和反例条件写得很清楚，即使理论暂时不大，也应在严谨度上给出正向反馈
+
+每个维度都必须给一句 source-backed 理由。
+
+必需维度：
+- 创新性（0-10）
+- 理论严谨度（0-10）
+- 证据 / 推导闭环度（0-10）
+- 迁移与预测价值（0-10）
+
+不要因为实验少就自动扣分；只有在它声称了 empirical support 却没有足够 anchor 时，才应明显降分。
+
+## 核心结论总结
+
+用一个结尾段写清：
+- 这篇论文对其 subfield 的真实贡献
+- 哪些 theoretical insight 最可复用
+- 最重要的 caveat、boundary condition 或 reuse risk
+- 哪些结论可以迁移到 nearby regime
+- 哪些结论不应外推到更大尺度、不同假设或不同 observable
+
+只加粗最关键的结论。
+
+## 写作规则
+
+- 尽量遵循：evidence -> interpretation -> meaning
+- 关键判断尽量用 `[p.X]`、`[p.X-Y]` 或 `[p.X, Fig.Y]` 锚定
+- 任何 quantitative statement 都保留 `value + unit + condition`
+- 若 source 给了 equation、limit、threshold 或 inequality，尽量保持具体，不要改写成模糊话
+- 若 source 不支持完整 causal / derivational chain，要直接说出来
+- 不要让 empirical anchor 跑在理论逻辑前面
+- 明确区分 `author-proposed alternative` 与 `reader-added external analogy`
+- 在 hybrid paper 里，实验只能作为 theory 的锚点，不能反过来把全文写成 experiment report
+- 用词上要保留 epistemic strength：proved / derived / shown / suggested / implied / illustrated / calibrated 不能互相偷换
+- 只要 source 只是 support、plausibility、sanity check 或 illustrative example，就不要写成 verified、validated 或 proven
+- theorem / proposition / lemma 只写它在当前假设下证明了什么，不要顺手升级成领域真理
+- notation 清理、变量重命名、坐标转换、符号压缩，不算 substantive advance，除非它们带来了新约束、新预测或新解释顺序
+- 如果 source 用的是谨慎词（may, suggest, consistent with, compatible with），笔记里也要保留这种力度，不要自动改写成肯定句
+
+## 执行约束
+
+- 本模板受 `_universal_rules.txt 与 _domain_quality_rules.txt` 统一约束；所有 shared rules 都无条件生效
+- 本文件只细化 theory reading mode，不会削弱 shared contract
+- 所有事实性表述都必须只基于当前附加 source
+- 缺信息时写 `原文未提及` 或 `原文未明确讨论`
+- 需要 SI 但 SI 不在手上时，写 `SI未上传/原文未提及，无法核实`

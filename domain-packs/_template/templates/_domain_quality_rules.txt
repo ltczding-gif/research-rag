@@ -1,0 +1,70 @@
+## TODO Domain Quality Rules
+
+REPLACE the TODOs below with your field's filename slot semantics, trap
+scan checklist, and scoring axis-4 name. This file is loaded after
+`prompts/_universal_rules.txt` (which provides field-invariant evidence,
+anti-hallucination, and scoring discipline).
+
+### Recommended Filename Contract
+
+- Whenever you output `推荐保存文件名` (or its translation in your
+  pack's `language`), it must be a bare filename only, not a path.
+- The filename must always end with `_review_note.md`.
+- Do not output `.pdf`, `.json`, extensionless names, or filenames that end
+  only with bare `.md`.
+- Follow this skeleton (TODO: customize the slot semantics):
+  - `年份-期刊或来源缩写-作者主线-TODO-slot-1-TODO-slot-2-TODO-slot-3-贡献焦点_review_note.md`
+- Slot semantics (TODO: replace with your field):
+  - `TODO-slot-1` → e.g. core experimental object, biological system, dataset
+  - `TODO-slot-2` → e.g. method type, paradigm, task family
+  - `TODO-slot-3` → e.g. key mechanism, key finding, model architecture
+- Author slot discipline (TODO: customize for your field's authorship norms):
+  - Catalysis convention is "last listed corresponding author, full
+    Romanized spelling." This often FAILS for biology (co-corresponding
+    authors), CS (alphabetical author lists), and humanities (single-author
+    tradition). Pick a rule appropriate for your field.
+  - Examples: "first listed author last name", "corresponding author
+    last name", "first + last author concatenated", "single-author when
+    applicable".
+- Segment writing discipline:
+  - Keep each slot concise and archive-friendly.
+  - Do not dump the full title into the filename.
+  - Use hyphen-separated slots and keep the suffix `_review_note.md` untouched.
+
+### TODO Trap Scan
+
+Replace this checklist with 5-10 quality checks specific to YOUR field's
+recurring methodological failure modes. The catalysis pack uses:
+误差棒 / 碳平衡 / 对照实验 / 进料一致性 / SI 关键数据。 What's the
+equivalent for your field?
+
+Examples by field:
+- Biology: sample-size justification; multiple-testing correction; blinding /
+  randomization; effect-size + p-value; batch effects in -omics work.
+- ML: train/test contamination; reproducibility (code + seed); compute-budget
+  baselines; statistical significance of benchmark deltas; data licensing.
+- Materials: phase purity; grain-size distribution; anneal-cycle reproducibility;
+  contamination controls; cross-lab replication.
+- Clinical: pre-registration; intention-to-treat analysis; loss-to-follow-up;
+  conflict-of-interest disclosure; effect-size + CI.
+
+Your field's checklist:
+- TODO-trap-1
+- TODO-trap-2
+- TODO-trap-3
+- TODO-trap-4
+- TODO-trap-5
+
+### Domain-Specific Scoring Axis (axis 4 of the universal four-axis pattern)
+
+The universal pattern provides axes 1-3: originality, rigor, evidence
+closure. Axis 4 is the field-specific relevance dimension.
+
+- Axis 4 name in TODO-your-field: **TODO-axis-4-name** (e.g. "industrial
+  application potential", "biological / clinical relevance",
+  "real-world reproducibility", "policy relevance").
+- Anchors (TODO: replace with field-grounded reasons):
+  - `9-10`: TODO — strongest evidence of the relevance dimension you're scoring
+  - `7-8`: TODO — solid case
+  - `5-6`: TODO — partial / qualified case
+  - `3-4`: TODO — claim unsupported by the actual measurement

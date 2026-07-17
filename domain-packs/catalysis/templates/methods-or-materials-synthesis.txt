@@ -1,0 +1,404 @@
+本模板用于方法型论文、合成 protocol、process paper、scale-up 记录以及以可复现路线、工艺架构或构建流程为核心贡献的材料制备研究。
+
+默认 `_universal_rules.txt 与 _domain_quality_rules.txt` 已加载。本文件只定义正文结构与边界纪律，不重设 note frontmatter。
+正文默认使用中文；在能提高精度时，保留必要的英文技术术语、试剂名、仪器标签与框架标签。
+
+## 使用边界
+
+本模板用于“核心价值在工艺 / 路线 / 流程，而不是性能 headline”的论文。
+
+适用情形包括：
+- 提出新的合成路线、制备 workflow 或 process sequence
+- 把已知方法收紧成更可复现、更可放大、更安全、更便宜、更清洁或更可控的 protocol
+- 系统映射 process variables 如何改变产物的结构、晶相、形貌、纯度、收率或装配质量
+- 研究某个材料构建步骤、中间体或后处理，而这个步骤本身就是最终材料身份的关键
+- process paper、protocol paper、synthesis-oriented study，且方法本身是论文主角
+- 如果论文的真实贡献是 protocol stabilization、transferability、scale window narrowing 或降低操作者依赖，即使标题更像 property paper，也仍然优先按本模板处理
+- 若关键步骤依赖 tacit knowledge（例如终点颜色、沉淀手感、黏度、澄清度、过滤阻力、成膜手感、泡沫状态），必须把它视为可复现性风险，而不是默认“常识”
+- 若 protocol 主要分散在主文、SI、视频、代码仓库或动态 protocol 平台中，正文必须明确主文本与附加材料的分工和版本依赖
+
+不适用于：
+- performance-first 论文，合成只是 activity、selectivity、stability 或 device metrics 的前置设置
+- 主要故事是 mechanistic interpretation，而方法只是支撑细节
+- review、perspective、roadmap、commentary
+- 没有真实 process / fabrication 贡献的纯 characterization paper
+- 明显更适合 `electrocatalysis-experimental`、`thermocatalysis-experimental` 或其他 performance-first 实验路由的文章
+
+边界纪律：
+- 如果 headline 写的是“性能更好”，但真正的新意是 recipe、workflow 或 fabrication logic，本模板仍然适用。
+- 如果论文同时有 synthesis 和 performance，必须把方法作为主轴，性能只作为 downstream validation。
+- 如果论文主要在做 benchmark comparison、device metrics 或 performance headline，就应切换到更明确的 performance-first 实验路由，而不是强行用本模板。
+- 除非原文真的证明了 mechanism，不要把 modest process note 升级成完整 mechanistic story。
+- 不要把材料 fabrication paper 改写成 generic catalysis 或 device-performance paper。
+
+## 开篇摘要
+
+不要给开篇摘要额外加标题。
+用一个高密度段落写清：
+- 方法或 fabrication target 是什么
+- 被构建、改造或转化的材料 / 体系是什么
+- 中央 process innovation 是什么
+- 这条路线为什么对 reproducibility、control、scalability 或 applicability 有意义
+- 如果方法很窄、很脆弱或强依赖边界条件，最重要的 caveat 是什么
+
+## 文献基本信息
+
+本节要简洁、可读，并适合后续人工检索。
+至少包含：
+- 推荐保存文件名
+- 标题
+- 期刊与年份
+- DOI
+- 如论文有 protocol DOI、repository 链接、SOP 编号、视频补充材料或动态版本号，也应一并记录，方便追踪方法版本与外部复现入口
+
+要求：
+- `推荐保存文件名` 不能省略
+- 文件名要帮助人快速识别方法、目标体系、年份和期刊
+- 不要简单重复 PDF 原文件名
+- 不要把 protocol 步骤、完整 recipe 或整句 process claim 原样塞进文件名；只保留最能区分方法路线的负载信息。
+- `推荐保存文件名` 必须遵循共享规则中的统一骨架：`年份-期刊缩写-作者主线-目标体系-方法或工艺类型-关键流程创新-解决的复现或放大瓶颈_review_note.md`
+- 槽位顺序不要调换；如果某一项信息很弱，也应保留骨架并用最贴切的紧凑替代，而不是改写成整句标题。
+- 如果年份、期刊或 DOI 存在歧义，要明确说明你采用了什么来源，不能静默跳过冲突
+
+## 方法类型判断
+
+在展开正文前，先说明这到底是哪一类 methods paper。
+可用标签包括：
+- synthesis protocol
+- materials fabrication study
+- process optimization paper
+- scale-up / transfer study
+- post-treatment / activation study
+- hybrid method + validation paper
+
+需要说明：
+- 论文在根本上是在“构建什么”或“控制什么”
+- 新意落在 route、parameter window、sequence、integration step，还是 scale transition
+- 这是 single-step method、multi-step workflow，还是带多个 variant 的 process family
+- 论文主要是“把材料做出来”，还是“把做法做得更可靠”
+- 这条方法是否只在作者实验室成立，还是已经有跨批次、跨操作者、跨设备或跨实验室的可迁移验证
+- 论文是 author-lab demo、internal validation、external replication，还是面向 transfer-ready 的 method package
+
+如果论文是 hybrid，一定要写清哪一侧占主导、为什么。
+
+## 方法目标与论文主张
+
+用 process language 写出论文真正回答的问题。
+要说明：
+- 作者要解决的是 synthesis、fabrication、assembly、purification、activation 还是 scale-up 里的什么问题
+- 作者对“方法本身”做了什么主张
+- 这个主张是 novelty、controllability、throughput、reproducibility、safety、cost、scale 还是 property tuning
+- prior-art limitation 或 practical bottleneck 是什么
+- 作者是否把方法主张建立在降低操作者依赖、缩窄窗口、减少 hidden judgment、或提高 process transferability 上
+- 作者是否明确比较了 standard route、benchmark route 或 fail-safe route，而不是只展示单一路线的成功结果
+
+除非原文明确把 downstream performance 当作主目标，否则不要让 performance metric 反客为主。
+
+## 研究对象与系统边界
+
+描述方法实际作用在哪个系统上，但只保留那些会影响解释或复现的细节。
+包括：
+- precursor、substrate、template、solvent、gas、atmosphere、electrolyte、ligand、binder、additive、feed composition
+- target phase、composition、morphology、architecture 或 assembled structure
+- reactor、vessel、furnace、autoclave、flow setup、coating setup、printing setup 或其他关键设备
+- scale、batch size、geometry、loading range
+- 方法处于 lab-scale、pilot-scale、device-level 还是已带 transfer 导向
+- 原料 provenance、vendor、catalog、lot、purity、particle size、hydration state、storage age、预处理方式、脱气 / 除水 / 除氧条件
+- 设备型号、软件 / 固件版本、校准状态、清洗状态、管路 / 模具 / 基底几何、填充率、headspace、表面积 / 体积比、停留时间、环境温湿度
+- 任何会改变 transfer behavior 的隐性前提，例如局部传热 / 传质、搅拌或流动形态、膜 / 衬底差异、装置老化、批次差异或操作者差异
+
+还要写清重要边界条件，例如：
+- substrate dependence
+- atmosphere sensitivity
+- humidity / moisture sensitivity
+- wash / drying / purification dependence
+- operator sensitivity
+- time-window sensitivity
+- 对特定 instrument model 或 process sequence 的隐性依赖
+
+如果论文跨越多个尺度或多个系统，要分清 primary system 和 transfer target。
+
+## 流程逻辑（Process Logic）
+
+这是本模板的核心 section。
+必须把 process 写成 causal workflow，而不是 recipe dump。
+
+对每个 major step，都要写：
+- 这一步在 process terms 中“在做什么”
+- 为什么需要这一步
+- 它锁定或控制了哪个变量
+- 如果改动、跳过或调换顺序，最可能坏在哪里
+- 这一步有没有显式的 stop criterion、endpoint criterion 或 quality gate；如果没有，就说明作者把关键判断藏进了 tacit practice
+- 这一步是否依赖人手经验、视觉判断、触感判断、声学判断、黏度判断或“做到某种状态为止”；如果有，必须当作方法学信号写出来
+- 如果存在 variant route、branching logic 或 fallback route，要说明作者是按什么规则切换的，而不是只保留成功路径
+
+流程逻辑通常应拆开看：
+- precursor preparation
+- mixing / aging / dissolution / activation
+- nucleation / growth / deposition / assembly
+- thermal、chemical 或 mechanical transformation
+- post-treatment / purification / drying / annealing / reduction / activation
+- 若适用，还要包括与最终 device、scaffold、substrate 或成品形态的 integration
+
+必须保留：
+- temperature、time、ramp rate、pressure、atmosphere、concentration、pH、humidity、stirring rate、spin speed、flow rate、coating thickness、loading 等精确值
+- 加料或操作顺序
+- 作者说明的每一步角色
+- branching logic 或 variant route
+
+不要这样写：
+- 不要把整个 workflow 压成一个 recipe 段落
+- 不要把所有步骤写得同等重要，尤其当原文明显强调少数 control points 时
+- 不要把 process logic 和它预期实现的物理 / 化学效果拆开
+
+## 关键工艺参数与窗口
+
+列出真正重要的 process knobs。
+对每个关键参数，都要写：
+- value 或 range
+- unit
+- 所属 condition / context
+- 它改变了什么输出
+- 它是 fixed constant、tuned variable，还是 robustness test
+
+优先关注：
+- precursor ratio
+- concentration
+- pH
+- solvent / cosolvent
+- temperature profile
+- dwell time
+- atmosphere
+- pressure
+- flow / feed rate
+- humidity
+- substrate pretreatment
+- loading
+- catalyst / binder / additive ratio
+- annealing / calcination / reduction conditions
+- washing / purification / activation conditions
+- reactor geometry、fill fraction、headspace、stirring / flow regime、residence time、film thickness、path length、line speed、scale factor、batch hold time
+- calibration interval、instrument drift、lot-to-lot variability、operator-to-operator variability、ambient humidity / temperature / oxygen / light exposure
+- 如果作者只给 relative amount、equivalents 或 generic condition，却没有绝对 scale、几何或时序信息，要明确标注为 transfer 风险
+
+如果论文给出很窄的 working window，必须明确写出来。
+如果论文声称 broad generality，但只试了少数设置，也要点出来。
+如果 exact process window 必须靠 SI 核实，而 SI 不在手上，就写 `SI未上传/原文未提及，无法核实`。
+
+## 证据链：方法有效性如何被证明
+
+这一节要证明“方法作为方法成立”，而不是只证明最后样品看起来不错。
+
+优先写这类证据：
+- phase / composition / purity confirmation
+- morphology 或 architecture formation
+- yield、uniformity、thickness、coverage、particle-size control
+- interface formation 或 interlayer continuity
+- processing 后的 structural integrity
+- batch-to-batch repeatability
+- successful scale transfer 或 assembly completion
+- 与已知 route 或 baseline protocol 的直接对比
+
+对每条关键证据，都说明：
+- 它直接显示了什么
+- 它验证了 process 的哪一环
+- 它单独不能证明什么
+- 它是直接观测、间接 proxy 还是 supportive inference
+- 它是否只是单次成功样本，还是经过 batch replicate、lot replicate、operator replicate 或 scale replicate 反复确认
+- 它有没有覆盖 intermediate-state confirmation、in-process QC、failed route、off-spec sample 或 negative control
+
+如果论文报告 performance 值，要把它们降级成 secondary evidence：
+- 只把它们当作 downstream validation，说明这条路线确实做出了目标材料 / 器件
+- 不要让 benchmark number 变成 process validity 的主要证明
+- 如果论文过度依赖一个高值而缺少 process evidence，要明确点出来
+
+若论文使用 controls、negative controls、ablation、comparison routes 或 failed routes，一定保留，因为它们往往是证明 method specificity 的最强证据。
+
+## 可复现性与工艺透明度
+
+这一节回答：别人能不能真的做出来？
+
+要检查并写清：
+- recipe 是否完整到足以复现
+- reagent grade、supplier、instrument model 是否重要
+- 操作顺序是否明确
+- drying、aging、purification、storage、preconditioning 等步骤是否交代
+- 是否报告了 replicate runs、batch consistency 或 error bars
+- 方法是否依赖特殊手感、本地习惯或未文档化判断
+- 作者是否区分了 standard steps 与 tacit tricks
+- protocol 是否有版本号、DOI、repository 链接、视频链接或其他可追踪入口；若主文与附加协议并存，要说明哪个版本是可执行版本
+- 关键材料是否写到 source / lot / purity / pretreatment / storage age，避免把“同名试剂”误认为同一原料
+- 关键仪器是否写到型号、关键附件、校准或维护状态，避免把“同类设备”误认为同一工艺条件
+- 关键终点是否写到具体判据，而不是让读者靠经验猜测“差不多就行”
+
+常见 reproducibility 风险要主动点名：
+- 缺 precursor source / purity
+- 缺 atmosphere control
+- 缺 substrate pretreatment
+- 缺 wash / purification
+- 缺 heating ramp / dwell
+- 缺 calibration detail
+- 缺 batch size / scale
+- 缺 yield / loss accounting
+- 缺 failure case
+- 缺 protocol versioning / repository citation
+- 缺 operator-independent stop criterion
+- 缺 geometry / transfer condition
+- 缺 off-spec 或 discarded run 的说明
+
+如果 critical recipe detail 需要 SI 才能确认，而当前没有 SI，就直接说出来。
+不要把“看起来可能能复现”写成结论，除非论文自己真的支持。
+
+## 适用范围（Applicability）
+
+说明这条方法在什么边界下有可迁移性。
+要覆盖：
+- 它可能延伸到哪些 material families、substrates、architectures 或 reactor formats
+- 哪些部分真正 general，哪些部分强 system-specific
+- transfer 成功时哪些条件必须保持相近
+- 论文展示的是 scope expansion，还是只是一个 narrow showcase
+- 这条方法目前属于 proof-of-concept、lab-scale practical 还是 transfer-ready
+- generality、robustness 和 transferability 不是一回事：要区分“换一批还能做出来”“换一点参数还能做出来”“换平台还能做出来”
+- 如果方法要跨尺度迁移，必须说明哪些 invariants 需要保持：几何、传热 / 传质、混合 / 流动、气氛控制、停留时间、endpoint 逻辑、后处理节奏
+- 如果只展示单一体系、单一批次或单一装置，不要把它写成 transfer-ready；最多写成 narrow but reproducible showcase
+- 若作者声称 broad applicability，必须检查是否真的有 perturbation test、second system test、new operator test 或 new platform test
+
+若论文声称 broad applicability，必须检查测试集是否真的支撑这一说法。
+若只展示了一个系统，就要明确写当前 applicability 很窄。
+若有多个 example，要区分“通过例子扩展边界”和“真正的一般性”。
+
+## 局限 / 失效模式 / 不可外推边界
+
+这一节必须明确、克制，不能替论文圆场。
+
+要写清：
+- 论文没有证明什么
+- 路线在哪些地方脆弱、狭窄或强依赖条件
+- 作者直接观察或讨论了哪些 failure mode
+- 哪些 failure mode 只是被暗示，却没有真正分析
+- 哪些 scale-up、substitution 或 transfer 动作会有高风险
+- 路线中哪些部分最难泛化
+- 过程特有的失效模式是否被讨论：fouling、clogging、evaporation、phase separation、local gradient、thermal lag、crossover、contamination、carryover、yield erosion、inhomogeneous deposition、post-treatment collapse
+- 是否存在“成功样本偏置”：只报成功批次、不报 off-spec、不报报废样本、不报 troubleshooting
+- 作者是否把 scale-up 风险说成了成熟结论，还是只展示了局部可行性
+
+常见局限包括：
+- narrow parameter window
+- 对 moisture、oxygen、substrate 或 operator 敏感
+- throughput 低或 processing time 长
+- reagent 昂贵、有毒或难处理
+- atom economy 差、yield loss 大、waste generation 高
+- unstable intermediates
+- batch dependence
+- device integration constraints
+- scale-up fragility
+- byproducts 或 losses accounting 不完整
+- operator dependence
+- geometry dependence
+- incomplete endpoint / wash endpoint definition
+- undefined hold time / storage sensitivity
+
+若原文没有建立 degradation / failure pathway，就写 `原文未建立清晰失效路径`。
+若论文把结论推到了超过已测试边界的地方，也要明确指出，不要顺手磨平。
+
+## 审稿人视角（Reviewer Lens）
+
+用 reviewer 的口吻检查“方法主张是不是真的成立”。
+
+至少回答：
+- 这真的是新方法，还是参数微调？
+- 所谓 improvement 真来自 route 本身，还是来自隐藏 process advantage？
+- controls 是否足以隔离 process variable？
+- 重要 recipe detail 是否都写全了？
+- 方法是否可以在没有 insider knowledge 的前提下复现？
+- scale 是否匹配它宣称的应用场景？
+- characterization data 是否足以证明目标结构 / 组成？
+- benchmark 或 downstream result 是否被拿来替代 process evidence？
+- 报告出的 limits 是否诚实，还是从 narrow showcase 过度外推？
+- 如果作者主张的是方法转移或 scale-up，是否真的验证了 geometry、throughput、batch size、operator、platform 这些最容易翻车的维度
+- 如果方法依赖未写出的“老手经验”，审稿时应追问作者是否愿意把它写成标准 SOP
+- 如果方法论文给了结果，却没有给 troubleshooting、discard criteria 或 failure cases，是否只是成功展示而不是可执行方法
+- 如果主文和 SI / protocol repository 有冲突，哪一个是执行版本，冲突是否被说明
+
+如果论文名义上是 method-heavy，但主要修辞力量来自几个强 performance 数字，要明确指出这种 mismatch。
+
+## 方法学 Trap Scan
+
+请显式核查以下项目，并保持简洁但具体：
+- recipe completeness：[complete / partly missing / missing key steps]
+- control quality：[strong / mixed / weak]
+- reproducibility disclosure：[strong / partial / weak]
+- batch or replicate evidence：[reported / partly reported / absent]
+- scale relevance：[lab-only / transitional / scale-aware]
+- benchmark fairness：[apples-to-apples / partially comparable / not comparable]
+- hidden process dependence：[low / moderate / high]
+- failure mode analysis：[well-supported / hinted only / not analyzed]
+- SI dependence：[not needed / needed and present / needed but missing]
+- performance-overreach risk：[low / moderate / high]
+- provenance traceability：[complete / partial / weak]
+- instrument / calibration traceability：[complete / partial / weak]
+- protocol versioning：[citable / partially citable / absent]
+- endpoint / stop-criterion clarity：[clear / partial / unclear]
+- transfer readiness：[ready / provisional / not ready]
+- off-spec / discard transparency：[reported / partial / absent]
+
+如果某个主张超出了直接支持它的 process evidence，要在这里点出来。
+如果关键方法细节被留在你手头没有的 SI 里，也要在这里点出来。
+
+## 主观打分
+
+每个分数都必须附带来源支撑的理由。
+分数应锚定 method quality，而不是 headline performance。
+
+评分锚点：
+- 9-10：field-shaping 或 unusually authoritative 的方法 / 工艺推进
+- 7-8：强而有用的 advance，procedural value 明确
+- 5-6：合格，但 novelty 有限或方法缺口明显
+- 3-4：存在严重 reproducibility、boundary 或 evidence-closure 问题
+- 若论文以“可复现 / 可转移 / 可放大”为卖点，但没有把 protocol、版本、几何、批次和失败案例写清楚，严谨度和 evidence closure 都应明显扣分
+- 若 scale-up 或 transfer 是核心主张，工业应用潜力不能只看 headline 数字，还要看 throughput、过程窗口、设备门槛、原料可得性、废液 / 废气处理与稳定性窗口
+
+如果文章核心主张就是 protocol reuse、tech transfer 或 scale-up，可额外给出 **工艺透明度 / 转移准备度（0-10）**：
+- 这个分数专门反映是否写全 SOP、版本、边界条件、batch 信息、校准信息、失败样本和可执行入口
+- 它不替代前四项，只是把“能不能交给别的团队照着做”单独拆出来
+
+必需维度：
+- 创新性（0-10）
+- 工艺严谨度（0-10）
+- 证据闭环度（0-10）
+- 可迁移性 / 实用潜力（0-10）
+
+每个维度都要：
+- 给一个分数
+- 给一句短理由
+- 尽可能用 `[p.X]` 锚定
+
+## 核心结论总结
+
+用一个结尾段写清：
+- 这篇论文在 process / fabrication 意义上的真实贡献
+- 最值得复用的 route 部分
+- 复现或 transfer 时最大的 caveat
+- 后续工作最应继承什么
+- 最不该被过度外推什么
+
+只有最关键的结论需要加粗。
+
+## 写作规则
+
+- 正文顺序优先遵循：process logic -> evidence -> reproducibility -> applicability -> limitations -> reviewer lens -> scoring
+- 只要原文给出 quantitative statement，就保留 `value + unit + condition`
+- 默认使用中文，但在能提高精度时保留英文 shorthand、reagent name 或 framework label
+- 除非原文真的支持，不要强行加入 mechanism-heavy framing
+- 不要让 downstream performance number 替代 process evidence
+- 如果正文涉及 protocol 共享、repository、SOP、video 或动态更新版本，必须明确记录其作为执行依据的地位，不要只写“见附录”
+- 所有表述都必须基于当前附加 source
+- 信息缺失时，写 `原文未提及`
+- 需要 SI 但 SI 不在手上时，写 `SI未上传/原文未提及，无法核实`
+- 若论文不在本模板边界内，要明确说出来，不要硬套
+
+## 执行约束
+
+本模板继承 `_universal_rules.txt 与 _domain_quality_rules.txt` 中的全部 evidence rules、anti-hallucination rules、boundary discipline 和 scoring discipline。
+本文件只是对 methods / materials-synthesis 阅读模式做细化，不会削弱 shared contract。
+所有事实性表述都必须只锚定当前 source document。

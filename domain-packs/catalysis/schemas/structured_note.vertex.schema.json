@@ -1,0 +1,237 @@
+{
+  "type": "OBJECT",
+  "propertyOrdering": [
+    "frontmatter",
+    "body_markdown",
+    "section_diagnostics",
+    "adapter_signals"
+  ],
+  "properties": {
+    "frontmatter": {
+      "type": "OBJECT",
+      "propertyOrdering": [
+        "title_en",
+        "title_zh",
+        "authors",
+        "year",
+        "journal",
+        "doi",
+        "keywords",
+        "topic",
+        "research_domain",
+        "document_type",
+        "note_template",
+        "seed_terms",
+        "scope_hint",
+        "signal_quality",
+        "routing_confidence"
+      ],
+      "properties": {
+        "title_en": {
+          "type": "STRING"
+        },
+        "title_zh": {
+          "type": "STRING"
+        },
+        "authors": {
+          "type": "ARRAY",
+          "items": {
+            "type": "STRING"
+          },
+          "minItems": 1
+        },
+        "year": {
+          "type": "INTEGER",
+          "nullable": true
+        },
+        "journal": {
+          "type": "STRING"
+        },
+        "doi": {
+          "type": "STRING",
+          "nullable": true
+        },
+        "keywords": {
+          "type": "ARRAY",
+          "items": {
+            "type": "STRING"
+          },
+          "minItems": 5,
+          "maxItems": 10
+        },
+        "topic": {
+          "type": "ARRAY",
+          "items": {
+            "type": "STRING"
+          },
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "research_domain": {
+          "type": "STRING",
+          "enum": [
+            "electrocatalysis",
+            "thermocatalysis",
+            "electrochemical-separations",
+            "materials-synthesis",
+            "surface-science",
+            "fundamental-theory",
+            "multidomain",
+            "other"
+          ]
+        },
+        "document_type": {
+          "type": "STRING",
+          "enum": [
+            "research-article",
+            "review",
+            "perspective",
+            "commentary",
+            "book-chapter",
+            "phd-dissertation",
+            "patent",
+            "textbook",
+            "preprint",
+            "other"
+          ]
+        },
+        "note_template": {
+          "type": "STRING",
+          "enum": [
+            "electrocatalysis-experimental",
+            "thermocatalysis-experimental",
+            "review-or-perspective",
+            "phd-dissertation",
+            "methods-or-materials-synthesis",
+            "foundational-theory",
+            "generic-research-note"
+          ]
+        },
+        "seed_terms": {
+          "type": "ARRAY",
+          "items": {
+            "type": "STRING"
+          }
+        },
+        "scope_hint": {
+          "type": "STRING",
+          "enum": [
+            "core",
+            "other",
+            "needs-body-evidence"
+          ]
+        },
+        "signal_quality": {
+          "type": "STRING",
+          "enum": [
+            "strong",
+            "medium",
+            "weak"
+          ]
+        },
+        "routing_confidence": {
+          "type": "STRING",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        }
+      },
+      "required": [
+        "title_en",
+        "title_zh",
+        "authors",
+        "journal",
+        "keywords",
+        "topic",
+        "research_domain",
+        "document_type",
+        "note_template",
+        "seed_terms",
+        "scope_hint",
+        "signal_quality",
+        "routing_confidence"
+      ]
+    },
+    "body_markdown": {
+      "type": "STRING"
+    },
+    "section_diagnostics": {
+      "type": "OBJECT",
+      "propertyOrdering": [
+        "template_applied",
+        "section_count",
+        "not_applicable_sections",
+        "template_decisions",
+        "open_uncertainties"
+      ],
+      "properties": {
+        "template_applied": {
+          "type": "STRING",
+          "enum": [
+            "electrocatalysis-experimental",
+            "thermocatalysis-experimental",
+            "review-or-perspective",
+            "phd-dissertation",
+            "methods-or-materials-synthesis",
+            "foundational-theory",
+            "generic-research-note"
+          ]
+        },
+        "section_count": {
+          "type": "INTEGER",
+          "nullable": true
+        },
+        "not_applicable_sections": {
+          "type": "ARRAY",
+          "items": {
+            "type": "STRING"
+          }
+        },
+        "template_decisions": {
+          "type": "ARRAY",
+          "items": {
+            "type": "STRING"
+          }
+        },
+        "open_uncertainties": {
+          "type": "ARRAY",
+          "items": {
+            "type": "STRING"
+          }
+        }
+      },
+      "required": [
+        "template_applied",
+        "section_count",
+        "not_applicable_sections",
+        "template_decisions",
+        "open_uncertainties"
+      ]
+    },
+    "adapter_signals": {
+      "type": "OBJECT",
+      "propertyOrdering": [
+        "candidate_needed_raw_terms"
+      ],
+      "properties": {
+        "candidate_needed_raw_terms": {
+          "type": "ARRAY",
+          "items": {
+            "type": "STRING"
+          }
+        }
+      },
+      "required": [
+        "candidate_needed_raw_terms"
+      ]
+    }
+  },
+  "required": [
+    "frontmatter",
+    "body_markdown",
+    "section_diagnostics",
+    "adapter_signals"
+  ]
+}

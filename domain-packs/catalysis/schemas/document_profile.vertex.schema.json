@@ -1,0 +1,117 @@
+{
+  "type": "OBJECT",
+  "propertyOrdering": [
+    "research_domain",
+    "document_type",
+    "article_granularity",
+    "primary_reaction",
+    "primary_system",
+    "recommended_template",
+    "routing_confidence",
+    "is_review_like",
+    "is_multichapter_thesis",
+    "routing_evidence",
+    "warnings"
+  ],
+  "properties": {
+    "research_domain": {
+      "type": "STRING",
+      "enum": [
+        "electrocatalysis",
+        "thermocatalysis",
+        "electrochemical-separations",
+        "materials-synthesis",
+        "surface-science",
+        "fundamental-theory",
+        "multidomain",
+        "other"
+      ]
+    },
+    "document_type": {
+      "type": "STRING",
+      "enum": [
+        "research-article",
+        "review",
+        "perspective",
+        "commentary",
+        "book-chapter",
+        "phd-dissertation",
+        "patent",
+        "textbook",
+        "preprint",
+        "other"
+      ]
+    },
+    "article_granularity": {
+      "type": "STRING",
+      "enum": [
+        "experimental-paper",
+        "methods-paper",
+        "theory-paper",
+        "review-like",
+        "multichapter-thesis",
+        "reference-like",
+        "other"
+      ]
+    },
+    "primary_reaction": {
+      "type": "STRING",
+      "nullable": true
+    },
+    "primary_system": {
+      "type": "STRING",
+      "nullable": true
+    },
+    "recommended_template": {
+      "type": "STRING",
+      "enum": [
+        "electrocatalysis-experimental",
+        "thermocatalysis-experimental",
+        "review-or-perspective",
+        "phd-dissertation",
+        "methods-or-materials-synthesis",
+        "foundational-theory",
+        "generic-research-note"
+      ]
+    },
+    "routing_confidence": {
+      "type": "STRING",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "is_review_like": {
+      "type": "BOOLEAN"
+    },
+    "is_multichapter_thesis": {
+      "type": "BOOLEAN"
+    },
+    "routing_evidence": {
+      "type": "ARRAY",
+      "items": {
+        "type": "STRING"
+      },
+      "minItems": 1,
+      "maxItems": 8
+    },
+    "warnings": {
+      "type": "ARRAY",
+      "items": {
+        "type": "STRING"
+      }
+    }
+  },
+  "required": [
+    "research_domain",
+    "document_type",
+    "article_granularity",
+    "recommended_template",
+    "routing_confidence",
+    "is_review_like",
+    "is_multichapter_thesis",
+    "routing_evidence",
+    "warnings"
+  ]
+}

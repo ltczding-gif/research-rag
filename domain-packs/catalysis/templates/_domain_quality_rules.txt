@@ -1,0 +1,54 @@
+## Catalysis Domain Quality Rules
+
+Catalysis-specific extensions to `prompts/_universal_rules.txt`.
+Loaded by every catalysis-pack template alongside the universal rules.
+
+If you fork this pack for a related domain (e.g. photocatalysis, electrochemistry,
+electrochemical separations), this is the file you most often customize: trap scan
+items and the filename slot semantics are field-specific. The universal evidence /
+anti-hallucination / scoring discipline lives in `_universal_rules.txt` and stays
+constant across packs.
+
+### Recommended Filename Contract
+- Whenever you output `推荐保存文件名`, it must be a bare filename only, not a path.
+- The filename must always end with `_review_note.md`.
+- Do not output `.pdf`, `.json`, extensionless names, or filenames that end only with bare `.md`.
+- Keep the filename human-recognizable for archive use, but make sure the final suffix remains exactly `_review_note.md`.
+- Unless the source truly prevents it, follow this unified legacy naming skeleton exactly:
+  - `年份-期刊缩写-作者主线-核心研究对象或主题-核心反应或问题类型-关键机制框架或形貌-解决的瓶颈或贡献焦点_review_note.md`
+- This skeleton is the default archive convention for all live v1 templates; do not freely reorder the slots.
+- For experimental papers, prefer the legacy experimental mapping:
+  - `年份-期刊缩写-最后列出的通讯作者原名全拼（不要缩写成首字母）-核心研究对象-核心反应类型-创新机制或关键形貌-解决的瓶颈问题_review_note.md`
+- For review, perspective, theory, dissertation, methods, or generic documents, keep the same slot order but replace the experimental-only slots with the nearest semantic equivalent from the source text, such as:
+  - `核心研究对象` -> `核心主题 / 体系 / 方法对象`
+  - `核心反应类型` -> `核心问题类型 / 文献类型 / 研究任务`
+  - `关键机制或形貌` -> `关键框架 / 关键方法 / 关键论证主轴`
+  - `解决的瓶颈问题` -> `主要张力 / 关键缺口 / 贡献焦点`
+- Author slot discipline:
+  - Prefer the paper's original Romanized author spelling as printed in the source.
+  - Do not use initials-only placeholders such as `Y. Huang`, `B. Peng`, or `et al.`.
+  - If the corresponding-author signal is unclear, use the clearest senior-author clue available while keeping the slot position unchanged.
+- Segment writing discipline:
+  - Keep each slot concise and archive-friendly; prefer compact TitleCase / PascalCase-like phrases for object, mechanism, and bottleneck segments when possible.
+  - Do not dump the full title into the filename.
+  - Do not pad the filename with every keyword; keep only the load-bearing identifiers.
+  - Use hyphen-separated slots and keep the suffix `_review_note.md` untouched.
+
+### Catalysis Trap Scan
+- End with a short trap scan when the document type makes it applicable.
+- Use this five-item checklist:
+  - 误差棒是否缺失
+  - 碳平衡 / 产物闭环是否明显不完整
+  - 是否缺乏明确对照实验
+  - 进料方式宣称与实际实验是否一致
+  - SI 关键数据是否缺失以致核心结论无法核实
+- Check whether critical supporting data, controls, or methodological closure are missing, inconsistent, or only relegated to supplementary material.
+- Flag when claims appear broader than the directly supported evidence.
+
+### Domain-Specific Scoring Axis (axis 4 of the universal four-axis pattern)
+- The fourth axis name in catalysis is **工业应用潜力 (industrial application potential)**.
+- Anchors:
+  - `9-10`: device-level evidence + clear scale-up path; MEA / flow cell / pilot data demonstrating durability under industrial-relevant conditions
+  - `7-8`: strong half-cell or kinetic case for industrial relevance; partial device demonstration
+  - `5-6`: lab-scale only with plausible scaling story
+  - `3-4`: device claims unsupported by the actual measurement window; half-cell only with industrial framing that the measurement does not back

@@ -1,0 +1,126 @@
+{
+  "_TODO_BOOTSTRAP_NOTES": [
+    "REPLACE the enum values below with your field's vocabulary.",
+    "research_domain: 5-10 sub-areas of your field.",
+    "document_type: usually keep universal (research-article, review, perspective, ...).",
+    "recommended_template: MUST list every templates/<id>.txt file in this pack.",
+    "primary_reaction / primary_system: rename these field names AND their content",
+    "to match your field's primary_routing_key (defined in pack.yaml).",
+    "After editing: pipeline boot validator checks that recommended_template enum",
+    "values exactly match the templates/ directory contents."
+  ],
+  "type": "OBJECT",
+  "propertyOrdering": [
+    "research_domain",
+    "document_type",
+    "article_granularity",
+    "primary_routing_key_value",
+    "primary_routing_key_label",
+    "recommended_template",
+    "routing_confidence",
+    "is_review_like",
+    "is_multichapter_thesis",
+    "routing_evidence",
+    "warnings"
+  ],
+  "properties": {
+    "research_domain": {
+      "type": "STRING",
+      "enum": [
+        "TODO-subdomain-1",
+        "TODO-subdomain-2",
+        "TODO-subdomain-3",
+        "TODO-subdomain-4",
+        "TODO-subdomain-5",
+        "multidomain",
+        "other"
+      ]
+    },
+    "document_type": {
+      "type": "STRING",
+      "enum": [
+        "research-article",
+        "review",
+        "perspective",
+        "commentary",
+        "book-chapter",
+        "phd-dissertation",
+        "patent",
+        "textbook",
+        "preprint",
+        "other"
+      ]
+    },
+    "article_granularity": {
+      "type": "STRING",
+      "enum": [
+        "experimental-paper",
+        "methods-paper",
+        "theory-paper",
+        "review-like",
+        "multichapter-thesis",
+        "reference-like",
+        "other"
+      ]
+    },
+    "primary_routing_key_value": {
+      "type": "STRING",
+      "nullable": true,
+      "description": "Field-specific identifier for this paper's primary routing context. Format defined by your pack's primary_routing_key.field_name in pack.yaml. Examples: catalysis 'CO2RR-Cu-MEA'; biology 'loss-of-function-screen'; ML 'image-classification-imagenet'."
+    },
+    "primary_routing_key_label": {
+      "type": "STRING",
+      "nullable": true,
+      "description": "Human-readable label for primary_routing_key_value, used for display. May equal the value or be a longer prose form."
+    },
+    "recommended_template": {
+      "type": "STRING",
+      "enum": [
+        "research-article",
+        "review-or-perspective",
+        "phd-dissertation",
+        "foundational-theory",
+        "generic-research-note"
+      ]
+    },
+    "routing_confidence": {
+      "type": "STRING",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "is_review_like": {
+      "type": "BOOLEAN"
+    },
+    "is_multichapter_thesis": {
+      "type": "BOOLEAN"
+    },
+    "routing_evidence": {
+      "type": "ARRAY",
+      "items": {
+        "type": "STRING"
+      },
+      "minItems": 1,
+      "maxItems": 8
+    },
+    "warnings": {
+      "type": "ARRAY",
+      "items": {
+        "type": "STRING"
+      }
+    }
+  },
+  "required": [
+    "research_domain",
+    "document_type",
+    "article_granularity",
+    "recommended_template",
+    "routing_confidence",
+    "is_review_like",
+    "is_multichapter_thesis",
+    "routing_evidence",
+    "warnings"
+  ]
+}

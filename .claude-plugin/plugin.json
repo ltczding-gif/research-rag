@@ -1,0 +1,9 @@
+{
+  "name": "research-rag",
+  "version": "0.1.0",
+  "description": "Local-first literature RAG for Zotero. Generates structured notes through a pluggable LLM backend, embeds notes and PDF chunks in local ChromaDB, and ships 8 skills covering 10 search workflow families.",
+  "author": {
+    "name": "ltczding-gif"
+  },
+  "license": "MIT"
+}

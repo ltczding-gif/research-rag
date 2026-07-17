@@ -1,0 +1,267 @@
+本模板用于实验型电催化论文，包括 CO2RR、HER、OER、ORR、NRR 以及其他以电位驱动为核心变量的 electrocatalysis 体系。
+默认 `_universal_rules.txt 与 _domain_quality_rules.txt` 已加载。本文件只负责正文结构与写作要求，不得重设计 note frontmatter。
+
+## 使用边界
+
+本模板适用于“有明确催化剂、有明确电化学装置或电解池、有明确性能与证据链”的实验型电催化论文。
+
+不要用于：
+- 热催化（thermocatalysis）
+- 光催化（photocatalysis）
+- 教材（textbook）
+- 大型参考资料或 broad reference-style documents
+
+对于电辅助热催化文章，优先判断 `thermocatalysis-experimental` 是否更合适。
+
+## 必须输出的正文结构
+
+## 文献基本信息
+这一节必须保留，目的是让笔记在脱离 frontmatter 后依然能被人直接识别、命名和归档。
+
+至少包含以下条目：
+- **推荐保存文件名**：按你对论文内容的最佳理解，给出一个便于人工辨认和归档的简洁文件名，格式尽量贴近现有笔记命名习惯
+- **标题**：英文原标题
+- **期刊与年份**
+- **DOI**
+
+要求：
+- `推荐保存文件名` 不能省略
+- 不要只重复 PDF 原文件名
+- 命名应尽量体现：年份、期刊缩写、核心作者线索、材料/体系、反应类型、关键机制或贡献
+- 必须优先遵循统一 legacy 骨架：`年份-期刊缩写-最后列出的通讯作者原名全拼（不可缩写成首字母）-核心研究对象-核心反应类型-创新机制或关键形貌-解决的瓶颈问题_review_note.md`
+- 这几个槽位的顺序不要调换；若某一槽位信息不够完整，也应保留骨架并用最贴切的简洁替代，而不是退化成标题改写
+- `核心研究对象`、`创新机制或关键形貌`、`解决的瓶颈问题` 这三个槽位优先写成便于归档的紧凑短语，不要把整句 claim 塞进文件名
+- 如果年份、期刊或 DOI 在原文中存在冲突或不清楚，要明确写出你采用的依据，不能静默跳过
+
+## 客观摘要
+写一个高密度中文摘要段，覆盖以下信息：
+- 催化剂身份与关键结构特征
+- 目标反应
+- 装置或电解池场景
+- 支撑主结论的最强证据
+- 最关键的定量结果
+
+要求：
+- 只要原文提供，就至少写出两个定量数据点
+- 关键英文术语保留括号锚点
+- 必须保留 `value + unit + condition`
+- 不要拆成中文摘要和英文摘要两段
+- 如果主结论强依赖某一个关键图证链，要在摘要中点出最关键的证据来源，例如 `[p.X, Fig.Y]`
+
+## 研究问题（Research Question）
+说明本文真正要解决的科学问题或工程问题。
+- 明确作者针对的 prior-art limitation 或 knowledge gap
+- 用论文自己的 framing 来写，并用 `[p.X]` 锚定
+- 保持在一到两段，不要扩写成综述
+- 如果论文同时追求 activity、selectivity、stability、device relevance、mechanistic understanding 中的多项目标，必须指出主目标与次目标，不要混成一个大而化之的“提升性能”
+
+## 体系信息（System）
+用能支撑后续证据解释的方式，概括本文研究对象：
+- 催化剂身份、组成、关键结构特征
+- 电极构型与基底
+- 电解液环境
+- 反应器或电解池类型
+- 进料与操作环境（如果相关）
+
+不要把这一节写成原始 methods 堆砌。只保留那些真正影响解释、复现或公平比较的条件。
+
+如果体系存在下列关键边界条件，也应明确写出：
+- 活性位真实归属仍有争议
+- 结构在工作状态下会重构
+- 器件级工况与半电池工况混用
+- 高性能建立在特定边界条件上（例如特定湿度、流量、离聚物含量、膜条件、短时窗口）
+
+## 核心测试条件与定量方法
+把以下信息完整抽出。缺失项写 `原文未提及`。如果明显需要 SI 才能核实，而当前拿不到，就写 `SI未上传/原文未提及，无法核实`。
+
+- **电解池构型**：[RDE / H-cell / flow cell / GDE cell / MEA / zero-gap / other]
+- **电解液（阴极）**：[浓度 + 溶质 + pH]
+- **电解液（阳极）**：[同样格式；如果阴阳极共享需说明]
+- **催化剂负载量**：[mg cm^-2 / ug cm^-2]
+- **电极基底**：[GDL / carbon paper / foil / other]
+- **iR 补偿方式**：[EIS-determined / current interrupt / post-hoc / none reported]
+- **MEA 专属参数**：若不是 MEA，必须明确写 `不适用（构型：XXX）`
+  - 膜种类
+  - 阳极催化剂与负载量
+  - GDL / MPL 规格
+  - 水管理与盐析讨论
+  - 产物穿透或 crossover 应对
+- **气相产物定量**：[GC 品牌 + 色谱柱 + 检测器 + 标定方式]
+- **液相产物定量**：[NMR / HPLC + 溶剂 / 色谱柱 + 内标]
+
+除了“条件是什么”，还要尽量写“这个条件在本文里承担什么角色”：
+- 为什么选这个电位 / 电流密度窗口
+- 为什么选这个电解液或 feed composition
+- 为什么选这个 loading、I/C、流速、膜或 humidification 条件
+- 这些条件是在服务 activity、selectivity、durability，还是为了触发某个机理探针
+
+如果条件不是显然标准条件，而原文没有交代它的角色或物理意义，要明确指出这一点。
+
+## 核心性能指标
+所有关键性能都必须以 `value + unit + condition` 形式保留。
+
+- **电流密度与电位**：[给出电流密度及对应电位/过电位]
+- **法拉第效率（FE）**：[分产物 FE；若有 total FE 也保留]
+- **碳平衡 / 质量平衡**：[给出数值；若不适用需解释]
+- **能量效率（EE%）**：[若原文报告]
+- **动力学指标**：
+  - Tafel slope
+  - ECSA 及其测定方式
+  - mass activity / TOF
+- **稳定性**：[时长 + 测试模式 + 电流 / FE / ECSA 衰减]
+
+不要把定量值概括掉、四舍五入掉，或只写趋势不写数。若 baseline 对比是主结论的一部分，就要同时保留本文值和对照条件。
+
+如果文章做了 benchmark、baseline 或 literature comparison，必须补一段 **基准可比性判断（benchmark comparability）**，至少检查：
+- 是否同一装置类型
+- 是否同一电解液 / feed / humidification 口径
+- 是否同一 iR 处理方式
+- 是否同一归一化基准（geometric / ECSA / mass / site-normalized）
+- 是否同一稳定性时长或同一评价窗口
+
+如果不是 apples-to-apples comparison，不要把数值高低直接写成“显著优于”，而要明确写出比较边界。
+
+稳定性部分不要只报“跑了多久”，还要说明：
+- 性能衰减体现在哪里
+- selectivity 是否漂移
+- 结构、浸润性、盐析、flooding、crossover、活性位流失、重构等 failure mode 是否被直接观察或讨论
+- 若作者没有真正解释 degradation path，必须明确写 `原文未建立清晰失效路径`
+
+## 逐图证据路径总结（Figure-by-Figure）
+这一节不是机械图注转写。目标是把每一张关键图重新放回正文论证链里，说明每个 panel 在整篇文章中负责什么工作。
+
+必须细化到 panel-level，而不是只写 `Fig.1`、`Fig.2` 这种整图概括。优先按 `### Fig.1a`、`### Fig.1b`、`### Fig.1c` 一直往后写；如果某些 panel 天然构成一个组合，也必须先逐 panel 写，再说明组合意义。
+
+每个 panel 都按下面格式写：
+- **该分图的职责**：从下列职责中择其一或多项，并写清主次
+  - structural baseline
+  - catalyst identity
+  - morphology evidence
+  - performance claim
+  - selectivity support
+  - mechanistic trigger
+  - operando validation
+  - degradation support
+  - practical relevance
+- **该分图直接显示了什么**：只写图本身和紧邻正文真正可见的 observation；保留关键定量值、对比对象和趋势，必须标 `[p.X, Fig.1a]`
+- **作者借此想支持什么判断**：指出正文用这一 panel 支撑的是哪个 claim、哪一段推理或哪一项结论
+- **该分图单独不能证明什么**：明确它还缺哪类 control、operando、time-dependent、structure-sensitive、isotope、DFT 或 degradation 证据
+- **它和其他分图如何接力**：说明它是如何与后续或前序 panel 形成证据接力，例如“Fig.1a 建立结构基线，Fig.2c 显示性能差异，Fig.4b 再解释差异来源”
+
+写作要求：
+- 不要机械搬运 caption
+- 不要变成逐图流水账
+- 不要把 schematic、device photo、workflow 图跳过不写；但可更简洁地说明其论证职责
+- 如果正文对某图的外推超过该图自身信息量，要明确点出来
+- 如果一个 panel 被正文频繁调用，但信息量其实不足，也要指出
+- 如果多个 panel 合起来才支撑一个判断，要在单 panel 说明后，再补一句组合后的更大结论
+
+## 关键主张-证据路径图（claim-support map）
+这一节按“主张 -> 支撑链 -> 验证边界”来写，而不是按图号顺序写。目标是把文章真正试图建立的 activity / selectivity / stability / degradation / reconstruction / transport / interface 主链拆开。
+
+默认写 1-3 条最重要的主链，不要为了完整性机械穷举所有小 claim。优先选那些真正支撑 headline 结论的主链。
+
+如果原文并没有建立完整机制，请直接写：`原文未建立完整因果链，仅提供相关性数据`。
+
+每一条主链用一个 `### Claim N` 子节。每个子节必须按下面顺序写，且每一步都要绑定具体图号或正文位置：
+- **发现了什么现象**：先写 observation，只写图和正文直接显示的内容，不要提前下结论；必须标 `[p.X, Fig.Y]`
+- **形成了什么推论**：写作者由这些 observation 推到什么解释；若只是作者解释而非硬证据，要明确写“作者据此推断”或“更稳妥的表述是……”
+- **设计了什么实验来验证**：写作者为了检验推论，追加了哪些 control、potential-dependent、electrolyte-dependent、time-resolved、isotope、operando 或 device-level 验证
+- **补充了哪些表征或计算**：写 spectroscopy、microscopy、electrochemical signatures、DFT、kinetic fitting、degradation evidence 在这条链里各自补了哪一环
+- **验证边界在哪里**：写这条推论已经被验证到什么程度，哪些地方仍只是支持、相关、排除部分替代解释，而不是完整闭环
+- **claim-support map**：用一行紧凑路径总结，例如 `Observation (Fig.2a,b) -> interpretation (p.6) -> control test (Fig.3c) -> operando support (Fig.4a-d) -> DFT consistency (Fig.5b) -> remaining uncertainty`
+
+额外要求：
+- 不要只罗列图号，必须解释图真正证明了什么
+- 不要把 observation、interpretation、speculation 混写成一句
+- 如果一个 claim 涉及多个因素，例如 local pH、site blocking、ionomer effect、mass transport、surface reconstruction，要按因素拆开，而不是一段全塞
+- 如果图中有多个峰、多个时间尺度、多个可分辨过程，正文必须覆盖这些信息，而不能只摘最有利的一部分来讲
+- 对于参数、拟合量和特征量，要先说“这个值代表什么物理过程”，再说它怎么变化
+- 如果只是相关性增强，不得擅自补成因果链；这时要明确写 `原文未建立完整因果链，仅提供相关性数据`
+
+## 深度机理视角提炼
+这一节恢复“提炼后的机理视角”写法，目标不是重复上一节的路径细节，而是把全文最值得记住的 2-4 个 mechanistic / evidence viewpoints 抽出来，形成更像成熟阅读笔记的高层总结。
+
+默认目标 2-4 个 `###` 视角；除非原文确实只有单一主线，不要压缩成单一总论点。
+
+每个 `###` 视角都应具备：
+- **核心结论**：一句话写出这个视角的结论
+- **证据整合**：把至少两类证据或两处图文支撑整合起来，而不是只抄单一图
+- **机理路径**：只有在因果链真正成立时，才写 `A -> B -> C`
+- **边界 / caveat**：指出这个视角最容易被过度外推的地方
+
+优先形成下列类型的视角（按文章实际内容选择，不必全写）：
+- activity enhancement
+- selectivity steering
+- stability / degradation suppression
+- surface reconstruction
+- transport or local-environment regulation
+- interface or ionomer effect
+
+不要把这一节写成上一节的改写版，也不要只把逐图 section 再翻译一遍。它应该更提炼、更像“读完之后脑中留下的 2-4 个核心 mechanistic takeaways”。
+
+## 方法亮点与审稿人陷阱扫描
+**方法亮点**：
+- 列出 3-6 个具体的方法学或分析优势
+- 每一点都必须锚定 `[p.X]`
+- 优先写真正提高识别力、可复现性或因果判断力的方法亮点，而不是泛泛写“测试很全面”
+
+**Trap Scan（强制核查以下项目）**：
+- 误差棒是否缺失：[present / absent on key figures]
+- 碳平衡或质量平衡是否完整：[reported / not reported / not applicable]
+- 对照实验是否充分：[adequate / incomplete / absent]
+- 进料方式宣称与实际实验是否一致：[consistent / discrepancy]
+- SI 关键数据是否可核实：[sufficient / SI未上传，以下结论无法核实: ...]
+- benchmark 是否公平：[apples-to-apples / partially comparable / not comparable]
+- 稳定性结论是否只建立在短窗口或最有利窗口上：[robust / limited-window / overclaimed]
+- degradation / failure mode 是否真正被分析：[well-supported / hinted only / not analyzed]
+- observation、interpretation、speculation 是否被清楚分层：[clear / partially mixed / heavily mixed]
+- 关键参数是否先解释物理意义再报数值：[yes / partially / no]
+
+如果某个 claim 的外延明显超过直接证据，要明确点出来。
+如果一篇文章把半电池高值直接外推到器件可行性，也要明确指出。
+
+## 主观打分
+评分锚点：
+- 9-10：能重塑该子领域判断标准的 field-shaping breakthrough
+- 7-8：扎实且有明确推进意义的 solid meaningful advance
+- 5-6：工作合格但推进幅度有限的 competent but modest
+- 3-4：存在明显方法学缺陷或证据闭环问题的 serious methodological or evidence-closure problems
+
+每个维度都必须附上简短且有来源支撑的理由。
+
+- **创新性（0-10）**：[score] — [引用 [p.X] 说明理由]
+- **实验严谨度（0-10）**：[score] — [明确写出因误差棒、碳平衡、对照、定量缺口、benchmark fairness、failure mode 缺口而扣分的地方]
+- **证据链闭环度（0-10）**：[score] — [说明主结论是直接证据支持，还是部分依赖推断]
+- **工业应用潜力（0-10）**：[score] — [评价电流密度、装置相关性、集成可行性、成本或放大意义]
+
+## 核心结论总结
+用一个段落总结：
+- 这篇论文对其子领域真正做出的贡献
+- 主要 caveats 或复现风险
+- 后续读者在复用或扩展这项工作时最该警惕的点
+- 哪些结论可以在相近边界条件下复用
+- 哪些结论不能直接外推到更大电流、更长寿命、不同装置或不同 feed 条件
+
+只有最关键的结论可以加粗，不要全段加粗。
+
+## 写作规则
+
+- 全文尽量遵循“证据 -> 解释 -> 含义”的顺序。
+- 每个关键事实判断都尽量带 `[p.X]` 或 `[p.X, Fig.Y]`。
+- 定量信息必须保留 `value + unit + condition`。
+- 不要让性能结论跑在定量质量前面。
+- 对于 MEA 论文，必须填满所有 MEA 子项；对于非 MEA 论文，必须明确写 `不适用（构型：XXX）`。
+- 对于 CO2RR，除非原文确实没有提供，否则应主动检查并记录碳平衡。
+- 如果原文不支持完整机制链，就直接说明，不要补写想象出来的闭环。
+- 如果正文讨论 figure 或 panel，必须说明它证明了什么，而不是只给图号。
+- 如果正文涉及 comparison，必须显式检查基准可比性判断（benchmark comparability），而不是默认所有高值都可直接横向比较。
+- 如果正文涉及稳定性、耐久性或器件可行性，必须尽量讨论 failure mode 或验证边界，不能只重复 headline number。
+
+## 执行约束
+
+本模板受 `_universal_rules.txt 与 _domain_quality_rules.txt` 统一约束。共享规则中的 evidence citation contract、depth citation block、anti-hallucination guardrails、trap scan 和 subjective scoring 全部无条件生效。
+
+本模板中的规则只是在共享底线上补充或细化，除非明确声明，否则不覆盖共享规则。
+
+所有事实性表述都必须只基于当前附加文档。原文没有出现的内容写 `原文未提及`。需要 SI 才能支撑但当前无法核实的内容，写 `SI未上传/原文未提及，无法核实`。

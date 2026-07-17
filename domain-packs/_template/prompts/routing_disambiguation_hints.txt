@@ -1,0 +1,40 @@
+# Stage A profiler tie-breakers
+#
+# Appended to `document_profiler.system.txt` at run time under the heading
+# "## Domain-specific routing disambiguation". The base profiler prompt
+# enumerates abstract classification rules; this file resolves
+# ambiguities your field's documents specifically trigger.
+#
+# Pattern: name 3-7 routing collisions and tell the model how to break them.
+# Examples (replace these with your field's collisions):
+#
+#   - <subfield A> vs <subfield B>:
+#     - If the paper's primary <variable> is <X>, route to template_A.
+#     - If the primary <variable> is <Y>, route to template_B.
+#     - For coupled cases: prefer whichever drive is load-bearing; if
+#       genuinely ambiguous, prefer generic-research-note.
+#
+#   - methods vs performance experimental:
+#     - Headline contribution = synthesis route → methods-or-materials-synthesis.
+#     - Headline contribution = performance number → matching experimental template.
+
+## TODO routing tie-breakers
+
+- TODO collision 1 (e.g. wet-lab vs computational; experimental vs simulation):
+  - If the paper's primary independent variable is TODO-A, route to TODO-template-A.
+  - If the primary variable is TODO-B, route to TODO-template-B.
+  - For mixed cases, prefer the dominant contribution; document the choice in routing_evidence.
+
+- TODO collision 2 (e.g. methods vs performance; description vs argument):
+  - If the headline contribution is TODO-A, route to TODO-template-A.
+  - If the headline contribution is TODO-B, route to TODO-template-B.
+  - The signal: what does the abstract lead with? what do the figures defend?
+
+- TODO collision 3 (e.g. review vs research article; perspective vs roadmap):
+  - All TODO-similar genres route to review-or-perspective; the template handles
+    sub-genre internally.
+  - If a document has > X% original data, it's a research article, not a review.
+
+# Optional: textbook / multi-author edited volume detection
+# - Page count >= N + table of contents structure + chapter-level pedagogical
+#   framing → generic-research-note with document_type=textbook.

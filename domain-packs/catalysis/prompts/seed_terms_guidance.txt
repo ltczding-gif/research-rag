@@ -1,0 +1,35 @@
+# Seed-term guidance for the Note Generator (Stage B)
+#
+# This file is appended to `note_generator.system.txt` at run time under
+# the heading "## Domain-specific seed_terms guidance". The base prompt
+# already defines what `seed_terms` ARE (stable machine-readable phrases
+# central to the document); this file calibrates what "stable" and
+# "central" mean in the catalysis domain via concrete examples.
+#
+# When forking for a new domain: replace the catalysis examples below
+# with 3-5 worked cases from your field. Keep the GOOD/BAD format —
+# negative examples teach the calibration faster than positive examples
+# alone.
+
+## Catalysis seed_terms calibration
+
+A good `seed_terms` entry in catalysis is:
+- A material identity that uniquely names the catalyst's load-bearing component:
+  - GOOD: `Cu-N4`, `Co3O4`, `Pt/C-20wt%`, `NiFe-LDH`, `Mo-doped BiVO4`
+  - BAD:  `metal catalyst`, `nanoparticles`, `transition-metal oxide` (too generic)
+- A reaction or process that is THE central system the paper studies:
+  - GOOD: `CO2 reduction`, `OER in alkaline`, `methanol-to-olefins`, `ammonia synthesis`
+  - BAD:  `electrocatalysis`, `green chemistry`, `sustainable energy` (theme, not system)
+- A mechanism or device-level concept that is the paper's central explanatory frame:
+  - GOOD: `*COOH intermediate`, `MEA architecture`, `flow cell`, `single-atom site`, `Mars-van Krevelen mechanism`
+  - BAD:  `mechanism`, `selectivity`, `activity` (axis, not specific concept)
+
+A bad `seed_terms` entry is:
+- A buzzword the paper mentions in passing but doesn't anchor evidence to.
+- A side reaction or control experiment material (those belong in the body, not seed terms).
+- A figure number or page reference (those are evidence anchors, not terms).
+- A general technique label (`XPS`, `DFT`) UNLESS the paper's central novelty is the technique itself.
+
+For broad documents (textbook, dissertation, review):
+- Prefer fewer (3-6) genuinely document-level seed terms over exhaustive coverage.
+- Chapter-local case studies don't qualify even if they're memorable — only what binds the whole document.

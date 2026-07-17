@@ -1,0 +1,255 @@
+本模板用于综述（review）、展望（perspective）、路线图（roadmap）以及 commentary 类文献。
+默认 `_universal_rules.txt 与 _domain_quality_rules.txt` 已加载。本文件只定义正文结构与边界纪律，不重设 note frontmatter。
+正文默认使用中文；在能提高精度时，保留必要的英文技术术语、框架标签和文献标识。
+
+## 使用边界
+
+- 本模板适用于：以整合、框定、批判、重组或重定向某一研究领域为主要任务的 synthesis papers、field reviews、perspective pieces、roadmaps 和 commentary。
+- 不适用于：original research article、experimental report、methods paper、materials synthesis paper、论文式多章节 thesis/dissertation，或以单一新数据集为中心的 notes。
+- 不要模仿实验论文的 sectioning。不要输出 `## Methods`、`## Results`、`## Performance Metrics`，也不要套实验论文式的 mechanism block。
+- 要保留综述或 perspective 作者自己的立场，不能把作者偏好的 framing 自动升级成社区共识。
+- 当原文提出因果性主张或未来议程时，必须明确写出作者把它呈现成了 `共识（consensus）`、`分歧（disagreement）`、`暂定解释（tentative explanation）` 还是 `推测性议程（speculative agenda）`。
+- 若题目、摘要与正文的文体姿态不一致，以正文实际写法为准；不要因为标题写了 review 就自动扩张为全面综述，也不要因为标题写了 perspective 就把广泛综述内容压缩成单点观点。
+- 若原文同时带有综述和评论双重姿态，要保留这种双重姿态：既记录它覆盖了什么，也记录它在主张什么，不要把 argument-driven piece 强行洗成纯粹的文献清单。
+- 如果原文自称是 systematic review、scoping review 或带有规范检索姿态，必须保留检索、筛选、纳入/排除与时间窗信息；若这些信息缺失，就不要替作者补写成规范系统综述。
+
+## 短文压缩规则
+
+- 对于较短的 perspective 或 commentary（大致少于 15 页），若原文确实篇幅不足，可适度压缩 `## 领域演化脉络`、`## 争议与共识映射` 和 `## 批判性评估`。
+- 但即便是短文，也不能省略：`## 文献基本信息`、开篇摘要段、`## 研究范围`、`## 覆盖边界`、`## 主要综合洞见`、`## 证据姿态`、`## 开放缺口`、`## 阅读结论`。
+- 即便压缩，也不能压掉作者的立场、反对意见与未来议程边界；短篇 perspective 仍然需要把 selective view、opposing views 和 speculative claims 说清楚。
+
+## 必须输出的正文结构
+
+## 文献基本信息
+- `推荐保存文件名`
+- `标题`
+- `期刊与年份`
+- `DOI`
+- 本节要保持简洁、可读、适合人工检索；它是后续命名与人工比对的锚点。
+- 不要把作者的整句 thesis、完整标题或一句话结论直接塞进 `推荐保存文件名`；只保留最能区分这篇综述的负载信息。
+- `推荐保存文件名` 必须遵循共享规则中的统一骨架：`年份-期刊缩写-作者主线-核心主题-文献类型或问题类型-关键框架或组织主轴-主要张力或贡献焦点_review_note.md`
+- 即使是 review / perspective，也不要跳出这套槽位顺序；只是在不适用实验语义时，用 review 语境中的等价语义替换对应槽位。
+
+开篇摘要段（不要给这一段额外加标题）：
+用一个高密度摘要段覆盖以下信息：
+- 这篇综述覆盖的领域 / 问题空间
+- 它是如何组织这个领域的
+- 最强的综合判断或中心 thesis
+- 最重要的未解决张力或前瞻性信息
+- 若原文给出 headline statistic、文献数量或时间窗口，也要保留
+
+## 研究范围（Scope）
+精确说明这篇文献到底覆盖什么。
+必须尽量交代：
+- 所属主题与纳入的子领域
+- 原文明确排除的子领域或主题
+- 覆盖的时间范围（若有）`[p.X]`
+- 统计到的参考文献数或研究数（若有）
+- 纳入的论文类型：experimental / theoretical / review / mixed
+- 若原文特别强调 geographic、institutional、device-class 或 materials-family 边界，也要写清
+
+若任一项缺失，写 `原文未提及`。
+- 若原文给出 literature cutoff、search window 或 preprint boundary，要把它写成知识截面而不是最新全景；不要在笔记里替作者补齐截止之后的新文献。
+- 若范围明显偏向少数 research groups、single consortium、特定方法流派或特定材料家族，也要直接写出来，不要把局部样本伪装成 field-wide sample。
+
+## 覆盖边界（Coverage Boundary）
+明确写出这篇综述自己的边界逻辑和表达姿态。
+必须说明：
+- 文档属于 `systematic review`、`narrative review`、`perspective`、`roadmap`、`commentary`，还是混合姿态
+- 纳入 / 排除逻辑哪些是明确写出的，哪些只是隐含的
+- 作者主要是在做 summarize、re-frame、argue for a thesis，还是 propose a future agenda
+- 作者是否声称自己是 comprehensive、selective 还是 representative
+- 这篇文献的结论应该止步于哪里；不要让 review-level framing 静默升级成 field-wide truth
+
+这一节是边界纪律最需要写清的地方。
+- 若作者把文章写成 review，但正文更像 selective perspective，就按实际的论证密度、选择性和立场强度来写，不要为了“像综述”而伪造全面性。
+- 若作者自称 broad / authoritative / comprehensive / representative，要检查正文是否真的达到了这个姿态；若没有，直接写出 coverage tension。
+- 若文内出现 controversial position、speculative hypothesis、new interpretation 或 future agenda，要把它们单独标成作者立场，而不是自动写成领域事实。
+- roadmap / commentary 只要带有 agenda-setting 意图，就要明确它是在提出方向，不是在宣布定论；如果它实际上只是评述，也要写出其评述边界。
+
+## 组织主轴（Organizing Axes）
+列出这篇综述用来组织论证的主要维度或 taxonomy。
+对每个主轴都说明：
+- 主轴名称
+- 它区分了什么
+- 这是作者自己的框架，还是已有社区框架
+- 为什么这个主轴对理解该领域有帮助
+
+如果综述本身组织松散或只是隐含组织，不要替它发明一个过于整齐的 taxonomy，要明确说出来。
+- 若主轴之间是层级关系、并列关系还是时间演化关系，要写清楚；不要把 `材料 → 机理 → 应用`、`发现 → 优化 → 部署` 之类的关系平面化成普通清单。
+- 如果 taxonomy 是作者新提的框架，就注明它是作者自建框架；如果是社区通用框架，也要注明它依赖既有共识，避免后续笔记误把新框架写成既定标准。
+
+## 领域演化脉络（Field Trajectory）
+总结这个领域如何按照综述自己的讲法演化到现在。
+规则：
+- 每个关键转折都尽量用 `[p.X]` 锚定
+- 若综述引用 landmark papers 或年份，要保留
+- 区分“综述说领域从 A -> B -> C 演化”与“你自己的重建”
+- 说明哪些已经成为稳定共识，哪些仍未解决
+- 不要导入外部历史背景
+
+如果原文没有明确的时间演化叙事，就写 `原文未明确时间演化脉络`。
+
+## 主要综合洞见（Main Insights）
+这是最核心的综合 section，必须明显强于按章节顺序复述。
+写 3-6 条综合洞见。
+每条洞见都必须至少跨越综述中的两个 section、两个 paper clusters，或两个证据片段。
+
+每条洞见的固定格式：
+- `### 洞见 N：[一句话标题]`
+- `**综合判断**`：一句话写出 field-level pattern、对比关系或结构性结论
+- `**证据基础**`：综述内部哪些 sections、paper clusters 或例子在支撑它，并标 `[p.X]`
+- `**跨文献对比**`：这里真正比较、对齐或区分了什么
+- `**定量锚点**`：若综述给出了 benchmark、数值、单位和条件，要保留
+- `**边界**`：明确这是 broad consensus、review-level integration，还是目前仍有限的 pattern
+
+规则：
+- 强调综合归纳（synthesis over inventory），不要写成目录式清点
+- 不要按“section 1 说了什么、section 2 说了什么、section 3 说了什么”顺序复述
+- 不要只写 “A said X, B said Y”
+- 若这是综述作者自己的整合性判断，要显式标注 `(Review authors' synthesis)`
+- 若你在作者原文之外进一步归纳，要标注 `(Reader's inference — not in review text)`
+- 若某条洞见依赖作者选择性压缩或排除了某些子领域，要顺手写出这个解释范围；不要让局部 synthesis 伪装成整个 field 的事实。
+- 对 perspective / roadmap 文章，洞见里优先写“为什么作者认为未来会这样演化”，而不是把作者的愿景直接写成当前已经成立的现实。
+
+## 证据姿态（Evidence Posture）
+这一节是强制项，必须把 major claims 的姿态和边界写清。
+把综述中的主要主张映射到以下四类之一：
+- `consensus`
+- `disagreement`
+- `tentative explanation`
+- `speculative agenda`
+
+对每个 major thesis 或 recurring theme：
+- 写出 claim
+- 分配以上四类之一
+- 解释综述为何把它写成这种姿态
+- 用 `[p.X]` 锚定该姿态在哪些位置最明显
+
+这一节里必须保留一次完整对照语言：
+`consensus / disagreement / tentative explanation / speculative agenda`
+- 每条 major claim 还要注明它主要来自 primary studies、cross-study synthesis、consensus statement、expert opinion 还是作者自己的 interpretation；如果混合出现，以最弱证据约束写法。
+- 如果文中的语气比证据更强，要在这里降级并说明哪一部分是原文直述、哪一部分只是作者推断。
+- 若所谓 consensus 只在特定子领域、特定条件、特定材料家族或特定方法窗口内成立，必须把限定条件写出来，不能写成全局共识。
+
+## 争议与共识映射
+当综述识别出 debates、互不兼容框架或持久未解问题时，用这一节展开。
+
+每个争议的固定格式：
+- `### [争议标题]`
+- `**焦点**`：一句话说明争议点
+- `**观点A**`：这一派的立场、由谁或哪一类 paper cluster 支持、以及综述呈现出的证据强度
+- `**观点B**`：竞争立场、其支持者或 paper clusters、以及证据强度
+- `**观点C**`：只有在原文明确出现第三阵营时才写
+- `**共识状态**`：`已解决 / 部分共识 / 持续争议 / 证据不足`
+- `**作者站位**`：若综述作者明显偏向某一 framing，要写出来，但不能把它当作已解决事实
+
+不要为了让总结更平滑而把真实分歧抹成虚假的共识。
+- 争议最好至少区分 `evidence disagreement`、`mechanistic disagreement` 和 `priority/value disagreement`；不要把不同层面的分歧混成一个模糊的争论。
+- 如果综述没有真正展开双方证据，只是单边提出异议，那就写成 `作者提出的未决张力`，不要擅自写成完整 debate。
+- 每个争议若能看出什么证据会真正解决它，要顺手写出来，例如 head-to-head comparison、标准化 benchmark、longitudinal data、cross-lab replication 或更高质量的 causal design。
+
+## 开放缺口（Open Gaps）
+把综述明确指出的每一个未解决或研究不足的 gap 单独写出来。
+规则：
+- 一个 gap 一条
+- 说明它为什么仍未解决
+- 若综述给出了解法方向或使能条件，也要保留
+- 尽量区分 methodological gap、evidence gap、conceptual gap、translational gap
+- 每条都尽量用 `[p.X]` 锚定
+- 如果原文把“未来需要做什么”写成了 gap，也要判断它到底是文本中明确诊断出的缺口，还是作者单独提出的 research wish list；两者不能混写。
+- gap 如果本身有明确 dependency chain（例如先标准化，再 benchmark，再 scale-up），要把链条写出来，不要只留下愿望式口号。
+- 还应显式识别 `standardization gap`、`infrastructure gap` 和 `coordination gap`，因为很多 review 的关键问题并不是单篇实验，而是缺少共同协议、公共数据或跨团队协作。
+
+## 未来议程纪律（Future Agenda Discipline）
+这一节专门约束 roadmap / perspective / commentary 常见的未来叙事越界。
+
+- 把未来议程拆成 `near-term`、`mid-term`、`long-term`，并说明它更接近 `enabling step`、`validation step`、`translation step`、`policy step` 还是 `scale-up step`。
+- 每条未来议程都要写前置条件：数据、方法、标准、器件、样本、机制理解或跨学科协同；缺少前置条件时，必须标成 `speculative` 而不是 `likely`。
+- 区分 `author-prescribed agenda` 与 `field-mandated agenda`：前者是作者提议，后者是原文反复出现、且有明确证据张力支撑的 community need。
+- 不要把未来议程写成当前已经证实的能力；也不要把一句 rhetorical call-to-action 误写成已被证明的趋势。
+- 如果 roadmap 带有优先级排序，要写清楚那是作者的排序，不是自然存在的客观排序。
+
+## 批判性评估（Critical Assessment）
+批判的是这篇综述文档本身，而不是泛泛批判整个领域。
+优先评估：
+- coverage balance：哪些子领域、方法、时间窗口或研究共同体看起来被低估了
+- framing choices：哪些假设或组织逻辑限制了综述能得出的结论
+- citation patterns：若从文本可见，是否存在明显自引集中、学校偏好或遗漏反传统文献
+- consensus vs dissent balance：少数观点或新兴观点是否被公平呈现
+- unsupported forecasting：未来议程是否和它实际综述到的证据强度相匹配
+
+规则：
+- 只能基于综述文本里可推断出的信息来评
+- 不要凭空捏造 bibliometric facts
+- 若某一维度信息不足，就写 `原文未提供足够信息，无法强评`
+- 还要检查 citation balance：是否过度集中于少数作者、机构、国家、方法流派或同一批高被引论文；如果文本里能看出偏置，要直接点明。
+- 检查 trajectory bias：作者是否把复杂争论写成单线进步叙事、必然演化叙事或过于平滑的 roadmap；如果有，这会压低综述的解释力。
+- 检查 selection transparency：是否说明为什么选这些文献而不是另一些关键文献；如果没有，就把它写成局限，而不是替它圆成“合理节选”。
+- 对 perspective / commentary 类文献，批判重点不是穷尽性，而是 stance 是否透明、反方是否被公平呈现、论证是否与其 selectivity 相称。
+
+## 综述陷阱扫描（Review Trap Scan）
+这一模板使用 review-specific trap scan，而不是实验论文 checklist。
+请明确核查以下五项：
+- `自引比例`：[明显偏重 / 合理 / 原文未统计]
+- `重要反例/对立研究遗漏`：[综述文本已承认缺口 / 明显缺口未讨论]
+- `统计数字可溯源性`：[如“X papers report Y”这类统计是否可回溯]
+- `时效性`：[review cutoff year 与发表年份的关系；是否大概率遗漏关键新进展]
+- `结论边界`：[结论是否与所综述证据相称 / 是否过度泛化，并指出位置]
+
+这一节要简洁，但不能流于形式。
+- 额外核查 `文体匹配`：review、perspective、commentary、roadmap 是否真的按各自文体写作；如果姿态和正文结构不匹配，要直接指出。
+- 额外核查 `反例与负结果`：是否遗漏关键反例、对立模型、失败案例或负结果；如果原文自己承认缺口，也要在这里保留。
+- 额外核查 `系统性主张`：如果原文暗示自己接近 systematic review，就看它是否真的交代了 search terms、databases、screening、inclusion/exclusion 或 flow logic；没有这些就不能默认为系统综述。
+- 若文本明确是 perspective/commentary，则重点检查 selectivity 是否透明、反方是否被公平呈现；不要用穷尽性标准误判，但也不要放过单边叙事。
+
+## 主观打分
+使用四个维度，每个维度都给一句有来源支撑的理由。
+评分锚点：
+- `9-10` = field-defining synthesis 或 unusually authoritative perspective
+- `7-8` = strong、真正有用、且有清晰 synthesis 与 critique 的综述
+- `5-6` = competent，但 coverage、framing 或 depth 有明显限制
+- `3-4` = representativeness、balance 或 overreach 存在严重问题
+
+必需维度：
+- `综合覆盖度（0-10）`
+- `批判深度（0-10）`
+- `文献代表性（0-10）`
+- `前瞻价值（0-10）`
+- 对 perspective / commentary，`综合覆盖度` 不等于穷尽性，而是看选择是否自洽、边界是否清楚、论证是否形成有效立场。
+- 对有明显 future agenda 的文献，`前瞻价值` 只在 agenda 与证据强度匹配时高分；空泛愿景、缺少前置条件或明显越界的预测都要扣分。
+
+## 阅读结论（Takeaway）
+说明：
+- 这篇文献最核心的前瞻性信息 `[p.X]`
+- 最适合谁来读
+- 它不能替代什么，例如：primary datasets、protocol papers、细分子领域综述或 mechanistic original literature
+
+## 核心结论总结
+用一个结尾段总结：
+- 这篇文献对研究者理解该领域真正做出的贡献
+- 最值得复用的综合结论
+- 把它当参考时最重要的 caveats
+
+**只加粗最关键的结论。**
+
+## 写作规则
+
+- 强调综合归纳（synthesis over inventory）
+- 优先写清比较、张力和 framing choices，而不是把一切磨平为平滑共识
+- 不要模仿实验论文 sectioning
+- 若综述给了定量值，必须原样保留
+- 当引用综述内部文献时，优先用 `[Author,Year]` 或 `[Ref.X]`，再加综述页码 `[p.X]`
+- 每个 major field-level claim 都必须满足至少一种：
+  - 带 `[p.X]`
+  - 标成 `(Review authors' synthesis)`
+  - 标成 `(Reader's inference — not in review text)`
+- 除非综述自己明确说形成了共识，否则不要把作者偏好的 framing 自动写成 universal truth
+
+## 执行约束
+
+- 本模板继承 `_universal_rules.txt 与 _domain_quality_rules.txt` 中全部 evidence rules、anti-hallucination rules 与 scoring discipline。
+- 本文件只是增加更细的 review-specific 结构与边界要求，不会降低 shared obligations。
+- 所有事实性表述都必须只基于当前附加的 review/perspective 文档。
+- 原文没有提供细节时，写 `原文未提及` 或 `原文未明确讨论`。

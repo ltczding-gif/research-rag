@@ -1,0 +1,58 @@
+# --- Secrets & local config ---
+.env
+.env.*
+!.env.example
+vertex-ai-*.json
+*-service-account.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Build artifacts ---
+build/
+dist/
+*.egg-info/
+
+# --- User state (never check in personal data) ---
+service/chroma/
+service/.localrag/
+scanner/processed_history.txt
+scanner/processed_history.txt.*
+scanner/runs/
+service/processed_groups.txt
+service/processed_notes.txt
+service/textbook_ledger.txt
+*.bak
+
+# --- User content (never check in personal notes/PDFs) ---
+research-note/
+_query_logs/
+
+# --- Logs ---
+*.log
+build_log.txt
+build_run_live.txt
+build_debug.log
+test_output.txt
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Tooling indexes / crash junk ---
+.codegraph/
+.codex/
+*.stackdump

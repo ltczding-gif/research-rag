@@ -1,0 +1,53 @@
+# Domain pack manifest
+#
+# Bootstrap fills in name / description / templates / primary_routing_key.
+# Edit pack_version when you ship breaking changes to your pack.
+
+# REPLACE: kebab-case identifier matching this directory's name
+# (and the LOCALRAG_DOMAIN_PACK env var users will set).
+name: TODO-your-field-slug
+
+# REPLACE: 1-2 sentences. What papers does this pack cover? What sub-fields?
+description: >
+  TODO: describe the field's literature scope. Example for catalysis:
+  "Electrochemistry / heterogeneous catalysis literature notes covering
+  CO2RR, HER, OER, ORR, NRR, and related catalytic systems."
+
+# REPLACE: BCP47 language tag for note body output. zh-CN, en, ja, etc.
+language: zh-CN
+pack_schema_version: 1
+pack_version: "0.1.0"
+
+# REPLACE: list every template you ship. The `id` must equal the basename
+# of `templates/<id>.txt` AND must appear as a value in
+# `schemas/document_profile.vertex.schema.json`'s `recommended_template` enum.
+# A pipeline boot validator fails if these three lists disagree.
+templates:
+  - id: research-article
+    description: TODO — your field's primary experimental / empirical paper template
+    domain_specific: true
+  - id: review-or-perspective
+    description: Reviews, perspectives, roadmaps, commentaries (universal copy)
+    domain_specific: false
+  - id: phd-dissertation
+    description: Multi-chapter dissertations and theses (universal copy)
+    domain_specific: false
+  - id: foundational-theory
+    description: Theory papers, mathematical derivations, conceptual frameworks (universal copy)
+    domain_specific: false
+  - id: generic-research-note
+    description: Fallback template for documents that don't fit elsewhere (universal copy)
+    domain_specific: false
+
+# REPLACE: the field-specific identifier that distinguishes one paper's
+# routing context from another's. Catalysis uses primary_reaction_or_system
+# (e.g. "CO2RR-Cu-MEA"). Biology might use primary_paradigm
+# (e.g. "loss-of-function-screen"). ML might use primary_task
+# (e.g. "image-classification-imagenet"). Pick whatever your field reaches
+# for FIRST when describing what a paper is about.
+primary_routing_key:
+  field_name: primary_TODO
+  examples:
+    - TODO-example-1
+    - TODO-example-2
+    - TODO-example-3

@@ -1,0 +1,107 @@
+{
+  "type": "OBJECT",
+  "propertyOrdering": [
+    "candidate_suggestions",
+    "candidate_needed",
+    "body_evidence_targets",
+    "scope_disposition",
+    "warnings"
+  ],
+  "properties": {
+    "candidate_suggestions": {
+      "type": "OBJECT",
+      "propertyOrdering": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "properties": {
+        "high": {
+          "type": "ARRAY",
+          "items": {
+            "type": "STRING"
+          }
+        },
+        "medium": {
+          "type": "ARRAY",
+          "items": {
+            "type": "STRING"
+          }
+        },
+        "low": {
+          "type": "ARRAY",
+          "items": {
+            "type": "STRING"
+          }
+        }
+      },
+      "required": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "candidate_needed": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "propertyOrdering": [
+          "raw_term",
+          "suggested_facet",
+          "reason",
+          "evidence_sources"
+        ],
+        "properties": {
+          "raw_term": {
+            "type": "STRING"
+          },
+          "suggested_facet": {
+            "type": "STRING",
+            "nullable": true
+          },
+          "reason": {
+            "type": "STRING"
+          },
+          "evidence_sources": {
+            "type": "ARRAY",
+            "items": {
+              "type": "STRING"
+            }
+          }
+        },
+        "required": [
+          "raw_term",
+          "reason",
+          "evidence_sources"
+        ]
+      }
+    },
+    "body_evidence_targets": {
+      "type": "ARRAY",
+      "items": {
+        "type": "STRING"
+      }
+    },
+    "scope_disposition": {
+      "type": "STRING",
+      "enum": [
+        "prefill-ready",
+        "collapse-to-other",
+        "needs-body-evidence"
+      ]
+    },
+    "warnings": {
+      "type": "ARRAY",
+      "items": {
+        "type": "STRING"
+      }
+    }
+  },
+  "required": [
+    "candidate_suggestions",
+    "candidate_needed",
+    "body_evidence_targets",
+    "scope_disposition",
+    "warnings"
+  ]
+}

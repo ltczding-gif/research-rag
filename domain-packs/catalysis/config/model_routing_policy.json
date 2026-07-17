@@ -1,0 +1,21 @@
+{
+  "policy_version": "v1",
+  "pdf_order_contract": "pdf_paths[0] is the primary article PDF; subsequent entries are supplementary PDFs or attachments. primary_pdf_pages reads pdf_paths[0], while total_pdf_pages sums all PDFs in order.",
+  "page_count_threshold_pro": 30,
+  "total_page_count_threshold_pro": 60,
+  "default_profiler_model": "gemini-2.5-flash",
+  "pro_profiler_model": "gemini-2.5-flash",
+  "default_note_generator_model": "gemini-2.5-flash",
+  "pro_note_generator_model": "gemini-2.5-pro",
+  "pro_document_types": [
+    "textbook",
+    "phd-dissertation",
+    "review",
+    "perspective",
+    "commentary"
+  ],
+  "review_like_upgrade": true,
+  "multichapter_upgrade": true,
+  "chunking_enabled": true,
+  "chunking_note": "Oversized or over-page PDFs are split into Vertex-safe chunks before upload."
+}

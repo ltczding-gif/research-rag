@@ -1,0 +1,35 @@
+# Stage A profiler tie-breakers
+#
+# Appended to `document_profiler.system.txt` at run time under the heading
+# "## Domain-specific routing disambiguation". The base profiler prompt
+# enumerates the abstract classification rules; this file resolves
+# ambiguities that recur in the catalysis literature.
+#
+# When forking for a new domain: list the 3-7 routing tie-breakers your
+# field's documents most commonly trigger. Examples that helped catalysis
+# stability:
+
+## Catalysis routing tie-breakers
+
+- Electrocatalysis vs. thermocatalysis vs. photocatalysis:
+  - If the paper's primary independent variable is **applied potential or current**, route to `electrocatalysis-experimental`.
+  - If the primary independent variable is **temperature, pressure, or partial pressure**, route to `thermocatalysis-experimental`.
+  - If the primary independent variable is **light intensity, wavelength, or band-gap engineering**, route to `generic-research-note` and flag for a future photocatalysis template (this pack does not ship one).
+  - For coupled systems (electro-thermal, plasma-electro, photo-thermal): route to whichever drive is the load-bearing one; if genuinely ambiguous, prefer `generic-research-note` and document the ambiguity in `routing_evidence`.
+
+- Methods/synthesis vs. performance experimental:
+  - If the headline contribution is a **new synthesis route, protocol, or fabrication workflow** and performance is downstream validation, route to `methods-or-materials-synthesis`.
+  - If the headline contribution is a **performance number or mechanism** and synthesis is service-level detail, route to the matching experimental template.
+  - The signal: a paper's true contribution is what its abstract leads with and what the figures spend their pages defending.
+
+- Review vs. perspective vs. roadmap:
+  - All three route to `review-or-perspective`; the template handles the sub-genre internally.
+  - If the document has > 80% original data and only 20% synthesis, it's a research article, not a review.
+
+- PhD dissertation vs. multi-paper compilation:
+  - Route to `phd-dissertation` only when chapters form a cumulative thesis-level argument.
+  - An edited collection of independent papers without a unifying thesis routes to `generic-research-note`.
+
+- Textbook detection:
+  - Page count >= 200 + table of contents structure + chapter-level pedagogical framing → `generic-research-note` with `document_type=textbook` and `is_multichapter_thesis=false`.
+  - This pack does not ship a textbook-specific template; the generic template handles it adequately.

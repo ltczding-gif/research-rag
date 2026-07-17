@@ -1,0 +1,48 @@
+# Seed-term guidance for the Note Generator (Stage B)
+#
+# This file is appended to `note_generator.system.txt` at run time under
+# the heading "## Domain-specific seed_terms guidance". The base prompt
+# already defines what `seed_terms` ARE (stable machine-readable phrases
+# central to the document); this file calibrates what "stable" and
+# "central" mean in YOUR field via concrete examples.
+#
+# Pattern (what good and bad seed_terms look like in your field):
+#
+#   A good seed_terms entry in <YOUR FIELD> is:
+#   - <CATEGORY 1>: a name uniquely identifying ...
+#     - GOOD: example1, example2, example3
+#     - BAD:  generic_term1, generic_term2
+#   - <CATEGORY 2>: ...
+#   - <CATEGORY 3>: ...
+#
+#   A bad seed_terms entry is:
+#   - A buzzword the paper mentions in passing without anchoring evidence to.
+#   - A side experiment / control material (those belong in the body).
+#   - A figure number or page reference (those are evidence anchors).
+#
+# Replace the catalysis examples below with 3-5 worked cases from your
+# field. Negative examples teach the calibration faster than positive
+# examples alone — keep both.
+
+## TODO seed_terms calibration
+
+A good `seed_terms` entry in TODO-your-field is:
+- TODO-category-1 (e.g. material identity, biological-system, methodology):
+  - GOOD: TODO-example-good-1, TODO-example-good-2, TODO-example-good-3
+  - BAD:  TODO-example-too-generic-1, TODO-example-too-generic-2
+- TODO-category-2 (e.g. central reaction, primary paradigm, key benchmark):
+  - GOOD: TODO-example-good-1, TODO-example-good-2
+  - BAD:  TODO-thematic-but-vague-1
+- TODO-category-3 (e.g. mechanism, framework, architecture):
+  - GOOD: TODO-example-good-1, TODO-example-good-2
+  - BAD:  TODO-too-generic-1
+
+A bad `seed_terms` entry is:
+- A buzzword the paper mentions but doesn't anchor evidence to.
+- A side experiment, control, or chapter-local case study (those belong in the body, not seed terms).
+- A figure number or page reference (those are evidence anchors).
+- A general technique label UNLESS the paper's central novelty is the technique itself.
+
+For broad documents (textbook, dissertation, review):
+- Prefer fewer (3-6) genuinely document-level seed terms over exhaustive coverage.
+- Chapter-local case studies don't qualify even if they're memorable.

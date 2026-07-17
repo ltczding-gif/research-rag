@@ -1,0 +1,28 @@
+# Scanner layer dependencies (Zotero -> note generator).
+#
+# Required for the orchestrator regardless of which backend you pick.
+# The default backend (subagent — zero API keys, the host agent does the
+# model calls) needs nothing beyond these two.
+pypdf>=4.0
+pyyaml>=6.0
+tomli>=2.0; python_version < "3.11"
+
+# --- Backend-specific dependencies (install only what you use) ---
+#
+# Each backend's __init__ does a try/except ImportError with a clear pip
+# install message, so missing deps fail fast at backend selection time
+# rather than at PDF time.
+
+# vertex + gemini-api — uncomment if you set LOCALRAG_PROCESSOR_BACKEND
+# to "vertex" or "gemini-api"
+# google-genai>=0.3
+# google-cloud-storage>=2.14   # vertex only; gemini-api does not need GCS
+
+# anthropic — uncomment if you set LOCALRAG_PROCESSOR_BACKEND=anthropic
+# anthropic>=0.39
+
+# openai (and any OpenAI-compatible provider) — uncomment if you set
+# LOCALRAG_PROCESSOR_BACKEND=openai. Needs pdfplumber for local PDF text
+# extraction (the openai backend does not transmit PDF binaries).
+# openai>=1.40
+# pdfplumber>=0.10

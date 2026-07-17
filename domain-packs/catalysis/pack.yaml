@@ -1,0 +1,56 @@
+# Domain pack manifest
+#
+# This file declares the pack's identity, version, and template inventory.
+# At pipeline boot, a validator checks that every `recommended_template` enum
+# in schemas/document_profile.vertex.schema.json has a matching `templates/<name>.txt`
+# file listed below. A mismatch fails fast with a clear error.
+
+name: catalysis
+description: >
+  Electrochemistry / heterogeneous catalysis literature notes. Originally built
+  around CO2RR, HER, OER, ORR, NRR, and thermocatalytic / photocatalytic systems.
+  This is the reference pack — fork it as a starting point for related electrochemical
+  fields (electrochemical separations, surface science, materials synthesis).
+language: zh-CN
+pack_schema_version: 1
+pack_version: "2026.05"
+
+# Every template_id below must have a `templates/<id>.txt` file.
+# Every template_id must also appear in the `recommended_template` enum
+# of schemas/document_profile.vertex.schema.json.
+templates:
+  - id: electrocatalysis-experimental
+    description: Experimental electrocatalysis papers (CO2RR, HER, OER, ORR, NRR, etc.)
+    domain_specific: true
+  - id: thermocatalysis-experimental
+    description: Experimental thermocatalysis / heterogeneous catalysis papers
+    domain_specific: true
+  - id: methods-or-materials-synthesis
+    description: Methods papers, synthesis protocols, materials fabrication
+    domain_specific: true
+  - id: review-or-perspective
+    description: Reviews, perspectives, roadmaps, commentaries
+    domain_specific: false
+  - id: phd-dissertation
+    description: Multi-chapter dissertations and theses
+    domain_specific: false
+  - id: foundational-theory
+    description: Theory papers, mathematical derivations, conceptual frameworks
+    domain_specific: false
+  - id: generic-research-note
+    description: Fallback template for documents that don't fit elsewhere
+    domain_specific: false
+
+# Domain-specific schema field names. Frontmatter still emits a stable
+# `primary_routing_key` value, but pack authors document what their key means.
+primary_routing_key:
+  field_name: primary_reaction_or_system
+  examples:
+    - CO2RR-Cu-MEA
+    - OER-NiFe-acid
+    - methanol-synthesis-Cu-ZnO
+    - styrene-hydrogenation-Pd
+
+# Source: scanner/prompts/, scanner/schemas/, scanner/template_rules/, scanner/config/
+# at commit 65c9ce7 (2026-05-09). Migrated to pack layout to enable multi-domain
+# adoption without forcing this catalysis content to be the universal default.

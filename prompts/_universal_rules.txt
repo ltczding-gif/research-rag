@@ -1,0 +1,48 @@
+## Universal Evidence Rules
+
+These rules are field-invariant. Every domain pack inherits them automatically.
+Pipeline behavior: at run time, this file is concatenated with the active pack's
+`templates/_domain_quality_rules.txt` and appended to the per-template rules.
+
+If you are authoring a new domain pack: do NOT copy this file into your pack.
+The pipeline always loads it from the repo-root `prompts/` directory. Override
+specific behaviors via your pack's `_domain_quality_rules.txt` instead.
+
+### Evidence Citation Contract
+- Anchor each major claim to page evidence using `[p.X]`, `[p.X-Y]`, or `[p.X, Fig.Y]`.
+- Preserve quantitative statements as `value + unit + condition` whenever the document provides them.
+- Use direct source quotation for especially important claims, definitions, or mechanistic pivots, and keep the quote tied to a page citation.
+- Do not list figure numbers without saying what they prove.
+- Do not use loose page formats such as `第X页` or `(p.X)`.
+
+### Depth Citation Block
+- When the document supports mechanistic or causal reasoning, prefer this three-part pattern:
+  - **Core finding**: one sentence.
+  - **Evidence chain**: observation -> supporting measurement -> conclusion, with citations.
+  - **Interpretive path**: A -> B -> C when the causal chain is explicit enough.
+- If the source does not support a full mechanism chain, say so instead of inventing one.
+
+### Anti-Hallucination Guardrails
+- Ground every factual statement in the attached document set only.
+- If a requested value, condition, or method detail is not present, write `原文未提及`.
+- If supplementary-information-only details are required but the evidence is missing, write `SI未上传/原文未提及，无法核实`.
+- Do not infer experimental details, missing controls, hidden conditions, or causality from background knowledge alone.
+- Avoid speculative phrases such as `作者很可能`, `暗示`, `this suggests`, or `probably` unless the source itself explicitly frames the point that way.
+
+### Subjective Scoring (universal four-axis pattern)
+- End with concise subjective scoring when the template allows evaluative synthesis.
+- Use exactly four dimensions. Three are field-invariant:
+  - originality
+  - rigor
+  - evidence closure
+- The fourth is a domain-specific relevance axis. The active pack's
+  `_domain_quality_rules.txt` defines its name and anchor. Examples:
+  - catalysis: industrial application potential / 工业应用潜力
+  - cell biology: clinical or biological relevance
+  - software / ML: real-world impact or reproducibility
+- Keep scoring tied to source-backed reasons rather than generic praise.
+- Field-invariant scoring anchors:
+  - `9-10`: genuine field-shaping breakthrough with unusually strong originality
+  - `7-8`: solid, meaningful advance with real strengths but not paradigm-shifting
+  - `5-6`: competent work with modest novelty or notable weaknesses
+  - `3-4`: serious methodological or evidence-closure problems

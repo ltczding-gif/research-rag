@@ -1,0 +1,275 @@
+本模板用于多章节 dissertation / thesis 类文档。不适用于单篇论文、综述、教材或 monograph。
+默认 `_universal_rules.txt 与 _domain_quality_rules.txt` 已加载。本文件只定义正文结构，不重设 note frontmatter。
+正文默认使用中文；在能提高精度时，保留必要的英文术语、chapter label、method name 和 framework name。
+
+## 使用边界
+
+当文档具有明确章节结构、累积式研究计划和 thesis-level contribution 时，使用本模板。
+
+不要用于：
+- 只是篇幅较长但本质上仍是 single paper 的文档
+- review、perspective、roadmap、commentary
+- 没有 thesis argument 的 textbook、handbook 或 broad reference work
+- 各章彼此不构成一个 cumulative claim 的 edited collection
+
+边界纪律：
+- 不要把 dissertation 压成 fake single-paper narrative
+- 不要默认每章 evidentiary weight 都一样
+- 要先保留 chapter order，再做 synthesis
+- 区分 thesis-level contribution 与 chapter-local finding
+- 如果 source 并不是干净的多章节 dissertation，要明确写 fit imperfect，而不是强行套模板
+- dissertation-level argument 的优先级高于 chapter 数量；章节再多，也不能替代一个清晰的 thesis-level claim
+- 如果是 paper-based / article-based thesis，要把“已发表”视为证据成熟度，不视为自动达标；仍要按整部 thesis 的整体说服力来评估
+- 章节之间如果存在依赖关系，要显式写出谁是 backbone、谁是 bridge、谁是 support、谁负责 synthesis，不要把不同角色的章节写成平权并列
+
+## 开篇摘要
+
+不要给这一段加标题。
+用一个高密度摘要段写清：
+- thesis 的 central research question
+- 整体 approach 与 chapter logic
+- 最强的 thesis-level contribution
+- 最重要的 unresolved limit 或 future direction
+- 若摘要、引言或关键章节给出了 quantitative result，也尽量保留至少一个
+- 不要把开篇摘要写成 chapter-by-chapter recap；必须先给出整部 thesis 的 single thread，再用少量章节信息支撑它
+
+## 文献基本信息
+
+本节要简洁、可读。
+必须包含：
+- 推荐保存文件名
+- 标题
+- 学位 / 机构 / 年份
+- DOI 或 persistent identifier（若有）
+
+规则：
+- `推荐保存文件名` 不能省略
+- 文件名要能让人凭年份、degree context、core system 和 thesis theme 快速识别
+- 若 thesis 没有 DOI，写 `原文未提及 DOI`
+- 不要把 chapter 列表、完整 thesis 标题或整句摘要塞进文件名；文件名只保留对归档最有区分度的 thesis 主线。
+- `推荐保存文件名` 必须遵循共享规则中的统一骨架：`年份-机构或期刊缩写-作者主线-核心体系或对象-thesis问题类型-关键框架或章节主轴-主要贡献焦点_review_note.md`
+- 若 dissertation 没有期刊，就在第二槽位放机构、学位项目或最稳定的 archive 缩写，但仍保持整套槽位顺序不变。
+- 若 institution 或 degree type 有歧义，要明确指出，不要猜
+
+## 论文范围（Thesis Scope）
+
+说明 thesis 的整体研究议程。
+覆盖：
+- central scientific / engineering question
+- 所属 field 与 subfield
+- 若有，时间跨度、对象范围、system family 或 study scope
+- thesis 明确不覆盖什么 `[Ch.1, p.X]`
+- 这篇 thesis 是 experimental、computational、theoretical、mixed，还是分阶段混合
+
+不要只转述 title page。
+
+## 研究设计总览（Research Design Overview）
+
+解释 thesis 是如何被组织成一个研究计划的。
+写清：
+- 各章关系是 sequential、parallel、contrasting 还是 cumulative
+- core hypothesis、thesis argument 或 programmatic logic 是什么
+- 为什么采用这个设计
+- thesis 是按 methods -> results -> synthesis 走，还是 framing -> case studies -> unification
+- 是否存在 bridge chapter、backbone chapter 或 synthesis chapter
+- 如果是 paper-based thesis，要明确指出 dissertation prose 额外承担的整合作用：把 published paper、commentary、discussion 和 conclusion 重新编成一个单一、可被答辩（defensible）的 thesis argument
+- 如果章节强弱不均，要写清楚这种不均衡是设计使然还是材料限制，不要默认每章都要平均分配论证重量
+
+如果是 paper-stapled thesis，要明确指出，并说明这些 chapter 是否真的构成 coherent whole。
+还要进一步说明：论文式章节是如何被整合进 thesis argument 的，哪些是 published paper，哪些是 added commentary、bridging prose、discussion 或 concluding synthesis；如果只是并排拼接，要直接指出 coherence 风险。
+若章节成熟度不一致，要写清哪几章承担主要论证重量，哪几章只是提供范围限定、方法铺垫或外推边界。
+
+## 章节地图（Chapter Map）
+
+按顺序逐章写。
+对每个 substantive chapter，都包含：
+- chapter 编号与标题
+- chapter role：introduction / literature review / methods / results / discussion / synthesis
+- primary system、dataset、model 或实验设置
+- 关键 claim 或 contribution
+- 一条最重要的 `[Ch.X, p.Y]` 锚点
+- 说明该章更像 evidentiary backbone、framing、support 还是 synthesis
+- 章节之间的依赖关系：这一章依赖前文的哪些定义、方法、数据或论证前提
+- 章节的证据权重：这一章是 decisive evidence、boundary case、transfer case，还是 contextual support
+- 若某章只是 paper-based thesis 的单篇论文，应标明它在整部 thesis 中承担的是 local evidence 还是 thesis-level synthesis 的一部分
+
+规则：
+- 不要只列标题
+- 若某章主要是 review-based 或 theoretical，要明确写出来
+- 若某章和 thesis 主线连接偏弱，要写出来，不要帮它磨平
+- 不要让章与章看起来“形式对齐、实质同权”；对于 paper-based thesis，更要写清 commentary / introduction / conclusion 如何把纸面上的离散论文拉回同一条 argument
+
+## 章节依赖与证据权重
+
+这一节专门把 dissertation 的章节关系写清楚，避免把整部 thesis 误写成章节目录加长版。
+对每个关键章节或章节群，都要额外说明：
+- 这一章回答的是 thesis question 的哪一段，而不是它自己的独立小问题
+- 这一章建立了什么前提，后面的哪些章节必须依赖它
+- 这一章的 evidence weight 属于高、中、低哪一档，为什么
+- 这一章是否能单独成立，还是必须借助前后章节才能成立
+- 若章节之间存在重复方法、重复系统或重复数据，要指出它们是为了稳固可比性，还是只是表面重复
+- 若某些 chapter 只是材料搬运到 thesis 里，必须标注为 support only，而不是贡献本身
+
+对于 paper-based thesis，再补一层判断：
+- published paper 本身只代表局部证据，不代表 thesis 已自动获得整体一致性
+- integration 责任在 thesis prose，不在 paper title
+- examiner 看的不是“有几篇 paper”，而是这些 paper 是否被组织成 single coherent document
+- 如果只能靠标题列表理解章节关系，说明 thesis-level integration 还不够
+
+## 方法 / 体系骨架（Methods / System Backbone）
+
+抓出那些让跨章节比较成为可能的重复 methods、systems、datasets、models 或 conceptual tools。
+对每个 backbone element，都写：
+- 它测量、计算或建立了什么
+- 哪些章节在用
+- 关键条件、假设或 parameter regime 是什么 `[Ch.X, p.Y]`
+- 它在章节间是稳定的，还是随着 thesis 进展而发生关键变化
+
+若某个方法被点名，但 operational detail 缺失，就写 `原文未提及`。
+若跨章节比较因为 methods 或 datasets 不可比而受限，也要点明。
+
+## 证据热点（Evidence Hotspots）
+
+指出 thesis 的论证真正在哪里被“打下来”。
+热点可以是：
+- 决定性的 experimental chapter
+- 关键 comparative table
+- 某组 figure sequence
+- 某个 modeling result
+- appendix 或 supporting dataset
+- paper-based thesis 中的 bridging prose、authorship statement、integrative discussion 或 concluding synthesis
+- 用来压住 overclaim 的限制性分析、负结果、对照实验或敏感性检查
+
+对每个 hotspot，都说明：
+- 它直接证明了什么
+- 为什么它比周边内容更关键
+- 哪个 thesis-level 结论依赖它
+- 它仍然不能证明什么
+- 它在整部 thesis 中的权重有多大；如果其他章节只是 context，而这里才是 decisive evidence，要明确写出来
+
+不要把“显眼”误当成“证据权重最大”。
+也不要因为某一章发表过，就自动把它写成最强证据；published status 只是 maturity signal，不是 examiner judgment 的替代品。
+
+## 主要贡献（Major Contributions）
+
+这一节是 thesis-level 的，不是逐章 recap。
+对每条 contribution：
+- 用一句话写出贡献
+- 标成 `[New finding / New method / New application / New theoretical framework / New dataset or resource]`
+- 说明 prior work 没有建立什么
+- 若有，保留一个 quantitative result
+- 用 `[Ch.X, p.Y]` 锚定
+- 只算 thesis-level contribution，不把 chapter-local observation 误升级为整部 thesis 的贡献
+- 如果某项所谓贡献只是把已知方法迁移到新系统，要写清它更像 scope extension 还是 genuine advance
+- paper-based thesis 的 contribution 可以来自 integration、reconciliation、boundary-setting 或 cross-chapter synthesis，不必强迫每篇 paper 都各自扛一个独立“重大贡献”
+- 当一条贡献主要依赖单章证据时，要把这个事实写出来，避免让整部 thesis 看起来像每章都同样有力
+
+如果所谓 contribution 更像 narrative packaging 而不是 distinct advance，要降低措辞强度。
+
+## 跨章节主题（Cross-Chapter Themes）
+
+综合多章重复出现的 pattern。
+可选主题包括：
+- repeated method logic
+- 同一 system 在不同条件下被反复推进
+- 某个 hypothesis 随章节逐步收紧
+- recurring failure mode 或 caveat
+- scale-up / transfer logic
+- 连接异质章节的 conceptual motif
+
+对每个 theme，都说明：
+- 主题名
+- 涉及哪些章节
+- 这种跨章节处理如何 strengthen 或 complicate thesis argument
+- 这个 theme 依赖哪一章先立住、哪一章后续收紧、哪一章只是把范围外推到边界
+- 如果 theme 只是重复出现的措辞或方法名，而不是可追踪的论证结构，不要把它写成真正的跨章节主题
+
+如果章节之间根本不构成 recurring themes，要直接写出来。
+
+## 局限与未来工作（Limits / Future Work）
+
+写 thesis 自己承认的限制和未来方向。
+区分：
+- methodological limits
+- evidence gaps
+- scope limits
+- unresolved questions
+- 作者提出的 future work
+
+规则：
+- future work 要具体，不能空泛
+- 若 thesis 自己承认风险或矛盾，要保留
+- 若 future direction 很宏大但证据基础很弱，要指出，不要升级成成熟 agenda
+- future work 必须和当前 thesis 的证据边界一一对应，明确写出“已经证明了什么 / 还没有证明什么 / 下一步为什么必须是这个方向”
+- 不要把 future work 写成第二个 thesis；如果需要新的系统、数据或理论框架才能推进，就要诚实地把它写成新的研究起点，而不是现有 thesis 的自然延伸
+- 对 paper-based thesis，要区分“补一篇 paper”与“补一个整合缺口”；后者通常更接近真正的 thesis-level future work
+
+## 审稿人视角（Reviewer Lens）
+
+用 dissertation-specific reviewer lens 来看。
+至少检查：
+- strongest claims 是否真的有 chapter-level evidence，还是 thesis overreaching
+- chapters 是否 converge 成 cumulative argument，还是更像拼在一起的 papers
+- repeated methods / systems 是否足够一致，以支撑 cross-chapter comparison
+- 最关键的 claims 是否真的由强章节或强分析承担
+- thesis 是否诚实承认了 limits，并提出具体 next steps
+- key conditions、datasets、parameters、appendices 或 SI detail 是否清楚到足以 rebuild
+- 评审时先问“如果把 paper 标题全部遮住，这还是不是一篇 thesis”，而不是先问“这里有几篇 paper”
+- 章节之间的过渡是否在解释为什么这一章必须跟下一章接着走，而不是仅仅按时间或发表顺序堆叠
+- thesis-level claim 是否能沿着几章最强证据链被连续追踪，而不是只在引言和结论里出现一次
+- 文章式章节是否明确标出了作者贡献、复用边界和 published material 的位置
+- 是否存在把 support chapter 伪装成 backbone chapter、或者把单章结果过度抬升为整部 thesis 结论的情况
+- conclusion / synthesis 是否真正完成整合，而不是把章节摘要重新排列一次
+
+若某一维度信息不足，就写 `原文未提供足够信息，无法强评`。
+
+## 主观打分
+
+评分锚点：
+- 9-10：major field contribution，且 rigor 与 cumulative logic 都很强
+- 7-8：solid multi-chapter thesis，有 genuine novelty
+- 5-6：competent，但偏 incremental，或 coherence / evidence depth 有限制
+- 3-4：methodological、coherence 或 evidence 问题明显
+- 评分不要简单按章节平均；一篇 thesis 可以有一两章特别强，但如果 thesis-level integration 弱、chapter dependency 松散、或 overclaim 过重，总分仍应被拉低
+- 反过来，如果单章不都耀眼，但整部 thesis 的 cumulative logic、边界意识和 synthesis 都很稳，分数可以高于“各章单打独斗”的平均印象
+- 对 paper-based thesis，publication count 本身不加分；真正加分的是 thesis argument 是否把这些 papers 组织成一个可以被 examiner 直接检验的整体
+
+每个维度都必须给一个简短、source-backed 的理由。
+
+必需维度：
+- 论题深度（0-10）
+- 章间逻辑（0-10）
+- 方法覆盖度（0-10）
+- 创新贡献（0-10）
+
+## 核心结论总结
+
+用一个结尾段写清：
+- thesis 的真实贡献
+- 最值得复用的 thesis-level conclusion
+- 对后续 build-on 或 reproduce 最重要的 caveat
+- 哪些部分属于 cumulative evidence，哪些仍更 provisional
+- 最后再点出 thesis 里最强的一章和最弱的一章分别承担什么角色，避免把整部 thesis 写成“每章同样重要”的假对称结构
+
+只加粗最关键的结论。
+
+## 写作规则
+
+- 全文必须保持 chapter structure 明确可见
+- 只要有 chapter-level evidence，优先用 `[Ch.X, p.Y]`
+- 先保留 chapter order，再做 synthesis
+- 不要把 dissertation 压成一篇假 paper
+- 多写 thesis-level contribution，少写 chapter-by-chapter abstract dumping
+- 对于核心 experimental chapters，调用 `_universal_rules.txt 与 _domain_quality_rules.txt` 的 depth citation pattern：核心结论 -> evidence chain -> interpretive / mechanistic path
+- 对于 review、introduction 或 theory-heavy chapters，写 synthesis、positioning 与 transitions，不要假装成实验章节
+- 原文不支持的细节写 `原文未提及`
+- 需要 appendix 或 SI 才能核实但当前没有时，写 `SI未上传/原文未提及，无法核实`
+- 如果信息来自 article-based / paper-based thesis，要同时写明“published paper 内容”和“thesis prose 提供的整合层”，不要把两者混成一个层级
+- 如果章节之间证据强弱差异很大，允许并且应该在表述上显式拉开语气强度，避免人为平均化
+- 任何“未来工作”或“局限”都要回扣 thesis-level claim，不要变成泛泛的学术收尾
+
+## 执行约束
+
+本模板无条件继承 `_universal_rules.txt 与 _domain_quality_rules.txt` 中全部规则。
+本模板的 citation format 优先是 `[Ch.X, p.Y]`，而不只是 `[p.X]`。
+若本模板与 `_universal_rules.txt 与 _domain_quality_rules.txt` 有冲突，以 `_universal_rules.txt 与 _domain_quality_rules.txt` 为准。
