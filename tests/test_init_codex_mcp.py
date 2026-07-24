@@ -9,7 +9,10 @@ edits that must preserve unrelated servers and comments.
 from __future__ import annotations
 
 import sys
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 from pathlib import Path
 
 import init_environment as ie
