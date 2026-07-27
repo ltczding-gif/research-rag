@@ -172,7 +172,9 @@ def run_isolated(
         run_id=run_id,
         production_paths=production_paths,
     )
-    inherited = dict(os.environ if base_environment is None else base_environment)
+    inherited = dict(os.environ)
+    if base_environment is not None:
+        inherited.update(base_environment)
     child_environment = {
         key: value
         for key, value in inherited.items()
