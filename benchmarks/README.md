@@ -8,9 +8,18 @@ collections, ledgers, and query logs.
 
 Wave 0A is complete: it defines and validates the data contract, provides the
 behavior-preserving fixed-800 legacy PDF seam, creates isolated run-owned
-state, and converts internal retrieval hits through a public allowlist. The
-committed JSONL files and suite membership lists remain intentionally empty
-until the S5 corpus is curated in Wave 0B.
+state, and converts internal retrieval hits through a public allowlist.
+
+Wave 0B is in progress. Its first corpus-lock increment freezes five public
+papers, one per domain, with a main PDF and SI PDF for each, source URLs,
+CC BY 4.0 evidence, and SHA-256 checksums. See
+[`corpus/SOURCES.md`](corpus/SOURCES.md) for the selection and license record.
+Five main-plus-SI candidate notes are also frozen under
+[`fixtures/generated_notes/`](fixtures/generated_notes/). They were generated
+through the repository's subagent protocol, not Gemini, and are explicitly
+marked `human_review_status: pending`; they are not gold. The query, answer,
+claim, evidence-unit, and qrel ledgers remain empty until a human reviews the
+notes and the 25 S5 queries are adjudicated.
 
 The contract covers:
 
@@ -61,13 +70,15 @@ Install the benchmark-only dependencies:
 python -m pip install -r requirements-benchmark.txt
 ```
 
-Validate the committed empty Wave 0A skeleton:
+Validate the current contract and corpus lock while downstream gold ledgers
+are still being built:
 
 ```bash
 python benchmarks/scripts/validate_benchmark.py --allow-empty
 ```
 
-Once S5 data exists, omit `--allow-empty`. Before an official release run, use
+Once all S5 gold ledgers exist, omit `--allow-empty`. Before an official
+release run, use
 the stricter quota and partition checks:
 
 ```bash
@@ -89,3 +100,29 @@ larger suites must also measure papers that genuinely have no SI.
 Generated caches, fetched files, run artifacts, and reports are ignored by Git.
 Only reviewed contracts, annotations, suite definitions, and intentionally
 published reports should be committed.
+
+Frozen generated-note fixtures are the deliberate exception: they are
+path-sanitized, checksum-pinned candidate outputs used by offline evaluation.
+Their provenance is recorded in
+[`fixtures/generated_notes/manifest.jsonl`](fixtures/generated_notes/manifest.jsonl).
+Human corrections must create separate files under `gold/notes/` rather than
+mutating the generated baseline.
+
+## Acquire or verify the corpus
+
+The manifest is sufficient to reacquire the selected publisher files:
+
+```bash
+python benchmarks/scripts/fetch_corpus.py
+```
+
+Verify an existing local copy without network access:
+
+```bash
+python benchmarks/scripts/fetch_corpus.py --check-only
+```
+
+The files land under ignored `benchmarks/corpus/files/` paths. This command is
+for maintainer acquisition and manual verification. Ordinary pull-request CI
+must use a checksum-pinned offline corpus artifact; it must not depend on live
+publisher downloads.

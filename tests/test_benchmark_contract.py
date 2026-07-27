@@ -151,7 +151,7 @@ def _minimal_valid_root(tmp_path: Path) -> Path:
     return root
 
 
-def test_committed_wave0a_empty_skeleton_is_valid():
+def test_committed_wave0b_corpus_lock_is_valid():
     result = validate_benchmark.validate_benchmark(
         BENCHMARK_ROOT,
         allow_empty=True,
@@ -160,7 +160,33 @@ def test_committed_wave0a_empty_skeleton_is_valid():
     assert result.ok, result.errors
     assert result.counts["suites"] == 5
     assert result.counts["configs"] == 1
-    assert result.counts["manifest"] == 0
+    assert result.counts["manifest"] == 5
+
+
+def test_committed_s5_has_one_cc_by_main_plus_si_paper_per_domain():
+    records = [
+        json.loads(line)
+        for line in (BENCHMARK_ROOT / "corpus" / "manifest.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    expected_domains = {
+        "catalysis-materials",
+        "biomedicine",
+        "cs-ml",
+        "environment-energy-geoscience",
+        "social-science-economics",
+    }
+
+    assert {record["domain"] for record in records} == expected_domains
+    assert len(records) == len(expected_domains)
+    for record in records:
+        assert record["main_pdf"]["license"] == "CC-BY-4.0"
+        assert record["main_pdf"]["redistribution"] == "allowed"
+        assert record["si"]
+        assert all(item["license"] == "CC-BY-4.0" for item in record["si"])
+        assert all(item["redistribution"] == "allowed" for item in record["si"])
 
 
 def test_minimal_cross_referenced_contract_is_valid(tmp_path):
