@@ -91,6 +91,10 @@ def test_generic_template_is_field_neutral_and_kept_in_sync():
     assert "不列举或导入当前 active pack" in catalysis
     assert "按 claim 实际限定后的强度进行裁决" in catalysis
     assert "严重性只相对该行原样写出的 bounded claim" in catalysis
+    assert "对每个拟列为 fatal / major 的 concern 做内部准入检查" in catalysis
+    assert "零个 fatal / major 是完全有效的结果" in catalysis
+    assert "最多三个 surviving 科学问题" in catalysis
+    assert "不得凑满三个" in catalysis
     assert "必须在逻辑上能够区分表中所写的替代解释" in catalysis
     assert "每个 major concern 只能指定一项最有判别力的补证设计" in catalysis
     assert "不得合并 `timeout/unknown`" in catalysis
