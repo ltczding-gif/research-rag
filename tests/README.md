@@ -3,7 +3,9 @@
 The test suite covers scanner contracts, backend dispatch, subagent resume,
 hash/ledger compatibility, Zotero SQLite fixtures, note rendering, Chroma schema
 guards, setup diagnostics, MCP tool registration, and an isolated synthetic MCP
-round trip. Cloud LLM calls are not made by the default suite.
+round trip. It also locks the Wave 0A benchmark contracts: pure legacy PDF
+extraction/chunking, fail-closed run isolation, and allowlist-only public hits.
+Cloud LLM calls are not made by the default suite.
 
 ## Run the suite
 
@@ -18,6 +20,7 @@ Focused checks:
 python -m pytest tests/test_entrypoint_smoke.py -q
 python -m pytest tests/test_mcp_server.py -q
 python -m pytest tests/test_subagent_host_contract.py -q
+python -m pytest tests/test_pdf_baseline.py tests/test_benchmark_runtime.py tests/test_public_report.py -q
 ```
 
 The GitHub Actions matrix runs the suite on Windows, macOS, and Linux with

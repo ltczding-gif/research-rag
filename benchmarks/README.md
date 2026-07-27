@@ -6,9 +6,11 @@ collections, ledgers, and query logs.
 
 ## Current milestone
 
-Wave 0A defines and validates the data contract. The committed JSONL files and
-suite membership lists are intentionally empty until the S5 corpus is curated
-in Wave 0B.
+Wave 0A is complete: it defines and validates the data contract, provides the
+behavior-preserving fixed-800 legacy PDF seam, creates isolated run-owned
+state, and converts internal retrieval hits through a public allowlist. The
+committed JSONL files and suite membership lists remain intentionally empty
+until the S5 corpus is curated in Wave 0B.
 
 The contract covers:
 
@@ -22,6 +24,34 @@ The contract covers:
 Candidate chunks must be mapped to stable `evidence_id` values by the evaluator.
 Gold records must never contain a candidate `chunk_id`.
 Human judgments follow [ANNOTATION_GUIDE.md](ANNOTATION_GUIDE.md).
+
+## Runtime boundary
+
+`benchmarks.runtime.create_run_layout()` validates the requested `run_root`
+against explicit production paths before creating anything. Each accepted run
+receives its own home, notes directory, Chroma path, collection names, ledgers,
+query log, model cache, artifacts, and reports directory.
+
+`benchmarks.runtime.run_isolated()` runs a command without a shell. It removes
+inherited `LOCALRAG_*`, Zotero, and model-cache settings before injecting the
+run-owned environment. Callers must supply the production paths to protect;
+missing home, notes, Chroma, ledger, query-log, or Zotero boundaries fail
+closed.
+
+Only the four fields emitted by `benchmarks.public_report.sanitize_hits()` may
+represent retrieved evidence in a public artifact:
+
+- `paper_id`
+- `file_id`
+- `pdf_page_index`
+- `evidence_id`
+
+Absolute paths, source text, private queries, scores, API keys, and internal
+metadata are discarded rather than redacted heuristically.
+
+The C0 production adapter and future benchmark runner share
+`service/pdf_baseline.py`. Importing that module performs no vault scan, PDF
+read, Zotero lookup, Chroma initialization, or collection binding.
 
 ## Validate
 
@@ -50,6 +80,11 @@ Official S5/D20/V20/H60 data must have verified redistribution permission.
 PDF binaries belong in a checksum-pinned release/dataset artifact, not Git
 history. Private papers and download-only local extensions must not contribute
 to public benchmark scores.
+
+Every official S5 paper must provide both its main PDF and at least one
+redistributable SI PDF. The validator rejects an S5 paper whose manifest has an
+empty `si` list; this requirement is deliberately scoped to S5 because the
+larger suites must also measure papers that genuinely have no SI.
 
 Generated caches, fetched files, run artifacts, and reports are ignored by Git.
 Only reviewed contracts, annotations, suite definitions, and intentionally
