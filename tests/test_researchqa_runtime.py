@@ -1,0 +1,375 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+
+from benchmarks.researchqa_models import (
+    OLLAMA_EMBED_DIMENSIONS,
+    OLLAMA_EMBED_MODEL_DIGEST,
+    OLLAMA_EMBED_MODEL_ID,
+)
+from benchmarks.researchqa_notes import GENERIC_TEMPLATE
+from benchmarks.researchqa_retrieval import (
+    RERANKER_MODEL_ID,
+    RERANKER_REVISION,
+)
+from benchmarks.researchqa_runtime import (
+    ResearchQARuntimeError,
+    run_researchqa_runtime,
+)
+from benchmarks.researchqa_sweep import StrategySweepResult
+
+
+def _sha(value: bytes | str) -> str:
+    raw = value.encode("utf-8") if isinstance(value, str) else value
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+            for row in rows
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_native_ir(run_root: Path, paper_id: str) -> None:
+    text = f"Evidence for {paper_id} appears on this Main page."
+    _write_jsonl(
+        run_root / "source" / paper_id / "native-ir.jsonl",
+        [
+            {
+                "schema_version": 1,
+                "unit_id": f"native-{paper_id}-1",
+                "paper_id": paper_id,
+                "file_id": "Main",
+                "source_role": "benchmark_pdf",
+                "media_type": "application/pdf",
+                "source_sha256": _sha(f"source:{paper_id}"),
+                "parser_fingerprint": _sha("runtime-test-parser-v1"),
+                "ordinal": 1,
+                "coordinate": {
+                    "coordinate_type": "pdf_page",
+                    "page": 1,
+                },
+                "citation": "[Main p.1]",
+                "text": text,
+                "text_sha256": _sha(text),
+            }
+        ],
+    )
+
+
+def _runtime_fixture(tmp_path: Path) -> tuple[dict[str, object], Path]:
+    cache_root = tmp_path / "cache"
+    run_root = tmp_path / "run"
+    paper_ids = [f"W{index}" for index in range(1, 21)]
+    questions = []
+    for index in range(254):
+        paper_id = paper_ids[index % len(paper_ids)]
+        questions.append(
+            {
+                "row_id": f"q-{index + 1:03d}",
+                "paper_id": f"https://openalex.org/{paper_id}",
+                "domain": f"domain-{index % 10}",
+                "question_type": "lookup",
+                "question": f"What evidence belongs to {paper_id}?",
+                "expected_references": [],
+            }
+        )
+    _write_jsonl(
+        cache_root / "suites" / "rq-2" / "questions.jsonl",
+        questions,
+    )
+
+    frozen_rows = []
+    for paper_id in paper_ids:
+        _write_native_ir(run_root, paper_id)
+        note = f"# {paper_id}\n\nAudited evidence note for {paper_id}.\n"
+        note_path = (
+            run_root
+            / "note-runs"
+            / "frozen"
+            / "notes"
+            / f"{paper_id}.md"
+        )
+        note_path.parent.mkdir(parents=True, exist_ok=True)
+        note_path.write_text(note, encoding="utf-8")
+        frozen_rows.append(
+            {
+                "schema_version": 1,
+                "paper_id": paper_id,
+                "template": GENERIC_TEMPLATE,
+                "note_sha256": _sha(note_path.read_bytes()),
+            }
+        )
+    _write_jsonl(
+        run_root / "note-runs" / "frozen" / "frozen-notes.jsonl",
+        frozen_rows,
+    )
+
+    config: dict[str, object] = {
+        "benchmark": {
+            "benchmark_id": "researchqa",
+            "tier_id": "rq-2",
+            "paper_count": 20,
+            "question_count": 254,
+        },
+        "paths": {
+            "cache_root": str(cache_root),
+            "suite_dir": "suites/rq-2",
+        },
+        "models": {
+            "embedding": {
+                "model": OLLAMA_EMBED_MODEL_ID,
+                "digest": OLLAMA_EMBED_MODEL_DIGEST,
+                "dimensions": OLLAMA_EMBED_DIMENSIONS,
+            },
+            "reranker": {
+                "model": RERANKER_MODEL_ID,
+                "revision": RERANKER_REVISION,
+            },
+        },
+    }
+    return config, run_root
+
+
+@pytest.mark.parametrize("failure_mode", ["missing", "sha-mismatch"])
+def test_runtime_rejects_missing_or_unbound_frozen_note(
+    tmp_path: Path,
+    failure_mode: str,
+) -> None:
+    config, run_root = _runtime_fixture(tmp_path)
+    note_path = run_root / "note-runs" / "frozen" / "notes" / "W7.md"
+    if failure_mode == "missing":
+        note_path.unlink()
+        expected = "does not exist"
+    else:
+        note_path.write_text("tampered", encoding="utf-8")
+        expected = "SHA-256 mismatch"
+
+    def forbidden_factory(**_kwargs: object) -> object:
+        raise AssertionError("models must not be constructed for invalid notes")
+
+    with pytest.raises(ResearchQARuntimeError, match=expected):
+        run_researchqa_runtime(
+            config,
+            run_root,
+            embedding_factory=forbidden_factory,
+            reranker_factory=forbidden_factory,
+        )
+
+    runtime_root = run_root / "runtime"
+    summary = json.loads(
+        (runtime_root / "runtime-summary.json").read_text(encoding="utf-8")
+    )
+    preflight = json.loads(
+        (runtime_root / "model-preflight.json").read_text(encoding="utf-8")
+    )
+    assert summary["status"] == "failed"
+    assert preflight["status"] == "failed"
+    assert preflight["embedding"] is None
+    assert preflight["reranker"] is None
+
+
+def test_runtime_enforces_model_lifecycle_and_writes_final_artifacts(
+    tmp_path: Path,
+) -> None:
+    config, run_root = _runtime_fixture(tmp_path)
+    events: list[str] = []
+    instances: dict[str, object] = {}
+
+    class FakeEmbedding:
+        def __init__(self, *, cache_dir: Path):
+            self.cache_dir = Path(cache_dir)
+            self._cache_only = False
+            events.append("embedding:init")
+
+        def preflight(self) -> dict[str, object]:
+            events.append("embedding:preflight")
+            return {
+                "provider": "fake-ollama",
+                "model_id": OLLAMA_EMBED_MODEL_ID,
+                "fingerprint": "embedding-fingerprint",
+            }
+
+        def release_model(self) -> bool:
+            events.append("embedding:release")
+            return True
+
+        def enter_cache_only(self) -> None:
+            events.append("embedding:cache-only")
+            self._cache_only = True
+
+    class FakeReranker:
+        def __init__(self, *, hf_home: Path, device: str):
+            self.hf_home = Path(hf_home)
+            self.device = device
+            events.append("reranker:init")
+
+        def preflight(self) -> dict[str, object]:
+            events.append("reranker:preflight")
+            return {
+                "provider": "fake-transformers",
+                "model_id": RERANKER_MODEL_ID,
+                "fingerprint": "reranker-fingerprint",
+            }
+
+        def release_model(self) -> bool:
+            events.append("reranker:release")
+            return True
+
+    def embedding_factory(**kwargs: object) -> FakeEmbedding:
+        instance = FakeEmbedding(**kwargs)
+        instances["embedding"] = instance
+        return instance
+
+    def reranker_factory(**kwargs: object) -> FakeReranker:
+        instance = FakeReranker(**kwargs)
+        instances["reranker"] = instance
+        return instance
+
+    def fake_sweep(**kwargs: object) -> StrategySweepResult:
+        events.append("sweep:start")
+        assert len(kwargs["documents"]) == 20
+        assert len(kwargs["questions"]) == 254
+        assert len(kwargs["frozen_notes"]) == 20
+        kwargs["before_rerank_stage"]()
+        events.append("sweep:assert-cache-only")
+        kwargs["assert_embedding_cache_only"](object())
+        final_path = Path(kwargs["run_root"]) / "sweep" / "final" / "decision.json"
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        final_path.write_text('{"status":"completed"}\n', encoding="utf-8")
+        return StrategySweepResult(
+            records=(),
+            stage_rankings={"top2-confirmation": object()},
+            provisional_winner="winner-config",
+            leaderboard=({"config_id": "winner-config"},),
+            pareto_frontier=({"config_id": "winner-config"},),
+            artifact_paths=(str(final_path.resolve()),),
+        )
+
+    result = run_researchqa_runtime(
+        config,
+        run_root,
+        embedding_factory=embedding_factory,
+        reranker_factory=reranker_factory,
+        sweep_runner=fake_sweep,
+    )
+
+    assert events == [
+        "embedding:init",
+        "reranker:init",
+        "embedding:preflight",
+        "sweep:start",
+        "embedding:release",
+        "embedding:cache-only",
+        "reranker:preflight",
+        "sweep:assert-cache-only",
+        "reranker:release",
+    ]
+    embedding = instances["embedding"]
+    reranker = instances["reranker"]
+    assert embedding.cache_dir == run_root / "model-cache" / "embeddings"
+    assert reranker.hf_home == run_root / "model-cache" / "hf-cache"
+    assert reranker.device == "cuda"
+
+    preflight_path = Path(result.model_preflight_path)
+    summary_path = Path(result.runtime_summary_path)
+    decision_path = Path(result.sweep_result.artifact_paths[0])
+    assert preflight_path.is_file()
+    assert summary_path.is_file()
+    assert decision_path.is_file()
+
+    preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert preflight["status"] == "completed"
+    assert preflight["embedding"]["fingerprint"] == "embedding-fingerprint"
+    assert preflight["reranker"]["fingerprint"] == "reranker-fingerprint"
+    assert summary["status"] == "completed"
+    assert summary["inputs"]["paper_count"] == 20
+    assert summary["inputs"]["question_count"] == 254
+    assert summary["lifecycle"] == {
+        "embedding_released": True,
+        "embedding_cache_only": True,
+        "reranker_preflighted": True,
+        "reranker_released": True,
+    }
+    assert summary["sweep"]["provisional_winner"] == "winner-config"
+    assert summary["sweep"]["artifact_paths"] == [str(decision_path)]
+
+
+def test_runtime_fails_closed_and_releases_reranker_on_sweep_error(
+    tmp_path: Path,
+) -> None:
+    config, run_root = _runtime_fixture(tmp_path)
+    events: list[str] = []
+
+    class FakeEmbedding:
+        _cache_only = False
+
+        def __init__(self, **_kwargs: object):
+            pass
+
+        def preflight(self) -> dict[str, str]:
+            events.append("embedding:preflight")
+            return {"fingerprint": "embedding"}
+
+        def release_model(self) -> bool:
+            events.append("embedding:release")
+            return True
+
+        def enter_cache_only(self) -> None:
+            events.append("embedding:cache-only")
+            self._cache_only = True
+
+    class FakeReranker:
+        def __init__(self, **_kwargs: object):
+            pass
+
+        def preflight(self) -> dict[str, str]:
+            events.append("reranker:preflight")
+            return {"fingerprint": "reranker"}
+
+        def release_model(self) -> bool:
+            events.append("reranker:release")
+            return True
+
+    def failing_sweep(**kwargs: object) -> StrategySweepResult:
+        kwargs["before_rerank_stage"]()
+        kwargs["assert_embedding_cache_only"](object())
+        raise ValueError("synthetic sweep failure")
+
+    with pytest.raises(
+        ResearchQARuntimeError,
+        match="synthetic sweep failure",
+    ):
+        run_researchqa_runtime(
+            config,
+            run_root,
+            embedding_factory=FakeEmbedding,
+            reranker_factory=FakeReranker,
+            sweep_runner=failing_sweep,
+        )
+
+    assert events == [
+        "embedding:preflight",
+        "embedding:release",
+        "embedding:cache-only",
+        "reranker:preflight",
+        "reranker:release",
+    ]
+    summary = json.loads(
+        (run_root / "runtime" / "runtime-summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["status"] == "failed"
+    assert summary["error"]["type"] == "ValueError"
+    assert summary["error"]["message"] == "synthetic sweep failure"
