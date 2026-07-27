@@ -74,7 +74,7 @@ def test_balanced_assignment_and_audit_rotation_are_deterministic():
 def test_parse_all_native_coordinate_shapes():
     text = " ".join(
         (
-            "[Main p.5]",
+            "[Main p.5-6]",
             "[SI-01 p.3]",
             "[SI-02 para.14]",
             "[SI-02 table.2 rows.3-5 cols.A-D]",
@@ -95,11 +95,12 @@ def test_parse_all_native_coordinate_shapes():
     ]
     assert invalid_native_citations(text) == []
     assert invalid_native_citations("[SI-02 page.3]") == ["[SI-02 page.3]"]
+    assert parsed[0].coordinate == {"page_start": 5, "page_end": 6}
 
 
 def test_validate_citation_source_type_and_bounds():
     citations = parse_native_citations(
-        "[Main p.5] [SI-02 para.14] [SI-03 rows.2-3 cols.model,score]"
+        "[Main p.5-6] [SI-02 para.14] [SI-03 rows.2-3 cols.model,score]"
     )
     sources = [
         {
@@ -118,7 +119,7 @@ def test_validate_citation_source_type_and_bounds():
         },
     ]
     assert validate_citation_sources(citations, sources) == [
-        "[Main p.5]: page exceeds source bounds"
+        "[Main p.5-6]: page exceeds source bounds"
     ]
 
 
@@ -126,7 +127,7 @@ def test_freeze_requires_complete_independently_audited_set(tmp_path):
     run = tmp_path / "run"
     run.mkdir()
     note = run / "04-rendered-note.md"
-    note.write_text("Evidence [Main p.1]", encoding="utf-8")
+    note.write_text("Evidence [Main p.1-2]", encoding="utf-8")
     draft = run / "02-note-draft.json"
     draft.write_text(json.dumps({"frontmatter": {}}), encoding="utf-8")
     manifest = run / "manifest-note_generator.json"
@@ -164,10 +165,10 @@ def test_freeze_requires_complete_independently_audited_set(tmp_path):
             {
                 "file_id": "Main",
                 "citation_coordinate_type": "pdf_page",
-                "coordinate_max": 1,
+                "coordinate_max": 2,
             }
         ],
-        "valid_citations": ["[Main p.1]"],
+        "valid_citations": ["[Main p.1]", "[Main p.2]"],
     }
 
     output = freeze_audited_notes(

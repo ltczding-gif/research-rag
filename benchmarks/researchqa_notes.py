@@ -19,10 +19,14 @@ from typing import Any, Iterable, Mapping, Sequence
 
 GENERIC_TEMPLATE = "generic-research-note"
 PASS_VERDICTS = frozenset({"pass", "passed"})
-_MAIN_RE = re.compile(r"\[Main p\.(?P<page>[1-9]\d*)\]")
+_MAIN_RE = re.compile(
+    r"\[Main p\.(?P<page_start>[1-9]\d*)"
+    r"(?:-(?P<page_end>[1-9]\d*))?\]"
+)
 _SOURCE_FILE_ID = r"(?:SI|AUX)-\d{2}"
 _SI_PDF_RE = re.compile(
-    rf"\[(?P<file>{_SOURCE_FILE_ID}) p\.(?P<page>[1-9]\d*)\]"
+    rf"\[(?P<file>{_SOURCE_FILE_ID}) p\.(?P<page_start>[1-9]\d*)"
+    r"(?:-(?P<page_end>[1-9]\d*))?\]"
 )
 _SI_PARAGRAPH_RE = re.compile(
     rf"\[(?P<file>{_SOURCE_FILE_ID}) para\.(?P<paragraph>[1-9]\d*)\]"
@@ -153,7 +157,14 @@ def rotate_auditors(worker_ids: Sequence[str]) -> dict[str, str]:
 def _match_to_citation(match: re.Match[str], coordinate_type: str) -> NativeCitation:
     fields = {key: value for key, value in match.groupdict().items() if value}
     file_id = fields.pop("file", "Main")
-    for key in ("page", "paragraph", "table", "row_start", "row_end"):
+    for key in (
+        "page_start",
+        "page_end",
+        "paragraph",
+        "table",
+        "row_start",
+        "row_end",
+    ):
         if key in fields:
             fields[key] = int(fields[key])
     return NativeCitation(
@@ -223,12 +234,26 @@ def validate_citation_sources(
             continue
         maximum = record.get("coordinate_max")
         if citation.coordinate_type == "pdf_page" and maximum is not None:
-            if int(citation.coordinate["page"]) > int(maximum):
+            page_start = int(citation.coordinate["page_start"])
+            page_end = int(citation.coordinate.get("page_end", page_start))
+            if page_end < page_start:
+                errors.append(f"{citation.raw}: page range is reversed")
+            elif page_end > int(maximum):
                 errors.append(f"{citation.raw}: page exceeds source bounds")
         if citation.coordinate_type == "docx_paragraph" and maximum is not None:
             if int(citation.coordinate["paragraph"]) > int(maximum):
                 errors.append(f"{citation.raw}: paragraph exceeds source bounds")
     return errors
+
+
+def _atomic_citation_coordinates(citation: NativeCitation) -> tuple[str, ...]:
+    if citation.coordinate_type != "pdf_page":
+        return (citation.raw,)
+    page_start = int(citation.coordinate["page_start"])
+    page_end = int(citation.coordinate.get("page_end", page_start))
+    return tuple(
+        f"[{citation.file_id} p.{page}]" for page in range(page_start, page_end + 1)
+    )
 
 
 def validate_audited_note(
@@ -285,7 +310,14 @@ def validate_audited_note(
     if valid_citations is not None:
         allowed = set(valid_citations)
         unknown = sorted(
-            {citation.raw for citation in citations if citation.raw not in allowed}
+            {
+                citation.raw
+                for citation in citations
+                if any(
+                    atomic not in allowed
+                    for atomic in _atomic_citation_coordinates(citation)
+                )
+            }
         )
         if unknown:
             raise ValueError(f"citations do not resolve to native IR: {unknown}")
