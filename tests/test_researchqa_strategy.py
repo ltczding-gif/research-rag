@@ -244,6 +244,36 @@ def test_reference_mapping_uses_nfkc_exact_then_versioned_fuzzy(tmp_path):
     )
 
 
+def test_parallel_reference_mapping_is_identical_to_serial(tmp_path):
+    documents, questions = _fixture_corpus(tmp_path)
+    chunks = tuple(
+        chunk
+        for document in documents.values()
+        for chunk in chunk_pdf(
+            document,
+            "pdf-fixed-400",
+            is_main=True,
+        ).chunks
+    )
+
+    serial = map_all_references(
+        questions,
+        chunks,
+        overall_minimum=0.0,
+        per_paper_minimum=0.0,
+        mapping_workers=1,
+    )
+    parallel = map_all_references(
+        questions,
+        chunks,
+        overall_minimum=0.0,
+        per_paper_minimum=0.0,
+        mapping_workers=2,
+    )
+
+    assert parallel.to_dict() == serial.to_dict()
+
+
 def test_candidate_plan_is_orthogonal_and_confirmation_is_capped_at_16():
     selection = ConfirmationSelection(
         pdf_chunkers=("pdf-fixed-400", "pdf-fixed-800"),

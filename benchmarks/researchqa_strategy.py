@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 import unicodedata
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -69,6 +71,8 @@ from service.pdf_ir import CanonicalDocument, DocumentPage, hash_text
 REFERENCE_MATCH_REVISION = "nfkc-whitespace-partial-sequence-v1"
 REFERENCE_EXACT_METHOD = "nfkc-whitespace-exact-v1"
 DEFAULT_FUZZY_THRESHOLD = 0.86
+DEFAULT_MAPPING_WORKERS = 4
+PARALLEL_MAPPING_MIN_QUESTIONS = 32
 RETRIEVER_IDS = ("dense", "bm25", "hybrid-rrf")
 RERANKER_IDS = (
     "rerank-off",
@@ -399,20 +403,15 @@ def map_question_references(
     )
 
 
-def map_all_references(
-    questions: Sequence[Mapping[str, Any]],
-    chunks: Sequence[ResearchQAChunk],
-    *,
-    fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
-    overall_minimum: float = 0.95,
-    per_paper_minimum: float = 0.90,
-) -> EvidenceMappingBundle:
-    """Map all questions and retain an explicit unmapped-group ledger."""
-
-    row_ids = [_required_text(question, "row_id") for question in questions]
-    if len(row_ids) != len(set(row_ids)):
-        raise StrategyContractError("question row_ids must be unique")
-    mappings = tuple(
+def _map_paper_reference_batch(
+    payload: tuple[
+        tuple[Mapping[str, Any], ...],
+        tuple[ResearchQAChunk, ...],
+        float,
+    ],
+) -> tuple[EvidenceMapping, ...]:
+    questions, chunks, fuzzy_threshold = payload
+    return tuple(
         map_question_references(
             question,
             chunks,
@@ -420,6 +419,57 @@ def map_all_references(
         )
         for question in questions
     )
+
+
+def map_all_references(
+    questions: Sequence[Mapping[str, Any]],
+    chunks: Sequence[ResearchQAChunk],
+    *,
+    fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
+    overall_minimum: float = 0.95,
+    per_paper_minimum: float = 0.90,
+    mapping_workers: int | None = None,
+) -> EvidenceMappingBundle:
+    """Map all questions and retain an explicit unmapped-group ledger."""
+
+    row_ids = [_required_text(question, "row_id") for question in questions]
+    if len(row_ids) != len(set(row_ids)):
+        raise StrategyContractError("question row_ids must be unique")
+    if mapping_workers is not None and mapping_workers < 1:
+        raise StrategyContractError("mapping_workers must be at least 1")
+    questions_by_paper: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for question in questions:
+        questions_by_paper[
+            normalize_paper_id(question.get("paper_id"))
+        ].append(question)
+    chunks_by_paper: dict[str, list[ResearchQAChunk]] = defaultdict(list)
+    for chunk in chunks:
+        chunks_by_paper[chunk.paper_id].append(chunk)
+    jobs = tuple(
+        (
+            tuple(paper_questions),
+            tuple(chunks_by_paper.get(paper_id, ())),
+            fuzzy_threshold,
+        )
+        for paper_id, paper_questions in questions_by_paper.items()
+    )
+    if mapping_workers is None:
+        mapping_workers = (
+            min(DEFAULT_MAPPING_WORKERS, os.cpu_count() or 1, len(jobs))
+            if len(questions) >= PARALLEL_MAPPING_MIN_QUESTIONS
+            else 1
+        )
+    if mapping_workers == 1 or len(jobs) <= 1:
+        batches = tuple(_map_paper_reference_batch(job) for job in jobs)
+    else:
+        with ProcessPoolExecutor(
+            max_workers=min(mapping_workers, len(jobs))
+        ) as executor:
+            batches = tuple(executor.map(_map_paper_reference_batch, jobs))
+    mapping_by_row = {
+        mapping.row_id: mapping for batch in batches for mapping in batch
+    }
+    mappings = tuple(mapping_by_row[row_id] for row_id in row_ids)
     unmapped = tuple(
         UnmappedEvidenceGroup(
             row_id=mapping.row_id,
