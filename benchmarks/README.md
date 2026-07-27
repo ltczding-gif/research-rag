@@ -23,6 +23,15 @@ manifest. Every note remains explicitly marked `human_review_status: pending`;
 none is gold. The query, answer, claim, evidence-unit, and qrel ledgers remain
 empty until a human reviews the notes and the 25 S5 queries are adjudicated.
 
+Wave 1A now has a shadow implementation: `service/pdf_ir.py` preserves
+physical pages and page hashes, emits versioned `ChunkRecord` values with
+stable source spans, and adapts the current fixed-800/step-700 C0 windows
+without changing the production index. `benchmarks/canonical_ir.py` builds the
+main and SI files declared by the public manifest while keeping their file
+identities separate. This is provenance infrastructure, not a retrieval-score
+claim: recall and answer metrics remain unavailable until the S5 gold ledgers
+are human-adjudicated.
+
 The benchmark design workbench is indexed in
 [`design/README.md`](design/README.md). Its current S5 proposal defines the
 25-query allocation, hard/very-hard rubric, wording, negative cases, claim IDs,
@@ -67,9 +76,11 @@ represent retrieved evidence in a public artifact:
 Absolute paths, source text, private queries, scores, API keys, and internal
 metadata are discarded rather than redacted heuristically.
 
-The C0 production adapter and future benchmark runner share
-`service/pdf_baseline.py`. Importing that module performs no vault scan, PDF
-read, Zotero lookup, Chroma initialization, or collection binding.
+The legacy production path and the Wave 1A C0 adapter share
+`service/pdf_baseline.py`. The canonical adapter lives in
+`service/pdf_ir.py`; importing either module performs no vault scan, PDF read,
+Zotero lookup, Chroma initialization, or collection binding. The canonical
+chunk JSON contract is `schemas/chunk-record.schema.json`.
 
 ## Validate
 
@@ -130,6 +141,19 @@ Verify an existing local copy without network access:
 ```bash
 python benchmarks/scripts/fetch_corpus.py --check-only
 ```
+
+Build the deterministic Wave 1A shadow artifact after the ten S5 main/SI PDFs
+are present:
+
+```bash
+python benchmarks/scripts/build_canonical_ir.py \
+  --output benchmarks/artifacts/wave1a/s5-c0-chunks.jsonl
+```
+
+The output is ignored by Git. Repeating the command against unchanged files
+must produce byte-identical JSONL and identical chunk IDs. The builder verifies
+every PDF against the manifest SHA-256 and fails closed on unsafe artifact
+paths, checksum drift, or mixed file provenance.
 
 The files land under ignored `benchmarks/corpus/files/` paths. This command is
 for maintainer acquisition and manual verification. Ordinary pull-request CI

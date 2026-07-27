@@ -957,8 +957,9 @@ Wave 2 及之后使用统一 DoR/DoD：
 
 ### Wave 1：provenance
 
-- [ ] 先完成 1A page/section/source-spans canonical IR 与 C0 adapter；
-- [ ] `ChunkRecord` schema 与版本迁移；
+- [x] 完成 1A page/section/source-spans canonical IR 与 C0 shadow adapter；
+- [x] 定义 `ChunkRecord` v1 schema、稳定 fingerprint 与 C0 parity tests；
+- [ ] 将生产索引迁移到版本化 `ChunkRecord`；
 - [ ] `IndexArtifact`、独立 collection/ledger 与 active-index manifest；
 - [ ] MCP 返回 page/span provenance；
 - [ ] doctor、side-by-side activation、rollback 与 sanitizer tests。
