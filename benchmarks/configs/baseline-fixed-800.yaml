@@ -1,0 +1,21 @@
+schema_version: 1
+config_id: baseline-fixed-800-dense
+description: Current fixed-character C0 and dense-only baseline.
+extractor:
+  id: legacy-pdfplumber
+  revision: pending-wave-1a
+chunker:
+  id: fixed-char
+  size: 800
+  step: 700
+  min_length: 100
+embedding:
+  provider: fastembed
+  model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+  revision: pending-lock
+retriever:
+  mode: dense
+  distance_metric: pending-baseline-measurement
+  top_k: 10
+reranker:
+  enabled: false

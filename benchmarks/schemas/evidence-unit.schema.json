@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/evidence-unit.schema.json",
+  "title": "Chunk-independent gold evidence unit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_id",
+    "paper_id",
+    "file_id",
+    "pdf_page_index",
+    "canonical_page_hash",
+    "verbatim_quote",
+    "quote_hash",
+    "locator",
+    "evidence_group_id",
+    "role"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "evidence_id": {"$ref": "#/$defs/id"},
+    "paper_id": {"$ref": "#/$defs/id"},
+    "file_id": {"$ref": "#/$defs/id"},
+    "pdf_page_index": {"type": "integer", "minimum": 0},
+    "printed_page_label": {"type": ["string", "null"]},
+    "canonical_page_hash": {"$ref": "#/$defs/sha256"},
+    "verbatim_quote": {"type": "string", "minLength": 1},
+    "quote_hash": {"$ref": "#/$defs/sha256"},
+    "locator": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["char_start", "char_end"],
+          "properties": {
+            "char_start": {"type": "integer", "minimum": 0},
+            "char_end": {"type": "integer", "minimum": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bbox"],
+          "properties": {
+            "bbox": {
+              "type": "array",
+              "items": {"type": "number"},
+              "minItems": 4,
+              "maxItems": 4
+            }
+          }
+        }
+      ]
+    },
+    "evidence_group_id": {"$ref": "#/$defs/id"},
+    "role": {"enum": ["required", "supporting"]}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

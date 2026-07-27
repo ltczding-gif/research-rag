@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/report.schema.json",
+  "title": "Versioned benchmark run report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "benchmark_version",
+    "corpus_version",
+    "suite_id",
+    "run_id",
+    "status",
+    "created_at",
+    "git_commit",
+    "config_fingerprints",
+    "counts",
+    "metrics",
+    "decision"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "benchmark_version": {"type": "string", "minLength": 1},
+    "corpus_version": {"type": "string", "minLength": 1},
+    "suite_id": {"enum": ["s5", "d20", "v20", "h60", "s100"]},
+    "run_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "status": {"enum": ["complete", "incomplete", "partial"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "git_commit": {"type": "string", "pattern": "^[a-f0-9]{7,64}$"},
+    "config_fingerprints": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["overall", "by_domain", "by_slice"],
+      "properties": {
+        "overall": {"$ref": "#/$defs/metric-set"},
+        "by_domain": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/metric-set"}
+        },
+        "by_slice": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/metric-set"}
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reasons"],
+      "properties": {
+        "status": {
+          "enum": ["ship", "no-ship", "incomplete", "not-applicable"]
+        },
+        "reasons": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "primary_metric": {"type": ["string", "null"]},
+        "primary_delta": {"type": ["number", "null"]},
+        "confidence_interval": {
+          "type": ["array", "null"],
+          "items": {"type": "number"},
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "notes": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "metric-set": {
+      "type": "object",
+      "additionalProperties": {"type": ["number", "null"]}
+    }
+  }
+}

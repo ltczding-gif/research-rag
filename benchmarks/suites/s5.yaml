@@ -1,0 +1,6 @@
+schema_version: 1
+benchmark_version: 0.1.0
+suite_id: s5
+description: Five-paper offline smoke suite; a strict subset of D20.
+paper_ids: []
+query_ids: []

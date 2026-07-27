@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/query.schema.json",
+  "title": "Benchmark query record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "query_id",
+    "partition",
+    "domain",
+    "text",
+    "language",
+    "corpus_language",
+    "slice_ids",
+    "answerability",
+    "expected_claim_ids",
+    "required_evidence_group_ids"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "query_id": {"$ref": "#/$defs/id"},
+    "partition": {"enum": ["d20", "v20", "h60"]},
+    "domain": {
+      "enum": [
+        "catalysis-materials",
+        "biomedicine",
+        "cs-ml",
+        "environment-energy-geoscience",
+        "social-science-economics",
+        "cross-domain"
+      ]
+    },
+    "text": {"type": "string", "minLength": 1},
+    "language": {"type": "string", "pattern": "^[a-z]{2,3}(?:-[A-Za-z0-9]+)*$"},
+    "corpus_language": {
+      "type": "string",
+      "pattern": "^[a-z]{2,3}(?:-[A-Za-z0-9]+)*$"
+    },
+    "slice_ids": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "answerability": {
+      "enum": ["answerable", "no-answer", "false-premise", "ambiguous", "conflicting"]
+    },
+    "expected_claim_ids": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/id"},
+      "uniqueItems": true
+    },
+    "required_evidence_group_ids": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/id"},
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    }
+  }
+}
