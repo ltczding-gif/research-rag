@@ -227,4 +227,3 @@ def test_reranker_rejects_wrong_pinned_revision_without_model_download():
             WrongRevision(),
             depth=1,
         )
-

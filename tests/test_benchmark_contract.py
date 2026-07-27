@@ -168,8 +168,14 @@ def test_committed_wave0b_corpus_lock_is_valid():
 
     assert result.ok, result.errors
     assert result.counts["suites"] == 5
-    assert result.counts["configs"] == 1
+    assert result.counts["configs"] == 2
     assert result.counts["manifest"] == 5
+    rq2_config = yaml.safe_load(
+        (BENCHMARK_ROOT / "configs" / "rq2-overnight.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert rq2_config["config_kind"] == "researchqa-overnight"
 
 
 def test_committed_s5_has_one_cc_by_main_plus_si_paper_per_domain():
