@@ -505,6 +505,8 @@ Current contracts and guides:
 - [`docs/Domain_Pack_Authoring_Guide.md`](docs/Domain_Pack_Authoring_Guide.md)
 - [`skills/gemini-literature-processor/references/subagent-host-contract.md`](skills/gemini-literature-processor/references/subagent-host-contract.md)
 - [`scanner/references/workflow-runbook.md`](scanner/references/workflow-runbook.md)
+- [`benchmarks/README.md`](benchmarks/README.md) — pinned ResearchQA evaluation,
+  deterministic 2/5/10/all papers per domain, and the Qwen 4B quality baseline
 - [`tests/README.md`](tests/README.md)
 
 Files under `docs/audits/`, `docs/investigation/`, and `docs/plans/`, plus older
@@ -513,7 +515,9 @@ installation contract; this README and the live code take precedence.
 
 ## Known limitations
 
-- There is no redistributable real-paper corpus; `scripts/demo.py` uses synthetic notes.
+- There is no bundled redistributable real-paper corpus; `scripts/demo.py` uses
+  synthetic notes and the optional ResearchQA benchmark is downloaded into an
+  ignored external-data cache.
 - The notes builder scans only top-level files matching the configured suffix.
 - The OpenAI-compatible generation backend sends extracted text, so figures and layout are lost.
 - The default subagent path depends on a capable terminal-agent host and may consume that provider's quota.

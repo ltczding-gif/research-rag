@@ -479,6 +479,8 @@ CI 在支持的 Python 版本上覆盖 Windows、macOS 和 Linux。合成演示�
 - [`docs/Domain_Pack_Authoring_Guide.md`](docs/Domain_Pack_Authoring_Guide.md)
 - [`skills/gemini-literature-processor/references/subagent-host-contract.md`](skills/gemini-literature-processor/references/subagent-host-contract.md)
 - [`scanner/references/workflow-runbook.md`](scanner/references/workflow-runbook.md)
+- [`benchmarks/README.md`](benchmarks/README.md) —— 固定 ResearchQA 版本、每领域
+  2/5/10/全部四层评测以及 Qwen 4B 质量基线
 - [`tests/README.md`](tests/README.md)
 
 `docs/audits/`、`docs/investigation/`、`docs/plans/` 以及更早的架构/状态快照属于历史证据，
@@ -486,7 +488,8 @@ CI 在支持的 Python 版本上覆盖 Windows、macOS 和 Linux。合成演示�
 
 ## 已知限制
 
-- 仓库没有可再分发的真实论文语料；`scripts/demo.py` 使用合成笔记。
+- 仓库不捆绑可再分发的真实论文语料；`scripts/demo.py` 使用合成笔记，可选的
+  ResearchQA benchmark 下载到 Git 忽略的外部数据缓存。
 - 笔记构建器只扫描顶层目录中匹配指定后缀的文件。
 - OpenAI-compatible 生成后端发送本地提取的文本，因此会丢失图片和版面信息。
 - 默认 subagent 路径依赖能力足够的终端 Agent 宿主，并可能消耗该提供方的配额。

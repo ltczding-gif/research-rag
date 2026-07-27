@@ -1,88 +1,47 @@
 # research-rag benchmark
 
-This directory is the public evaluation plane described by ADR-002. It is
-deliberately separate from the user's Zotero database, note vault, Chroma
-collections, ledgers, and query logs.
+This directory is the public, isolated evaluation plane for RAG changes. It
+never reads a user's Zotero database, note vault, production Chroma
+collections, ledgers, or query logs.
 
-## Current milestone
+## Active benchmark: ResearchQA
 
-Wave 0A is complete: it defines and validates the data contract, provides the
-behavior-preserving fixed-800 legacy PDF seam, creates isolated run-owned
-state, and converts internal retrieval hits through a public allowlist.
+ADR-003 makes
+[ResearchQA](https://huggingface.co/datasets/khoj-ai/ResearchQA) the only
+active benchmark for the current optimization cycle. The repository does not
+design replacement questions or mix additional public benchmarks into the
+score.
 
-Wave 0B is in progress. Its first corpus-lock increment freezes five public
-papers, one per domain, with a main PDF and SI PDF for each, source URLs,
-CC BY 4.0 evidence, and SHA-256 checksums. See
-[`corpus/SOURCES.md`](corpus/SOURCES.md) for the selection and license record.
-Five main-plus-SI candidate notes are also frozen under
-[`fixtures/generated_notes/`](fixtures/generated_notes/). They were generated
-through the repository's manifest-driven subagent protocol, not Gemini. The
-four out-of-pack papers use the field-neutral generic contract; independently
-audited P1 corrections retain separate repair provenance in the fixture
-manifest. Every note remains explicitly marked `human_review_status: pending`;
-none is gold. The query, answer, claim, evidence-unit, and qrel ledgers remain
-empty until a human reviews the notes and the 25 S5 queries are adjudicated.
+The source contract is pinned in
+[`sources/researchqa.yaml`](sources/researchqa.yaml):
 
-Wave 1A now has a shadow implementation: `service/pdf_ir.py` preserves
-physical pages and page hashes, emits versioned `ChunkRecord` values with
-stable source spans, and adapts the current fixed-800/step-700 C0 windows
-without changing the production index. `benchmarks/canonical_ir.py` builds the
-main and SI files declared by the public manifest while keeping their file
-identities separate. This is provenance infrastructure, not a retrieval-score
-claim: recall and answer metrics remain unavailable until the S5 gold ledgers
-are human-adjudicated.
+- upstream revision:
+  `33f3d7a83a1ae61511b4e3bfadab2f866eff2a03`;
+- 494 papers and 6,211 upstream questions;
+- ten measured domains;
+- `lookup`, `comprehension`, `multi_hop`, and `adversarial` question types;
+- exact source byte count and SHA-256;
+- CC-BY-NC-4.0, external-only redistribution boundary.
 
-The benchmark design workbench is indexed in
-[`design/README.md`](design/README.md). Its current S5 proposal defines the
-25-query allocation, hard/very-hard rubric, wording, negative cases, claim IDs,
-and evidence-group targets. It is deliberately not copied into the official
-ledgers yet: source quotes, canonical page locators, second-person review, and
-owner approval are required first.
+Four deterministic, nested tiers select papers independently inside every
+domain and keep every upstream question for each selected paper:
 
-The contract covers:
+| Tier | Papers per domain | Total papers | Questions | Role |
+|---|---:|---:|---:|---|
+| `rq-2` | 2 | 20 | 254 | pipeline smoke and failure inspection |
+| `rq-5` | 5 | 50 | 638 | first cross-domain iteration |
+| `rq-10` | 10 | 100 | 1,263 | broader confirmation |
+| `rq-all` | all | 494 | 6,211 | full public benchmark report |
 
-- redistributable PDF/SI metadata and checksums;
-- stable query-level answer keys and claims;
-- chunk-independent evidence units;
-- document/evidence qrels and judgment pools;
-- S5, D20, V20, H60, and combined S100 suite membership;
-- versioned run reports.
+The tiers use the same pinned seed and paper ranking, so
+`rq-2 ⊂ rq-5 ⊂ rq-10 ⊂ rq-all`. A five-paper tier would not cover the ten
+domains and is therefore not used.
 
-Candidate chunks must be mapped to stable `evidence_id` values by the evaluator.
-Gold records must never contain a candidate `chunk_id`.
-Human judgments follow [ANNOTATION_GUIDE.md](ANNOTATION_GUIDE.md).
+The normative decision, metrics, leakage policy, and single-variable
+iteration order are in
+[`docs/plans/2026-07-28-researchqa-benchmark-adr.md`](../docs/plans/2026-07-28-researchqa-benchmark-adr.md).
 
-## Runtime boundary
-
-`benchmarks.runtime.create_run_layout()` validates the requested `run_root`
-against explicit production paths before creating anything. Each accepted run
-receives its own home, notes directory, Chroma path, collection names, ledgers,
-query log, model cache, artifacts, and reports directory.
-
-`benchmarks.runtime.run_isolated()` runs a command without a shell. It removes
-inherited `LOCALRAG_*`, Zotero, and model-cache settings before injecting the
-run-owned environment. Callers must supply the production paths to protect;
-missing home, notes, Chroma, ledger, query-log, or Zotero boundaries fail
-closed.
-
-Only the four fields emitted by `benchmarks.public_report.sanitize_hits()` may
-represent retrieved evidence in a public artifact:
-
-- `paper_id`
-- `file_id`
-- `pdf_page_index`
-- `evidence_id`
-
-Absolute paths, source text, private queries, scores, API keys, and internal
-metadata are discarded rather than redacted heuristically.
-
-The legacy production path and the Wave 1A C0 adapter share
-`service/pdf_baseline.py`. The canonical adapter lives in
-`service/pdf_ir.py`; importing either module performs no vault scan, PDF read,
-Zotero lookup, Chroma initialization, or collection binding. The canonical
-chunk JSON contract is `schemas/chunk-record.schema.json`.
-
-## Validate
+## Prepare the four tiers
 
 Install the benchmark-only dependencies:
 
@@ -90,72 +49,110 @@ Install the benchmark-only dependencies:
 python -m pip install -r requirements-benchmark.txt
 ```
 
-Validate the current contract and corpus lock while downstream gold ledgers
-are still being built:
+Download the exact pinned ResearchQA JSONL, verify it, and generate all tier
+indexes:
+
+```bash
+python benchmarks/scripts/prepare_researchqa.py
+```
+
+The command produces:
+
+```text
+benchmarks/.cache/researchqa/
+  source/eval_dataset.jsonl
+  index.json
+  suites/
+    rq-2/{suite.json,papers.jsonl,questions.jsonl}
+    rq-5/{suite.json,papers.jsonl,questions.jsonl}
+    rq-10/{suite.json,papers.jsonl,questions.jsonl}
+    rq-all/{suite.json,papers.jsonl,questions.jsonl}
+```
+
+The whole output tree is ignored by Git. Repeating the command with the same
+source and config must produce byte-identical indexes. The generator fails
+closed if the upstream bytes, SHA-256, paper count, question count, domain
+distribution, or question-type distribution changes.
+
+Verify an already cached or explicitly supplied source without network access:
+
+```bash
+python benchmarks/scripts/prepare_researchqa.py --offline --check-only
+python benchmarks/scripts/prepare_researchqa.py --source /path/to/eval_dataset.jsonl
+```
+
+## Active quality baseline
+
+[`configs/baseline-fixed-800.yaml`](configs/baseline-fixed-800.yaml) freezes
+the first ResearchQA quality baseline:
+
+- canonical pdfplumber page IR;
+- fixed-character C0 chunks: size 800, step 700, minimum 100;
+- Ollama `qwen3-embedding:4b`, pinned by model digest;
+- cosine dense retrieval with `top_k=10`;
+- no reranker.
+
+The product's smaller FastEmbed model remains useful for first-run smoke
+tests, but its scores must not be mixed with the Qwen quality baseline.
+
+## Evaluation boundary
+
+ResearchQA supplies the questions, expected answers, evidence alternatives,
+multi-hop section requirements, and adversarial refusal metadata. The
+benchmark adapter must map each expected evidence alternative to canonical
+PDF page/span coordinates before scoring candidate chunks.
+
+Retrieval and answer generation are evaluated separately. Reports must include
+per-domain and per-question-type results, especially multi-hop and
+adversarial performance; one global average is insufficient.
+
+`benchmarks.runtime.create_run_layout()` gives every run isolated home, notes,
+Chroma, collection, ledger, query-log, artifact, and report paths.
+`benchmarks.runtime.run_isolated()` removes inherited `LOCALRAG_*`, Zotero,
+and model-cache settings before injecting run-owned state.
+
+Public retrieval artifacts may expose only the fields allowed by
+`benchmarks.public_report.sanitize_hits()`:
+
+- `paper_id`
+- `file_id`
+- `pdf_page_index`
+- `evidence_id`
+
+Absolute paths, private text, private queries, API keys, and internal metadata
+must not enter public reports.
+
+## Data and license boundary
+
+Do not commit:
+
+- the ResearchQA JSONL or derived question subsets;
+- downloaded PDFs or extracted text;
+- chunks, embeddings, vector indexes, model caches, or raw run traces;
+- quoted source passages without a separate license review.
+
+ResearchQA annotations are CC-BY-NC-4.0. Quoted paper text and PDFs retain
+their original rights. The repository license does not relicense those
+external assets. Commit reproducible code, pinned fingerprints, aggregate
+metrics, and sanitized reports instead.
+
+## Frozen S5 track
+
+The earlier S5 main-plus-SI corpus, generated-note fixtures, candidate query
+design, legacy suites, and Wave 1A canonical-IR artifact are retained for
+provenance and possible later revival. They are currently shelved:
+
+- they do not block ResearchQA work;
+- their empty gold/qrel ledgers are not filled during this cycle;
+- their scores are not mixed with ResearchQA;
+- no claim is made that ResearchQA covers SI, notes, cross-language retrieval,
+  chemistry/materials, physics, or engineering.
+
+The legacy contract remains checkable while it is frozen:
 
 ```bash
 python benchmarks/scripts/validate_benchmark.py --allow-empty
 ```
 
-Once all S5 gold ledgers exist, omit `--allow-empty`. Before an official
-release run, use
-the stricter quota and partition checks:
-
-```bash
-python benchmarks/scripts/validate_benchmark.py --release-ready
-```
-
-## Data boundary
-
-Official S5/D20/V20/H60 data must have verified redistribution permission.
-PDF binaries belong in a checksum-pinned release/dataset artifact, not Git
-history. Private papers and download-only local extensions must not contribute
-to public benchmark scores.
-
-Every official S5 paper must provide both its main PDF and at least one
-redistributable SI PDF. The validator rejects an S5 paper whose manifest has an
-empty `si` list; this requirement is deliberately scoped to S5 because the
-larger suites must also measure papers that genuinely have no SI.
-
-Generated caches, fetched files, run artifacts, and reports are ignored by Git.
-Only reviewed contracts, annotations, suite definitions, and intentionally
-published reports should be committed.
-
-Frozen generated-note fixtures are the deliberate exception: they are
-path-sanitized, checksum-pinned candidate outputs used by offline evaluation.
-Their provenance is recorded in
-[`fixtures/generated_notes/manifest.jsonl`](fixtures/generated_notes/manifest.jsonl).
-Human corrections must create separate files under `gold/notes/` rather than
-mutating the generated baseline.
-
-## Acquire or verify the corpus
-
-The manifest is sufficient to reacquire the selected publisher files:
-
-```bash
-python benchmarks/scripts/fetch_corpus.py
-```
-
-Verify an existing local copy without network access:
-
-```bash
-python benchmarks/scripts/fetch_corpus.py --check-only
-```
-
-Build the deterministic Wave 1A shadow artifact after the ten S5 main/SI PDFs
-are present:
-
-```bash
-python benchmarks/scripts/build_canonical_ir.py \
-  --output benchmarks/artifacts/wave1a/s5-c0-chunks.jsonl
-```
-
-The output is ignored by Git. Repeating the command against unchanged files
-must produce byte-identical JSONL and identical chunk IDs. The builder verifies
-every PDF against the manifest SHA-256 and fails closed on unsafe artifact
-paths, checksum drift, or mixed file provenance.
-
-The files land under ignored `benchmarks/corpus/files/` paths. This command is
-for maintainer acquisition and manual verification. Ordinary pull-request CI
-must use a checksum-pinned offline corpus artifact; it must not depend on live
-publisher downloads.
+The old `--release-ready` S5/D20/V20/H60/S100 gate is historical and is not a
+completion gate for the ResearchQA cycle.

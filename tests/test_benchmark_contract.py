@@ -299,7 +299,9 @@ def test_release_ready_enforces_partition_quotas(tmp_path):
     assert not result.ok
     assert "release:s5: expected 5 papers, found 1" in result.errors
     assert "release:h60: expected at least 30 negative queries, found 0" in result.errors
-    assert any("pending fingerprints are not allowed" in error for error in result.errors)
+    assert not any(
+        "pending fingerprints are not allowed" in error for error in result.errors
+    )
 
 
 def test_cli_accepts_committed_empty_skeleton(capsys):
