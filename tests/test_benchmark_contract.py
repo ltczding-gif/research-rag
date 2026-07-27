@@ -58,7 +58,19 @@ def _minimal_valid_root(tmp_path: Path) -> Path:
             "verified_at": "2026-07-27",
             "attribution": "Example Author",
         },
-        "si": [],
+        "si": [
+            {
+                "file_id": "paper-1-si-1",
+                "artifact_path": "files/paper-1-si-1.pdf",
+                "source_url": "https://example.org/paper-1-si-1.pdf",
+                "sha256": "c" * 64,
+                "license": "CC-BY-4.0",
+                "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                "redistribution": "allowed",
+                "verified_at": "2026-07-27",
+                "attribution": "Example Author",
+            }
+        ],
         "doi": "10.0000/example",
         "language": "en",
         "structure_tags": ["single-column"],
@@ -200,6 +212,35 @@ def test_s5_must_remain_a_subset_of_d20(tmp_path):
     assert not result.ok
     assert "suites: S5 paper_ids must be a subset of D20" in result.errors
     assert "suites: S5 query_ids must be a subset of D20" in result.errors
+
+
+def test_every_s5_paper_requires_at_least_one_si_file(tmp_path):
+    root = _minimal_valid_root(tmp_path)
+    path = root / "corpus" / "manifest.jsonl"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["si"] = []
+    _write_jsonl(path, [manifest])
+
+    result = validate_benchmark.validate_benchmark(root)
+
+    assert not result.ok
+    assert (
+        "suite:s5: paper 'paper-1' must include at least one SI file"
+        in result.errors
+    )
+
+
+def test_si_requirement_is_scoped_to_s5(tmp_path):
+    root = _minimal_valid_root(tmp_path)
+    path = root / "corpus" / "manifest.jsonl"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["si"] = []
+    _write_jsonl(path, [manifest])
+    _write_suite(root, "s5", [], [])
+
+    result = validate_benchmark.validate_benchmark(root)
+
+    assert result.ok, result.errors
 
 
 def test_unknown_cross_file_reference_is_rejected(tmp_path):

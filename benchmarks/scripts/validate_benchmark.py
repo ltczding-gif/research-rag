@@ -437,6 +437,12 @@ def _check_suites(
     d20_papers = set(suites["d20"].get("paper_ids") or [])
     s5_queries = set(suites["s5"].get("query_ids") or [])
     d20_queries = set(suites["d20"].get("query_ids") or [])
+    for paper_id in sorted(s5_papers):
+        paper = papers.get(paper_id)
+        if paper is not None and not paper.get("si"):
+            result.errors.append(
+                f"suite:s5: paper {paper_id!r} must include at least one SI file"
+            )
     if not s5_papers <= d20_papers:
         result.errors.append("suites: S5 paper_ids must be a subset of D20")
     if not s5_queries <= d20_queries:

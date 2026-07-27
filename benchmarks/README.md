@@ -81,6 +81,11 @@ PDF binaries belong in a checksum-pinned release/dataset artifact, not Git
 history. Private papers and download-only local extensions must not contribute
 to public benchmark scores.
 
+Every official S5 paper must provide both its main PDF and at least one
+redistributable SI PDF. The validator rejects an S5 paper whose manifest has an
+empty `si` list; this requirement is deliberately scoped to S5 because the
+larger suites must also measure papers that genuinely have no SI.
+
 Generated caches, fetched files, run artifacts, and reports are ignored by Git.
 Only reviewed contracts, annotations, suite definitions, and intentionally
 published reports should be committed.

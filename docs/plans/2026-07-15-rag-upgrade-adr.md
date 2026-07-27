@@ -253,7 +253,7 @@ benchmarks/
 
 | Suite / partition | 规模 | 用途 | 运行位置 | 是否允许调参 |
 |---|---:|---|---|---:|
-| `S5 Smoke` | 5 篇 | 验证离线 PDF、解析、切分、索引、qrels 和评分接线 | Ubuntu/Python 3.11 专用 job | 否 |
+| `S5 Smoke` | 5 篇正文 + 各自至少 1 个 SI | 验证离线正文/SI、解析、切分、索引、qrels 和评分接线 | Ubuntu/Python 3.11 专用 job | 否 |
 | `S20-Dev / D20` | 20 篇 | 开发、消融、失败分析和参数选择 | 手动 PR / nightly | 是 |
 | `S100 / V20` | 20 篇 | 每个 subwave 的重复验证与回归门 | nightly / workflow_dispatch | 否 |
 | `S100 / H60` | 60 篇 | 整批 release candidate 的最终盲测 | owner release workflow | 否，且揭盲一次 |
@@ -290,9 +290,12 @@ S5 只能证明链路正常，S20 只能选参与诊断，V20 只能重复验证
 - 短文、中等长度和长文；
 - native text PDF 与少量 OCR/扫描失败案例。
 
-S5 只要求五领域各一篇，不承担结构标签或 query taxonomy 的统计覆盖。S100 manifest
-必须报告每个结构标签的 paper/query 数；少于 10 篇或少于 30 条 query 的 slice 只作
-描述性诊断，不宣称具有普遍结论。领域平衡不能替代结构平衡。
+S5 要求五领域各一篇，且每篇必须同时包含正文 PDF 和至少一个许可允许再分发的 SI PDF，
+确保最小烟测始终覆盖正文/SI 关联、索引与检索接线；缺少 SI 的候选不能进入 S5。该硬门
+只作用于 S5，D20/V20/H60 仍需保留真实世界中确实没有 SI 的论文。S5 不承担其他结构标签
+或 query taxonomy 的统计覆盖。S100 manifest 必须报告每个结构标签的 paper/query 数；
+少于 10 篇或少于 30 条 query 的 slice 只作描述性诊断，不宣称具有普遍结论。领域平衡
+不能替代结构平衡。
 
 ### 5.4 PDF 获取与许可
 
@@ -560,7 +563,7 @@ schema 和验证器仍公开。release run 完成后发布 H60 queries/qrels、b
 | 子阶段 | 交付物 | 初始预算 | 完成标准 |
 |---|---|---:|---|
 | 0A Contract | schema、validator、隔离 runner、纯 baseline seam、评分/标注指南 | 2–3 人日 | 空 corpus contract tests；导入无副作用；生产路径隔离测试 |
-| 0B S5 | 5 PDF + notes + qrels + offline runner | 2–3 人日 | 固定 artifact/cache 的专用 CI 可重复运行；legacy partial report |
+| 0B S5 | 5 篇正文 + 各自 SI + notes + qrels + offline runner | 2–3 人日 | 固定 artifact/cache 的专用 CI 可重复运行；legacy partial report |
 | 1A Canonical IR | page/span IR + C0 adapter | 2–4 人日 | evidence mapping 和 provenance tests 通过 |
 | 0C D20 | 20 PDF + 100 queries + C0 full baseline | 60–120 人时 | 完整 component report + annotation audit |
 | 0D V20 | 20 PDF + 60+ queries | 60–120 人时 | 可重复 validation report |
@@ -946,7 +949,7 @@ Wave 2 及之后使用统一 DoR/DoD：
 - [x] 实现 `validate_benchmark.py`；
 - [x] 抽出无导入副作用的 legacy extractor/chunker baseline seam；
 - [x] 实现生产路径隔离、report sanitizer 与测试；
-- [ ] 建立 S5 五领域真实 PDF、reference notes 与 25 queries；
+- [ ] 建立 S5 五领域真实正文 PDF、每篇至少一个 SI、reference notes 与 25 queries；
 - [ ] 增加不调用 LLM 的单一 S5 offline benchmark CI job；
 - [ ] 建立 D20 与 100 queries；
 - [ ] 在 canonical IR 上运行 fixed-800/dense-only full baseline；
