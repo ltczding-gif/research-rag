@@ -200,6 +200,11 @@ domain-specific and named in your pack's `_domain_quality_rules.txt`
 (catalysis: industrial application potential; biology: clinical relevance;
 ML: real-world reproducibility).
 
+`generic-research-note` is the deliberate exception. It uses four neutral axes
+defined by the generic template and does not load the active pack's seed
+guidance or `_domain_quality_rules.txt`. This keeps the fallback usable when a
+paper falls outside the active pack's field.
+
 ---
 
 ## What a domain pack contains
@@ -510,13 +515,14 @@ the ChromaDB metadata schema fragments and cross-pack search dies.
 Solution: every pack populates the stable `primary_routing_key_value`
 field with its own semantics. Display labels can vary; the key is stable.
 
-### Universal templates need light touch-ups
+### Keep the generic fallback field-neutral
 
 `review-or-perspective.txt`, `phd-dissertation.txt`,
-`foundational-theory.txt`, `generic-research-note.txt` are field-agnostic
-**enough** for most fields, but they retain a few catalysis-leaning lines
-(e.g. `if writing about CO2RR, ...`). Skim them before shipping; replace
-catalysis examples with field-neutral ones if they bother you.
+and `foundational-theory.txt` may still need light field-specific calibration.
+`generic-research-note.txt` is different: the pipeline treats it as a complete
+field-neutral fallback and excludes pack-specific guidance and quality rules.
+Do not add field-specific scoring axes, trap scans, seed examples, or filename
+semantics to the generic template.
 
 ### Zotero `itemType` filter is implicit
 

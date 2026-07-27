@@ -48,8 +48,10 @@ The agent the user is talking to. Its job:
    re-run the same batch command — it auto-resumes each group's run_dir.
    **Solo mode** (`gemini_analyze_pdf.py`): run the manifest's
    `parent_agent_task.resume_command` (pre-interpolated with
-   `--resume <run_dir>`); re-running the bare solo command without
-   `--resume` starts a fresh run instead of advancing.
+   `--resume <run_dir>` and the original safe scanner options such as
+   `--publish-target`, `--out-dir`, and model-routing flags); re-running the
+   bare solo command without `--resume` starts a fresh run instead of
+   advancing.
 6. Repeat until the scanner exits **0**. Each paper takes **3 passes**
    (Stage A manifest → fill → Stage B manifest → fill → final render).
 

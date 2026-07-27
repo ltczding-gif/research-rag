@@ -2,5 +2,10 @@ schema_version: 1
 benchmark_version: 0.1.0
 suite_id: s100
 description: Combined D20, V20, and H60 release suite.
-paper_ids: []
+paper_ids:
+  - liu-2024-single-atom-cobalt-orr
+  - papier-2024-proteomic-cancer-risk
+  - cornelio-2023-ai-descartes
+  - dorgeist-2024-terrestrial-carbon-fluxes
+  - smith-2024-supply-chain-regulations
 query_ids: []

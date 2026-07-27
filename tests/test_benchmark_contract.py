@@ -15,6 +15,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BENCHMARK_ROOT = REPO_ROOT / "benchmarks"
 
 
+def _ignore_local_benchmark_state(directory: str, names: list[str]) -> set[str]:
+    current = Path(directory)
+    if current == BENCHMARK_ROOT:
+        return {"artifacts"} & set(names)
+    if current == BENCHMARK_ROOT / "corpus":
+        return {"files"} & set(names)
+    return set()
+
+
 def _write_jsonl(path: Path, records: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = "".join(
@@ -37,7 +46,7 @@ def _write_suite(root: Path, suite_id: str, papers: list[str], queries: list[str
 
 def _minimal_valid_root(tmp_path: Path) -> Path:
     root = tmp_path / "benchmarks"
-    shutil.copytree(BENCHMARK_ROOT, root)
+    shutil.copytree(BENCHMARK_ROOT, root, ignore=_ignore_local_benchmark_state)
     sha = "a" * 64
     quote = "The catalyst reached 95 percent selectivity."
     quote_hash = hashlib.sha256(quote.encode("utf-8")).hexdigest()
@@ -151,7 +160,7 @@ def _minimal_valid_root(tmp_path: Path) -> Path:
     return root
 
 
-def test_committed_wave0a_empty_skeleton_is_valid():
+def test_committed_wave0b_corpus_lock_is_valid():
     result = validate_benchmark.validate_benchmark(
         BENCHMARK_ROOT,
         allow_empty=True,
@@ -160,7 +169,33 @@ def test_committed_wave0a_empty_skeleton_is_valid():
     assert result.ok, result.errors
     assert result.counts["suites"] == 5
     assert result.counts["configs"] == 1
-    assert result.counts["manifest"] == 0
+    assert result.counts["manifest"] == 5
+
+
+def test_committed_s5_has_one_cc_by_main_plus_si_paper_per_domain():
+    records = [
+        json.loads(line)
+        for line in (BENCHMARK_ROOT / "corpus" / "manifest.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    expected_domains = {
+        "catalysis-materials",
+        "biomedicine",
+        "cs-ml",
+        "environment-energy-geoscience",
+        "social-science-economics",
+    }
+
+    assert {record["domain"] for record in records} == expected_domains
+    assert len(records) == len(expected_domains)
+    for record in records:
+        assert record["main_pdf"]["license"] == "CC-BY-4.0"
+        assert record["main_pdf"]["redistribution"] == "allowed"
+        assert record["si"]
+        assert all(item["license"] == "CC-BY-4.0" for item in record["si"])
+        assert all(item["redistribution"] == "allowed" for item in record["si"])
 
 
 def test_minimal_cross_referenced_contract_is_valid(tmp_path):

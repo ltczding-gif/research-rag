@@ -1,7 +1,8 @@
 ## Catalysis Domain Quality Rules
 
 Catalysis-specific extensions to `prompts/_universal_rules.txt`.
-Loaded by every catalysis-pack template alongside the universal rules.
+Loaded by dedicated catalysis-pack templates alongside the universal rules.
+Deliberately excluded from `generic-research-note`.
 
 If you fork this pack for a related domain (e.g. photocatalysis, electrochemistry,
 electrochemical separations), this is the file you most often customize: trap scan

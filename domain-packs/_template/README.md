@@ -33,7 +33,7 @@ directory is yours to refine.
 | `templates/review-or-perspective.txt` | yes | Keep |
 | `templates/phd-dissertation.txt` | yes | Keep |
 | `templates/foundational-theory.txt` | yes | Keep |
-| `templates/generic-research-note.txt` | yes | Keep (fallback for documents that don't fit elsewhere) |
+| `templates/generic-research-note.txt` | yes | Keep field-neutral; the pipeline excludes pack-specific guidance and quality rules for this fallback |
 | `config/model_routing_policy.json` | mostly universal | Tune page-count thresholds if your field's papers run unusually long/short |
 
 ## Authoring order (recommended)
@@ -62,10 +62,12 @@ directory is yours to refine.
 - Anti-hallucination guardrails (`原文未提及` marker)
 - Depth citation block (mechanism / observation / interpretation pattern)
 - Subjective scoring four-axis pattern (originality / rigor / evidence
-  closure / your-domain-specific-axis)
+  closure / your-domain-specific-axis), with a neutral four-axis exception
+  for `generic-research-note`
 
 You don't need to re-implement these. Your pack's `_domain_quality_rules.txt`
-extends them with field-specific extras.
+extends them with field-specific extras for dedicated templates. The pipeline
+does not load it for `generic-research-note`.
 
 ## Reference: how catalysis filled in this skeleton
 

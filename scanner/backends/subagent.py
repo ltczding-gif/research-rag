@@ -77,7 +77,13 @@ def _is_output_filled(path: Path) -> bool:
 class SubagentBackend(ProcessorBackend):
     name = "subagent"
 
-    def __init__(self, *, run_dir_provider=None, resume_dir: Path | None = None):
+    def __init__(
+        self,
+        *,
+        run_dir_provider=None,
+        resume_dir: Path | None = None,
+        resume_cli_args: list[str] | tuple[str, ...] | None = None,
+    ):
         """
         Args:
             run_dir_provider: callable returning the per-paper run directory
@@ -87,10 +93,13 @@ class SubagentBackend(ProcessorBackend):
             resume_dir: when set, `call_model` reads existing stage outputs
                 from this directory instead of raising. The directory must
                 be the same `run_dir` that prior invocations wrote into.
+            resume_cli_args: non-secret scanner arguments that must survive
+                into the manifest's ready-to-run resume command.
         """
         self._run_dir_provider = run_dir_provider
         self._resume_dir = Path(resume_dir) if resume_dir else None
         self._run_dir: Path | None = self._resume_dir
+        self._resume_cli_args = tuple(str(arg) for arg in (resume_cli_args or ()))
 
     def attach_pdfs(self, pdf_paths, *, combined_hash="", profiler_pdf_paths=None):
         super().attach_pdfs(
@@ -167,10 +176,18 @@ class SubagentBackend(ProcessorBackend):
         # guaranteed to be the repo root, and `python` may not resolve to the
         # interpreter (or venv) the scanner is running under.
         analyzer_script = Path(__file__).resolve().parent.parent / "gemini_analyze_pdf.py"
+        quoted_resume_args = " ".join(
+            arg
+            if arg.startswith("--")
+            else f'"{arg}"'
+            for arg in self._resume_cli_args
+        )
         resume_cmd = (
             f'"{sys.executable}" "{analyzer_script}" {quoted_pdf_args} '
             f'--backend subagent --resume "{self._run_dir}"'
         )
+        if quoted_resume_args:
+            resume_cmd = f"{resume_cmd} {quoted_resume_args}"
         if stage == "profiler":
             parent_followup = (
                 "After 01-document-profile.json exists in run_dir, run: "

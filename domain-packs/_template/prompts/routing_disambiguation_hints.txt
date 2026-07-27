@@ -20,6 +20,14 @@
 
 ## TODO routing tie-breakers
 
+- Active-pack boundary gate (required):
+  - Define which scientific domains this pack owns.
+  - If a paper's primary domain falls outside that boundary, route to
+    `generic-research-note` even when its document shape resembles one of the
+    pack's dedicated experimental, methods, or theory templates.
+  - State explicitly which method and theory templates are domain-bound so
+    cross-domain papers cannot inherit this pack's quality rules.
+
 - TODO collision 1 (e.g. wet-lab vs computational; experimental vs simulation):
   - If the paper's primary independent variable is TODO-A, route to TODO-template-A.
   - If the primary variable is TODO-B, route to TODO-template-B.
