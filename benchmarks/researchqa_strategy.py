@@ -15,7 +15,14 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+from typing import (
+    Any,
+    Mapping,
+    MutableMapping,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
 from urllib.parse import urlparse
 
 from benchmarks.researchqa_chunking import (
@@ -1174,6 +1181,10 @@ def run_complete_candidate(
     performance_timed_passes: int = 3,
     p95_latency_ms: float | None = None,
     guardrails_passed: bool = True,
+    evidence_mapping_cache: MutableMapping[
+        str, EvidenceMappingBundle
+    ]
+    | None = None,
 ) -> CandidateRunResult:
     """Run one candidate over the exact required paper/question sets."""
 
@@ -1236,13 +1247,34 @@ def run_complete_candidate(
             )
 
     corpus = _prepare_candidate_corpus(candidate, documents, notes)
-    mapping = map_all_references(
-        questions,
-        corpus.pdf_chunks,
-        fuzzy_threshold=fuzzy_threshold,
-        overall_minimum=mapping_overall_minimum,
-        per_paper_minimum=mapping_per_paper_minimum,
+    mapping_cache_key = canonical_fingerprint(
+        {
+            "revision": REFERENCE_MATCH_REVISION,
+            "fuzzy_threshold": fuzzy_threshold,
+            "overall_minimum": mapping_overall_minimum,
+            "per_paper_minimum": mapping_per_paper_minimum,
+            "questions": questions,
+            "pdf_chunks": [
+                (chunk.chunk_id, hash_text(chunk.text))
+                for chunk in corpus.pdf_chunks
+            ],
+        }
     )
+    mapping = (
+        evidence_mapping_cache.get(mapping_cache_key)
+        if evidence_mapping_cache is not None
+        else None
+    )
+    if mapping is None:
+        mapping = map_all_references(
+            questions,
+            corpus.pdf_chunks,
+            fuzzy_threshold=fuzzy_threshold,
+            overall_minimum=mapping_overall_minimum,
+            per_paper_minimum=mapping_per_paper_minimum,
+        )
+        if evidence_mapping_cache is not None:
+            evidence_mapping_cache[mapping_cache_key] = mapping
     if not mapping.coverage.passed:
         raise StrategyContractError(
             "evidence mapping gate failed: "

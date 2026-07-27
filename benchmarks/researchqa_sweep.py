@@ -28,6 +28,7 @@ from benchmarks.researchqa_strategy import (
     CandidateRunResult,
     ConfirmationSelection,
     EmbedderAdapter,
+    EvidenceMappingBundle,
     StrategyCandidate,
     generate_orthogonal_candidates,
     normalize_paper_id,
@@ -37,7 +38,7 @@ from service.pdf_ir import CanonicalDocument
 
 
 SWEEP_SCHEMA_VERSION = 1
-SWEEP_ENGINE_REVISION = "researchqa-sweep-v2"
+SWEEP_ENGINE_REVISION = "researchqa-sweep-v3"
 
 
 class SweepContractError(ValueError):
@@ -1051,6 +1052,7 @@ def run_strategy_sweep(
     all_records: list[SweepCandidateRecord] = []
     rankings: dict[str, SweepStageRanking] = {}
     artifact_paths: list[Path] = []
+    evidence_mapping_cache: dict[str, EvidenceMappingBundle] = {}
     rerank_entered = False
 
     def execute_stage(
@@ -1104,6 +1106,7 @@ def run_strategy_sweep(
                         performance_timed_passes=(
                             performance_timed_passes
                         ),
+                        evidence_mapping_cache=evidence_mapping_cache,
                     )
                     if guardrail_check is None:
                         guardrails_passed = all(

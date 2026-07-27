@@ -286,6 +286,7 @@ def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path)
     )
     embedder = _FakeEmbedder()
     reranker = _FakeReranker()
+    evidence_mapping_cache = {}
     expected_papers = ("W1", "W2")
     expected_questions = ("q-alpha", "q-beta", "q-diagnostic")
 
@@ -296,6 +297,7 @@ def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path)
         expected_paper_ids=expected_papers,
         expected_question_ids=expected_questions,
         embedder=embedder,
+        evidence_mapping_cache=evidence_mapping_cache,
     )
     reranked = run_complete_candidate(
         enabled_rerank,
@@ -305,6 +307,7 @@ def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path)
         expected_question_ids=expected_questions,
         embedder=embedder,
         reranker=reranker,
+        evidence_mapping_cache=evidence_mapping_cache,
     )
 
     assert result.is_complete(
@@ -333,6 +336,8 @@ def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path)
     assert reranked.primary_score == pytest.approx(1.0)
     assert reranked.primary_metric == "coverage_ndcg_at_10"
     assert reranked.latency_metrics["rerank_p95_ms"] >= 0
+    assert len(evidence_mapping_cache) == 1
+    assert reranked.mapping is result.mapping
 
 
 def test_note_strategy_fails_closed_without_frozen_notes(tmp_path):
