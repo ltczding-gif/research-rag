@@ -660,6 +660,21 @@ def run_strategy_sweep(
         raise SweepContractError(
             "config.performance counts must be greater than zero"
         )
+    metrics = config.get("metrics")
+    if not isinstance(metrics, Mapping):
+        raise SweepContractError("config.metrics must be a mapping")
+    configured_guardrails = metrics.get("guardrails")
+    if (
+        not isinstance(configured_guardrails, list)
+        or not configured_guardrails
+        or any(
+            not isinstance(metric, str) or not metric
+            for metric in configured_guardrails
+        )
+    ):
+        raise SweepContractError(
+            "config.metrics.guardrails must be a non-empty string array"
+        )
     config_fingerprint = fingerprint_payload(config)
 
     all_records: list[SweepCandidateRecord] = []
@@ -719,11 +734,23 @@ def run_strategy_sweep(
                             performance_timed_passes
                         ),
                     )
-                    if guardrail_check is not None:
-                        result = replace(
-                            result,
-                            guardrails_passed=bool(guardrail_check(result)),
+                    if guardrail_check is None:
+                        guardrails_passed = all(
+                            (
+                                value := result.aggregate.overall.get(metric)
+                            )
+                            is not None
+                            and math.isfinite(float(value))
+                            for metric in configured_guardrails
                         )
+                    else:
+                        guardrails_passed = bool(guardrail_check(result))
+                    result = replace(
+                        result,
+                        guardrails_passed=(
+                            result.guardrails_passed and guardrails_passed
+                        ),
+                    )
                     payload = result.to_dict()
                     complete = result.is_complete(
                         expected_paper_ids=paper_ids,

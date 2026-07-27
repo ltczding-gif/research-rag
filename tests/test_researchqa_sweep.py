@@ -182,6 +182,11 @@ def _candidate_result(candidate, *, incomplete=False, alternate_group=False):
     metrics = {
         "coverage_ndcg_at_10": primary,
         "recall_at_5": 1.0,
+        "recall_at_10": 1.0,
+        "mrr": 1.0,
+        "all_required_groups_success_at_5": 1.0,
+        "all_required_groups_success_at_10": 1.0,
+        "groups_covered_at_10": 1.0,
     }
     aggregate = MacroAggregate(
         overall=metrics,
