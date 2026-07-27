@@ -247,6 +247,34 @@ def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> Path:
     return _atomic_write(path, payload)
 
 
+def _write_citation_source_index(
+    *,
+    paper_id: str,
+    sources: Sequence[tuple[SourceRecord, Path]],
+    output_path: Path,
+) -> Path:
+    """Write path-to-stable-file-ID metadata without copying source text."""
+
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "paper_id": paper_id,
+        "purpose": "citation-source-index",
+        "instructions": (
+            "Map every PDF path and non-PDF packet to the exact file_id in "
+            "this index before emitting a citation. Do not infer SI numbering "
+            "from pdf_paths order or filenames."
+        ),
+        "sources": [
+            {
+                **record.to_dict(),
+                "path": str(path.resolve()),
+            }
+            for record, path in sources
+        ],
+    }
+    return _atomic_write_json(output_path, payload)
+
+
 def _validate_audited_bytes(
     path: Path,
     record: Mapping[str, Any],
@@ -552,6 +580,7 @@ def prepare_rq2_corpus(
     role_counts: Counter[str] = Counter()
     media_counts: Counter[str] = Counter()
     native_unit_count = 0
+    source_index_count = 0
     source_packet_count = 0
     combined_hashes: set[str] = set()
 
@@ -579,6 +608,11 @@ def prepare_rq2_corpus(
         native_ir_path = _atomic_write_jsonl(
             paper_source_root / "native-ir.jsonl",
             (unit.to_dict() for unit in native_units),
+        )
+        source_index_path = _write_citation_source_index(
+            paper_id=paper_id,
+            sources=bound_records,
+            output_path=paper_source_root / "source-index.json",
         )
         packet_paths = write_native_source_packets(
             paper_id=paper_id,
@@ -615,8 +649,12 @@ def prepare_rq2_corpus(
                 paper_id=paper_id,
                 main_pdf=str(main_path.resolve()),
                 si_pdfs=scientific_si_pdfs,
-                source_artifacts=tuple(
-                    str(path.resolve()) for path in sorted(packet_paths)
+                source_artifacts=(
+                    str(source_index_path.resolve()),
+                    *(
+                        str(path.resolve())
+                        for path in sorted(packet_paths)
+                    ),
                 ),
                 run_dir=str(run_dir.resolve()),
                 output_dir=str(output_dir.resolve()),
@@ -624,10 +662,18 @@ def prepare_rq2_corpus(
                 non_pdf_si_count=non_pdf_si_count,
             )
         )
-        artifact_paths.extend((manifest_path, native_ir_path, *packet_paths))
+        artifact_paths.extend(
+            (
+                manifest_path,
+                native_ir_path,
+                source_index_path,
+                *packet_paths,
+            )
+        )
         role_counts.update(record.source_role for record in records)
         media_counts.update(record.media_type for record in records)
         native_unit_count += len(native_units)
+        source_index_count += 1
         source_packet_count += len(packet_paths)
         if main_record.source_role != ROLE_BENCHMARK_PDF:
             raise AssertionError("Main source role invariant was lost")
@@ -645,6 +691,7 @@ def prepare_rq2_corpus(
         "paper_count": len(papers_by_id),
         "source_count": sum(role_counts.values()),
         "native_unit_count": native_unit_count,
+        "source_index_count": source_index_count,
         "source_packet_count": source_packet_count,
         "note_job_count": len(note_jobs),
         "source_role_counts": dict(sorted(role_counts.items())),

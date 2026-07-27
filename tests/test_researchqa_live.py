@@ -20,6 +20,7 @@ from benchmarks.researchqa_live import (
     normalize_paper_id,
     prepare_rq2_corpus,
 )
+from benchmarks.researchqa_notes import NoteJob, build_scanner_command
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -248,6 +249,7 @@ def test_prepare_fixture_writes_manifests_ir_packets_and_note_jobs(tmp_path):
     assert first["paper_count"] == 2
     assert first["note_job_count"] == 2
     assert first["source_count"] == 5
+    assert first["source_index_count"] == 2
     assert first["source_packet_count"] == 2
     assert first["source_role_counts"] == {
         "auxiliary_reporting_file": 1,
@@ -280,6 +282,37 @@ def test_prepare_fixture_writes_manifests_ir_packets_and_note_jobs(tmp_path):
     assert w100_manifest[0]["source_url"].startswith(
         "https://s3.us-east-1.amazonaws.com/assets.openpaper.ai/"
     )
+    w100_source_index = json.loads(
+        (
+            run_root / "source" / "W100" / "source-index.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert [
+        (
+            source["file_id"],
+            source["original_filename"],
+            source["media_type"],
+            source["citation_coordinate_type"],
+        )
+        for source in w100_source_index["sources"]
+    ] == [
+        ("Main", "W100.pdf", "application/pdf", "pdf_page"),
+        ("SI-01", "data.csv", "text/csv", "csv_rows_columns"),
+        ("SI-02", "supplement.pdf", "application/pdf", "pdf_page"),
+    ]
+    assert all(
+        Path(source["path"]).is_absolute()
+        for source in w100_source_index["sources"]
+    )
+    assert all(
+        not {"text", "units", "normalized_text"} & set(source)
+        for source in w100_source_index["sources"]
+    )
+    assert str(
+        (
+            run_root / "source" / "W100" / "source-index.json"
+        ).resolve()
+    ) in first["artifact_paths"]
 
     w20_ir = _read_jsonl(run_root / "source" / "W20" / "native-ir.jsonl")
     w100_ir = _read_jsonl(run_root / "source" / "W100" / "native-ir.jsonl")
@@ -311,8 +344,24 @@ def test_prepare_fixture_writes_manifests_ir_packets_and_note_jobs(tmp_path):
     assert [job["paper_id"] for job in jobs] == ["W100", "W20"]
     assert [job["page_count"] for job in jobs] == [2, 1]
     assert [job["non_pdf_si_count"] for job in jobs] == [1, 0]
-    assert all(len(job["source_artifacts"]) == 1 for job in jobs)
+    assert all(len(job["source_artifacts"]) == 2 for job in jobs)
     jobs_by_paper = {job["paper_id"]: job for job in jobs}
+    for job in jobs:
+        assert Path(job["source_artifacts"][0]).name == "source-index.json"
+        assert Path(job["source_artifacts"][1]).name.endswith(
+            "-native-source.json"
+        )
+    scanner_command = build_scanner_command(
+        NoteJob(**jobs_by_paper["W100"]),
+        python_executable="python311",
+        scanner_path=REPO_ROOT / "scanner" / "gemini_analyze_pdf.py",
+    )
+    stage_b_artifacts = [
+        scanner_command[index + 1]
+        for index, value in enumerate(scanner_command)
+        if value == "--source-artifact"
+    ]
+    assert stage_b_artifacts == jobs_by_paper["W100"]["source_artifacts"]
     expected_w100_hash = stable_combined_hash(
         [
             Path(jobs_by_paper["W100"]["main_pdf"]),
@@ -435,3 +484,4 @@ def test_real_rq2_cache_prepare_smoke(tmp_path):
     ] == 2
     assert summary["media_type_counts"]["text/csv"] == 1
     assert summary["source_packet_count"] == 5
+    assert summary["source_index_count"] == 20
