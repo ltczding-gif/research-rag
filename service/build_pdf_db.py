@@ -11,8 +11,6 @@
 # service/config.py and .env.example at the repo root.
 # ============================================================
 import argparse
-import chromadb
-import pdfplumber
 import os
 import re
 import hashlib
@@ -31,7 +29,7 @@ from config import (
     CHUNK_STEP,
     MIN_CHUNK_LEN,
 )
-from embedding_client import active_model_id, get_chromadb_embedding_function
+from pdf_baseline import chunk_text, extract_text_pdfplumber
 
 
 PAPERS_ID_SCHEMA = "content-hash-v1"
@@ -176,16 +174,6 @@ def extract_pdf_groups_from_notes(notes_dir):
             print(f"  [SKIP] No valid PDF paths in: {os.path.basename(note_path)}")
     return pdf_groups
 
-print("[INIT] Extracting PDF groups from notes...")
-PDF_GROUPS = extract_pdf_groups_from_notes(NOTES_DIR)
-print(f"[INIT] Total groups: {len(PDF_GROUPS)}")
-
-# --- 参考文献截断正则（从后往前找）---
-REF_PATTERN = re.compile(
-    r'\n(References|REFERENCES|Bibliography|BIBLIOGRAPHY|参考文献|Acknowledgements|ACKNOWLEDGEMENTS)\s*\n',
-    re.IGNORECASE
-)
-
 def get_combined_hash(file_paths):
     """Order-independent SHA-256 of one or more PDF files.
 
@@ -230,31 +218,6 @@ def get_combined_hash(file_paths):
         combined.update(fh.encode("utf-8"))
     return combined.hexdigest()
 
-def extract_text_pdfplumber(pdf_path):
-    """使用 pdfplumber 提取文本，并从后往前截断参考文献"""
-    with pdfplumber.open(pdf_path) as pdf:
-        full_text = "\n".join(
-            page.extract_text() or "" for page in pdf.pages
-        )
-    
-    # 从后往前找最后一个 References 标题，截断
-    match = None
-    for m in REF_PATTERN.finditer(full_text):
-        match = m
-    if match:
-        full_text = full_text[:match.start()]
-    
-    return full_text
-
-def chunk_text(text):
-    """Sliding-window chunker: CHUNK_SIZE chars, CHUNK_STEP step (overlap = SIZE - STEP)."""
-    chunks = []
-    for i in range(0, len(text), CHUNK_STEP):
-        chunk = text[i:i + CHUNK_SIZE]
-        if len(chunk) > MIN_CHUNK_LEN:
-            chunks.append(chunk)
-    return chunks
-
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Build the research-paper ChromaDB collection.")
     parser.add_argument(
@@ -269,7 +232,15 @@ def _parse_args(argv=None):
 
 
 def main(argv=None):
+    import chromadb
+
+    from embedding_client import active_model_id, get_chromadb_embedding_function
+
     args = _parse_args(argv)
+
+    print("[INIT] Extracting PDF groups from notes...")
+    pdf_groups = extract_pdf_groups_from_notes(NOTES_DIR)
+    print(f"[INIT] Total groups: {len(pdf_groups)}")
 
     # Init ChromaDB before loading the ledger so an explicit rebuild can reset
     # both pieces of papers-index state together. The notes collection is not
@@ -304,12 +275,12 @@ def main(argv=None):
     )
     ensure_papers_id_schema(col, expected_metadata)
 
-    total_groups = len(PDF_GROUPS)
+    total_groups = len(pdf_groups)
     print(f"Total groups: {total_groups}")
     print(f"Already processed: {len(processed)}")
     print(f"Remaining: {total_groups - len(processed)}")
 
-    for group_idx, pdf_group in enumerate(PDF_GROUPS, 1):
+    for group_idx, pdf_group in enumerate(pdf_groups, 1):
         # 计算本组组合hash
         group_hash = get_combined_hash(pdf_group)
         
@@ -346,7 +317,12 @@ def main(argv=None):
                     continue
                 
                 # 分块
-                chunks = chunk_text(full_text)
+                chunks = chunk_text(
+                    full_text,
+                    chunk_size=CHUNK_SIZE,
+                    chunk_step=CHUNK_STEP,
+                    min_chunk_len=MIN_CHUNK_LEN,
+                )
                 
                 if not chunks:
                     print(f"    [WARNING] No valid chunks")

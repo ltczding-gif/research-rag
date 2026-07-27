@@ -944,8 +944,8 @@ Wave 2 及之后使用统一 DoR/DoD：
 
 - [x] 定义 manifest、query、answer key、evidence units、qrels、pool 和 report schema；
 - [x] 实现 `validate_benchmark.py`；
-- [ ] 抽出无导入副作用的 legacy extractor/chunker baseline seam；
-- [ ] 实现生产路径隔离、report sanitizer 与测试；
+- [x] 抽出无导入副作用的 legacy extractor/chunker baseline seam；
+- [x] 实现生产路径隔离、report sanitizer 与测试；
 - [ ] 建立 S5 五领域真实 PDF、reference notes 与 25 queries；
 - [ ] 增加不调用 LLM 的单一 S5 offline benchmark CI job；
 - [ ] 建立 D20 与 100 queries；
