@@ -1,0 +1,2 @@
+benchmarks/fixtures/generated_notes/*.md text eol=lf
+benchmarks/fixtures/generated_notes/*.jsonl text eol=lf
