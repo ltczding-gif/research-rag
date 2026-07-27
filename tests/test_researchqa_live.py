@@ -323,9 +323,11 @@ def _fake_runtime_result(run_root: Path):
     runtime_root = run_root / "runtime"
     final_root = run_root / "sweep" / "final"
     raw_root = run_root / "sweep" / "raw-results"
+    report_root = run_root / "report"
     runtime_root.mkdir(parents=True, exist_ok=True)
     final_root.mkdir(parents=True, exist_ok=True)
     raw_root.mkdir(parents=True, exist_ok=True)
+    report_root.mkdir(parents=True, exist_ok=True)
 
     preflight_path = runtime_root / "model-preflight.json"
     summary_path = runtime_root / "runtime-summary.json"
@@ -333,6 +335,13 @@ def _fake_runtime_result(run_root: Path):
     pareto_path = final_root / "pareto-frontier.json"
     decision_path = final_root / "decision-summary.json"
     raw_path = raw_root / "candidate.json"
+    report_paths = (
+        report_root / "leaderboard.csv",
+        report_root / "paper-domain-breakdown.csv",
+        report_root / "paired-bootstrap.json",
+        report_root / "blocked-and-unmapped.jsonl",
+        report_root / "morning-report.md",
+    )
     preflight_path.write_text(
         json.dumps({"status": "completed"}),
         encoding="utf-8",
@@ -357,6 +366,11 @@ def _fake_runtime_result(run_root: Path):
         json.dumps({"candidate_id": "candidate-a"}),
         encoding="utf-8",
     )
+    for path in report_paths:
+        path.write_text(
+            "{}" if path.suffix == ".json" else "fixture\n",
+            encoding="utf-8",
+        )
     return SimpleNamespace(
         model_preflight_path=str(preflight_path),
         runtime_summary_path=str(summary_path),
@@ -366,6 +380,7 @@ def _fake_runtime_result(run_root: Path):
                 str(pareto_path),
                 str(decision_path),
                 str(raw_path),
+                *(str(path) for path in report_paths),
             ),
             provisional_winner="candidate-a",
         ),
@@ -713,6 +728,11 @@ def test_adapter_fake_runtime_command_sequence_and_report(
         "sweep/final/leaderboard.json",
         "sweep/final/pareto-frontier.json",
         "sweep/final/decision-summary.json",
+        "report/leaderboard.csv",
+        "report/paper-domain-breakdown.csv",
+        "report/paired-bootstrap.json",
+        "report/blocked-and-unmapped.jsonl",
+        "report/morning-report.md",
         "runtime/runtime-summary.json",
     }
     assert {
@@ -725,6 +745,11 @@ def test_adapter_fake_runtime_command_sequence_and_report(
             "sweep/final/pareto-frontier.json",
             "sweep/final/decision-summary.json",
             "sweep/raw-results/candidate.json",
+            "report/leaderboard.csv",
+            "report/paper-domain-breakdown.csv",
+            "report/paired-bootstrap.json",
+            "report/blocked-and-unmapped.jsonl",
+            "report/morning-report.md",
         }
     )
     assert all(store.verify_artifact(artifact) for artifact in run_task.artifacts)

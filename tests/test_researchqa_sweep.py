@@ -335,6 +335,29 @@ def test_interrupted_sweep_resumes_39_unique_candidates_and_orders_callbacks(
     assert result.provisional_winner
     assert len(result.leaderboard) == 16
     assert result.pareto_frontier
+    report_root = tmp_path / "report"
+    assert len(
+        (report_root / "leaderboard.csv").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ) == 40
+    assert (
+        report_root / "paper-domain-breakdown.csv"
+    ).is_file()
+    bootstrap = json.loads(
+        (report_root / "paired-bootstrap.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert bootstrap["metric"] == "coverage_ndcg_at_10"
+    assert bootstrap["samples"] == 10_000
+    assert bootstrap["confidence"] == 0.95
+    assert (
+        report_root / "blocked-and-unmapped.jsonl"
+    ).is_file()
+    assert "does not start rq-5" in (
+        report_root / "morning-report.md"
+    ).read_text(encoding="utf-8")
     for stage_id in (
         "pdf-chunker",
         "note-chunker",

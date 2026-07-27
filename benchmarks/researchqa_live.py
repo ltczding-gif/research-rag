@@ -1257,6 +1257,11 @@ class ResearchQALiveAdapter:
             self.run_root / "sweep" / "final" / "leaderboard.json",
             self.run_root / "sweep" / "final" / "pareto-frontier.json",
             self.run_root / "sweep" / "final" / "decision-summary.json",
+            self.run_root / "report" / "leaderboard.csv",
+            self.run_root / "report" / "paper-domain-breakdown.csv",
+            self.run_root / "report" / "paired-bootstrap.json",
+            self.run_root / "report" / "blocked-and-unmapped.jsonl",
+            self.run_root / "report" / "morning-report.md",
             summary_path,
         )
         return tuple(

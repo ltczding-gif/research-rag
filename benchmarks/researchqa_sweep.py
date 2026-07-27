@@ -8,6 +8,8 @@ never enter a leaderboard.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import math
 import os
@@ -17,7 +19,11 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from benchmarks.overnight import canonical_json_bytes, fingerprint_payload
-from benchmarks.researchqa_scoring import CandidateSummary, rank_candidates
+from benchmarks.researchqa_scoring import (
+    CandidateSummary,
+    paired_bootstrap,
+    rank_candidates,
+)
 from benchmarks.researchqa_strategy import (
     CandidateRunResult,
     ConfirmationSelection,
@@ -196,6 +202,10 @@ class StrategySweepResult:
 
 
 def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> Path:
+    return _atomic_write_bytes(path, canonical_json_bytes(value))
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, raw_temp = tempfile.mkstemp(
         prefix=f".{path.name}.",
@@ -205,13 +215,49 @@ def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> Path:
     temp_path = Path(raw_temp)
     try:
         with os.fdopen(descriptor, "wb") as handle:
-            handle.write(canonical_json_bytes(value))
+            handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
     finally:
         temp_path.unlink(missing_ok=True)
     return path
+
+
+def _atomic_write_csv(
+    path: Path,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    fieldnames: Sequence[str],
+) -> Path:
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=list(fieldnames),
+        extrasaction="raise",
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    writer.writerows(rows)
+    return _atomic_write_bytes(path, buffer.getvalue().encode("utf-8"))
+
+
+def _atomic_write_jsonl(
+    path: Path,
+    rows: Sequence[Mapping[str, object]],
+) -> Path:
+    payload = "".join(
+        json.dumps(
+            row,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+        for row in rows
+    ).encode("utf-8")
+    return _atomic_write_bytes(path, payload)
 
 
 def _result_path(run_root: Path, candidate: StrategyCandidate) -> Path:
@@ -612,6 +658,331 @@ def _pareto_frontier(
     )
 
 
+def _score_summary(
+    record: SweepCandidateRecord,
+) -> Mapping[str, Any]:
+    summary = record.payload.get("score_summary")
+    if not isinstance(summary, Mapping):
+        raise SweepContractError(
+            f"{record.candidate.config_id}: score_summary is missing"
+        )
+    return summary
+
+
+def _metric_rows(
+    record: SweepCandidateRecord,
+    axis: str,
+) -> Mapping[str, Mapping[str, object]]:
+    values = _score_summary(record).get(axis)
+    if not isinstance(values, Mapping):
+        raise SweepContractError(
+            f"{record.candidate.config_id}: score_summary.{axis} is missing"
+        )
+    rows: dict[str, Mapping[str, object]] = {}
+    for key, metrics in values.items():
+        if not isinstance(key, str) or not isinstance(metrics, Mapping):
+            raise SweepContractError(
+                f"{record.candidate.config_id}: invalid {axis} score row"
+            )
+        rows[key] = metrics
+    return rows
+
+
+def _paper_domains(
+    record: SweepCandidateRecord,
+) -> Mapping[str, str]:
+    domains: dict[str, str] = {}
+    rows = record.payload.get("question_results")
+    if not isinstance(rows, list):
+        raise SweepContractError(
+            f"{record.candidate.config_id}: question_results is missing"
+        )
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise SweepContractError(
+                f"{record.candidate.config_id}: invalid question result"
+            )
+        paper_id = str(row.get("paper_id") or "")
+        domain = str(row.get("domain") or "")
+        if not paper_id or not domain:
+            raise SweepContractError(
+                f"{record.candidate.config_id}: blank paper/domain"
+            )
+        previous = domains.setdefault(paper_id, domain)
+        if previous != domain:
+            raise SweepContractError(
+                f"{record.candidate.config_id}: paper {paper_id} spans domains"
+            )
+    return domains
+
+
+def _find_c0_baseline(
+    records: Sequence[SweepCandidateRecord],
+) -> SweepCandidateRecord:
+    matches = [
+        record
+        for record in records
+        if record.candidate.stage_id == "pdf-chunker"
+        and record.candidate.pdf_chunker == "pdf-fixed-800"
+        and record.candidate.retriever == "dense"
+        and record.candidate.source_composition == "pdf-only"
+        and record.candidate.reranker == "rerank-off"
+    ]
+    if len(matches) != 1:
+        raise SweepContractError(
+            f"expected exactly one C0 baseline, found {len(matches)}"
+        )
+    baseline = matches[0]
+    if baseline.status != "completed" or not baseline.mapping_passed:
+        raise SweepContractError("C0 baseline is not complete and mapping-passed")
+    return baseline
+
+
+def _finite_paper_metric(
+    record: SweepCandidateRecord,
+    metric: str,
+) -> Mapping[str, float]:
+    values: dict[str, float] = {}
+    for paper_id, metrics in _metric_rows(record, "by_paper").items():
+        value = metrics.get(metric)
+        if value is None or not math.isfinite(float(value)):
+            raise SweepContractError(
+                f"{record.candidate.config_id}: {paper_id} has no finite "
+                f"{metric}"
+            )
+        values[paper_id] = float(value)
+    return values
+
+
+def _metric_names(
+    records: Sequence[SweepCandidateRecord],
+) -> tuple[str, ...]:
+    names: set[str] = set()
+    for record in records:
+        overall = _score_summary(record).get("overall")
+        if isinstance(overall, Mapping):
+            names.update(str(name) for name in overall)
+    return tuple(sorted(names))
+
+
+def _write_final_report_artifacts(
+    *,
+    config: Mapping[str, Any],
+    root: Path,
+    records: Sequence[SweepCandidateRecord],
+    rankings: Mapping[str, SweepStageRanking],
+    winner: SweepCandidateRecord,
+) -> tuple[tuple[Path, ...], Mapping[str, object]]:
+    baseline = _find_c0_baseline(records)
+    bootstrap_config = config.get("bootstrap")
+    if not isinstance(bootstrap_config, Mapping):
+        raise SweepContractError("config.bootstrap must be a mapping")
+    bootstrap_metric = "coverage_ndcg_at_10"
+    winner_by_paper = _finite_paper_metric(winner, bootstrap_metric)
+    baseline_by_paper = _finite_paper_metric(baseline, bootstrap_metric)
+    paper_domains = _paper_domains(winner)
+    bootstrap = paired_bootstrap(
+        winner_by_paper,
+        baseline_by_paper,
+        paper_domains,
+        samples=int(bootstrap_config.get("samples", 0)),
+        confidence=float(bootstrap_config.get("confidence", 0.0)),
+        seed=str(bootstrap_config.get("seed") or ""),
+    )
+    bootstrap_payload = {
+        "schema_version": SWEEP_SCHEMA_VERSION,
+        "metric": bootstrap_metric,
+        "candidate_config_id": winner.candidate.config_id,
+        "baseline_config_id": baseline.candidate.config_id,
+        **bootstrap.to_dict(),
+    }
+
+    stage_rank_by_id = {
+        record.candidate.config_id: rank
+        for ranking in rankings.values()
+        for rank, record in enumerate(ranking.ranked, 1)
+    }
+    leaderboard_rows = []
+    for record in records:
+        candidate = record.candidate
+        leaderboard_rows.append(
+            {
+                "stage_id": candidate.stage_id,
+                "stage_rank": stage_rank_by_id.get(candidate.config_id, ""),
+                "config_id": candidate.config_id,
+                "status": record.status,
+                "rankable": candidate.rankable,
+                "mapping_passed": record.mapping_passed,
+                "guardrails_passed": record.guardrails_passed,
+                "primary_metric": record.payload.get("primary_metric", ""),
+                "primary_score": (
+                    "" if record.primary is None else record.primary
+                ),
+                "p95_latency_ms": record.p95_latency_ms,
+                "index_bytes": record.index_bytes,
+                "chunk_count": record.chunk_count,
+                "pdf_chunker": candidate.pdf_chunker,
+                "note_chunker": candidate.note_chunker or "",
+                "retriever": candidate.retriever,
+                "source_composition": candidate.source_composition,
+                "reranker": candidate.reranker,
+            }
+        )
+    leaderboard_rows.sort(
+        key=lambda row: (
+            str(row["stage_id"]),
+            (
+                int(row["stage_rank"])
+                if isinstance(row["stage_rank"], int)
+                else 1_000_000
+            ),
+            str(row["config_id"]),
+        )
+    )
+
+    metrics = _metric_names((baseline, winner))
+    breakdown_rows = []
+    for label, record in (("baseline", baseline), ("winner", winner)):
+        for axis, scope in (
+            ("by_paper", "paper"),
+            ("by_domain", "domain"),
+            ("by_question_type", "question_type"),
+        ):
+            for key, values in sorted(_metric_rows(record, axis).items()):
+                breakdown_rows.append(
+                    {
+                        "role": label,
+                        "config_id": record.candidate.config_id,
+                        "scope": scope,
+                        "key": key,
+                        "domain": (
+                            paper_domains.get(key, "")
+                            if scope == "paper"
+                            else (key if scope == "domain" else "")
+                        ),
+                        **{
+                            metric: (
+                                "" if values.get(metric) is None
+                                else values.get(metric)
+                            )
+                            for metric in metrics
+                        },
+                    }
+                )
+
+    blocked_rows: list[Mapping[str, object]] = []
+    ineligible_ids = {
+        config_id
+        for ranking in rankings.values()
+        for config_id in ranking.ineligible_config_ids
+    }
+    for record in records:
+        if (
+            record.status != "completed"
+            or record.candidate.config_id in ineligible_ids
+        ):
+            blocked_rows.append(
+                {
+                    "kind": "candidate",
+                    "stage_id": record.candidate.stage_id,
+                    "config_id": record.candidate.config_id,
+                    "status": record.status,
+                    "error": record.error,
+                    "rankable": record.candidate.rankable,
+                    "mapping_passed": record.mapping_passed,
+                    "guardrails_passed": record.guardrails_passed,
+                }
+            )
+        mapping = record.payload.get("mapping")
+        unmapped = (
+            mapping.get("unmapped")
+            if isinstance(mapping, Mapping)
+            else None
+        )
+        if isinstance(unmapped, list):
+            blocked_rows.extend(
+                {
+                    "kind": "unmapped-evidence",
+                    "stage_id": record.candidate.stage_id,
+                    "config_id": record.candidate.config_id,
+                    **dict(item),
+                }
+                for item in unmapped
+                if isinstance(item, Mapping)
+            )
+
+    report_root = root / "report"
+    leaderboard_csv = _atomic_write_csv(
+        report_root / "leaderboard.csv",
+        leaderboard_rows,
+        fieldnames=tuple(leaderboard_rows[0]),
+    )
+    breakdown_csv = _atomic_write_csv(
+        report_root / "paper-domain-breakdown.csv",
+        breakdown_rows,
+        fieldnames=tuple(breakdown_rows[0]),
+    )
+    bootstrap_path = _atomic_write_json(
+        report_root / "paired-bootstrap.json",
+        bootstrap_payload,
+    )
+    blocked_path = _atomic_write_jsonl(
+        report_root / "blocked-and-unmapped.jsonl",
+        blocked_rows,
+    )
+    winner_overall = _score_summary(winner).get("overall")
+    baseline_overall = _score_summary(baseline).get("overall")
+    if not isinstance(winner_overall, Mapping) or not isinstance(
+        baseline_overall, Mapping
+    ):
+        raise SweepContractError("winner/baseline overall scores are missing")
+    stage_lines = [
+        f"| {stage_id} | {ranking.ranked[0].candidate.config_id} | "
+        f"{ranking.ranked[0].primary:.6f} |"
+        for stage_id, ranking in rankings.items()
+    ]
+    morning_report = "\n".join(
+        (
+            "# ResearchQA rq-2 morning report",
+            "",
+            f"- Candidates: {len(records)} complete strategy records",
+            f"- Provisional winner: `{winner.candidate.config_id}`",
+            f"- C0 baseline: `{baseline.candidate.config_id}`",
+            f"- Winner {bootstrap_metric}: "
+            f"{float(winner_overall[bootstrap_metric]):.6f}",
+            f"- Baseline {bootstrap_metric}: "
+            f"{float(baseline_overall[bootstrap_metric]):.6f}",
+            f"- Paired delta: {bootstrap.observed_delta:+.6f} "
+            f"(95% CI {bootstrap.lower:+.6f} to {bootstrap.upper:+.6f}; "
+            f"{bootstrap.samples:,} domain-stratified paper resamples)",
+            f"- Winner p95 retrieval latency: "
+            f"{winner.p95_latency_ms:.3f} ms",
+            "",
+            "| Stage | Winner | Primary |",
+            "|---|---|---:|",
+            *stage_lines,
+            "",
+            "The winner is provisional. This run stops after rq-2 and does "
+            "not start rq-5 automatically.",
+            "",
+        )
+    )
+    morning_path = _atomic_write_bytes(
+        report_root / "morning-report.md",
+        morning_report.encode("utf-8"),
+    )
+    return (
+        (
+            leaderboard_csv,
+            breakdown_csv,
+            bootstrap_path,
+            blocked_path,
+            morning_path,
+        ),
+        bootstrap_payload,
+    )
+
+
 def run_strategy_sweep(
     config: Mapping[str, Any],
     run_root: str | Path,
@@ -919,6 +1290,13 @@ def run_strategy_sweep(
         for rank, record in enumerate(confirmation_ranking.ranked, 1)
     )
     frontier = _pareto_frontier(confirmation_ranking.ranked)
+    report_paths, bootstrap_payload = _write_final_report_artifacts(
+        config=config,
+        root=root,
+        records=all_records,
+        rankings=rankings,
+        winner=winner,
+    )
     final_root = root / "sweep" / "final"
     leaderboard_path = _atomic_write_json(
         final_root / "leaderboard.json",
@@ -943,6 +1321,7 @@ def run_strategy_sweep(
             "winner_candidate": winner.candidate.to_dict(),
             "primary": winner.primary,
             "guardrails_passed": winner.guardrails_passed,
+            "bootstrap": bootstrap_payload,
             "tie_threshold": tie_threshold,
             "confirmation_count": len(
                 [
@@ -960,7 +1339,14 @@ def run_strategy_sweep(
             "stop_after_report": True,
         },
     )
-    artifact_paths.extend((leaderboard_path, pareto_path, decision_path))
+    artifact_paths.extend(
+        (
+            leaderboard_path,
+            pareto_path,
+            decision_path,
+            *report_paths,
+        )
+    )
     return StrategySweepResult(
         records=tuple(all_records),
         stage_rankings=dict(rankings),
