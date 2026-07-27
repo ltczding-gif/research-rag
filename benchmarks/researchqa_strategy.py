@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import math
+import time
 import unicodedata
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
@@ -836,13 +837,21 @@ class CandidateRunResult:
     index_bytes: int
     chunk_count: int
     guardrails_passed: bool
+    latency_metrics: Mapping[str, object] = field(default_factory=dict)
+
+    @property
+    def primary_metric(self) -> str:
+        if self.candidate.stage_id in {"pdf-chunker", "note-chunker"}:
+            return "recall_at_5"
+        return "coverage_ndcg_at_10"
 
     @property
     def primary_score(self) -> float:
-        value = self.aggregate.overall.get("coverage_ndcg_at_10")
+        value = self.aggregate.overall.get(self.primary_metric)
         if value is None:
             raise StrategyContractError(
-                f"{self.candidate.config_id}: no evaluable primary score"
+                f"{self.candidate.config_id}: no evaluable "
+                f"{self.primary_metric} primary score"
             )
         return float(value)
 
@@ -894,11 +903,13 @@ class CandidateRunResult:
             "mapping": self.mapping.to_dict(),
             "completed_paper_ids": list(self.completed_paper_ids),
             "completed_question_ids": list(self.completed_question_ids),
+            "primary_metric": self.primary_metric,
             "primary_score": self.primary_score,
             "p95_latency_ms": self.p95_latency_ms,
             "index_bytes": self.index_bytes,
             "chunk_count": self.chunk_count,
             "guardrails_passed": self.guardrails_passed,
+            "latency_metrics": dict(self.latency_metrics),
         }
 
 
@@ -1158,15 +1169,31 @@ def run_complete_candidate(
     fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
     mapping_overall_minimum: float = 0.95,
     mapping_per_paper_minimum: float = 0.90,
-    p95_latency_ms: float = 0.0,
+    performance_sample_question_count: int | None = None,
+    performance_warmup_passes: int = 1,
+    performance_timed_passes: int = 3,
+    p95_latency_ms: float | None = None,
     guardrails_passed: bool = True,
 ) -> CandidateRunResult:
     """Run one candidate over the exact required paper/question sets."""
 
     if not isinstance(embedder, EmbedderAdapter):
         raise StrategyContractError("embedder must implement embed_texts")
-    if not math.isfinite(p95_latency_ms) or p95_latency_ms < 0:
+    if p95_latency_ms is not None and (
+        not math.isfinite(p95_latency_ms) or p95_latency_ms < 0
+    ):
         raise StrategyContractError("p95_latency_ms must be finite and non-negative")
+    if (
+        performance_sample_question_count is not None
+        and performance_sample_question_count <= 0
+    ):
+        raise StrategyContractError(
+            "performance_sample_question_count must be greater than zero"
+        )
+    if performance_warmup_passes <= 0 or performance_timed_passes <= 0:
+        raise StrategyContractError(
+            "performance warmup/timed passes must be greater than zero"
+        )
     normalized_expected_papers = tuple(
         normalize_paper_id(value) for value in expected_paper_ids
     )
@@ -1283,11 +1310,15 @@ def run_complete_candidate(
                 "reranker model/revision differs from the pinned contract"
             )
 
-    question_results: list[QuestionStrategyResult] = []
-    for question in sorted(questions, key=lambda item: str(item["row_id"])):
+    def retrieve(
+        question: Mapping[str, Any],
+        *,
+        measure: bool = False,
+    ) -> tuple[tuple[RetrievalHit, ...], float, float]:
         row_id = str(question["row_id"])
         query = _required_text(question, "question")
         query_vector = query_vectors.get(row_id)
+        query_started_ns = time.perf_counter_ns() if measure else 0
         pdf_hits = _search(
             pdf_index,
             retriever=candidate.retriever,
@@ -1315,8 +1346,15 @@ def run_complete_candidate(
             pdf_chunks=pdf_chunk_by_id,
             top_k=100,
         )
+        query_elapsed_ms = (
+            (time.perf_counter_ns() - query_started_ns) / 1_000_000.0
+            if measure
+            else 0.0
+        )
+        rerank_elapsed_ms = 0.0
         if candidate.reranker != "rerank-off":
             assert reranker is not None and candidate.reranker_depth is not None
+            rerank_started_ns = time.perf_counter_ns() if measure else 0
             hits = rerank_hits(
                 query,
                 hits,
@@ -1326,6 +1364,17 @@ def run_complete_candidate(
                 keep=candidate.reranker_keep,
                 batch_size=reranker_batch_size,
             ).hits
+            if measure:
+                rerank_elapsed_ms = (
+                    time.perf_counter_ns() - rerank_started_ns
+                ) / 1_000_000.0
+        return tuple(hits), query_elapsed_ms, rerank_elapsed_ms
+
+    sorted_questions = sorted(questions, key=lambda item: str(item["row_id"]))
+    question_results: list[QuestionStrategyResult] = []
+    for question in sorted_questions:
+        row_id = str(question["row_id"])
+        hits, _, _ = retrieve(question)
         evidence = mapping_by_row[row_id]
         metrics = score_ranking(
             [hit.item_id for hit in hits],
@@ -1341,6 +1390,95 @@ def run_complete_candidate(
                 metrics=metrics.metrics,
             )
         )
+
+    latency_metrics: dict[str, object]
+    measured_p95_latency_ms: float
+    if p95_latency_ms is None:
+        performance_questions: list[Mapping[str, Any]] = []
+        questions_by_stratum: dict[
+            tuple[str, str], list[Mapping[str, Any]]
+        ] = defaultdict(list)
+        for question in sorted_questions:
+            questions_by_stratum[
+                (
+                    _required_text(question, "domain"),
+                    _required_text(question, "question_type"),
+                )
+            ].append(question)
+        for stratum in sorted(questions_by_stratum):
+            performance_questions.append(
+                min(
+                    questions_by_stratum[stratum],
+                    key=lambda item: (
+                        hash_text(_required_text(item, "row_id")),
+                        _required_text(item, "row_id"),
+                    ),
+                )
+            )
+        if (
+            performance_sample_question_count is not None
+            and len(performance_questions)
+            != performance_sample_question_count
+        ):
+            raise StrategyContractError(
+                "performance sample count mismatch: "
+                f"expected {performance_sample_question_count}, "
+                f"found {len(performance_questions)}"
+            )
+
+        for _ in range(performance_warmup_passes):
+            for question in performance_questions:
+                retrieve(question)
+        query_latency_samples_ms: list[float] = []
+        rerank_latency_samples_ms: list[float] = []
+        latency_samples_ms: list[float] = []
+        for _ in range(performance_timed_passes):
+            for question in performance_questions:
+                _, query_ms, rerank_ms = retrieve(question, measure=True)
+                query_latency_samples_ms.append(query_ms)
+                rerank_latency_samples_ms.append(rerank_ms)
+                latency_samples_ms.append(query_ms + rerank_ms)
+
+        def percentile(samples: Sequence[float], probability: float) -> float:
+            ordered = sorted(samples)
+            if not ordered:
+                raise StrategyContractError(
+                    "performance sample selection produced no questions"
+                )
+            position = (len(ordered) - 1) * probability
+            lower = math.floor(position)
+            upper = math.ceil(position)
+            if lower == upper:
+                return ordered[lower]
+            fraction = position - lower
+            return ordered[lower] + (
+                ordered[upper] - ordered[lower]
+            ) * fraction
+
+        measured_p95_latency_ms = percentile(latency_samples_ms, 0.95)
+        latency_metrics = {
+            "measurement_revision": "stratified-warm-query-v1",
+            "question_selection": (
+                "minimum sha256(row_id) per domain x question_type"
+            ),
+            "query_embedding_mode": "precomputed",
+            "warmup_passes": performance_warmup_passes,
+            "timed_passes": performance_timed_passes,
+            "performance_question_count": len(performance_questions),
+            "sample_count": len(latency_samples_ms),
+            "query_p50_ms": percentile(query_latency_samples_ms, 0.50),
+            "query_p95_ms": percentile(query_latency_samples_ms, 0.95),
+            "rerank_p50_ms": percentile(rerank_latency_samples_ms, 0.50),
+            "rerank_p95_ms": percentile(rerank_latency_samples_ms, 0.95),
+            "p50_latency_ms": percentile(latency_samples_ms, 0.50),
+            "p95_latency_ms": measured_p95_latency_ms,
+        }
+    else:
+        measured_p95_latency_ms = float(p95_latency_ms)
+        latency_metrics = {
+            "measurement_revision": "external-override",
+            "p95_latency_ms": measured_p95_latency_ms,
+        }
 
     aggregate = macro_aggregate(
         [
@@ -1376,10 +1514,11 @@ def run_complete_candidate(
         mapping=mapping,
         completed_paper_ids=tuple(sorted(documents)),
         completed_question_ids=tuple(sorted(row_ids)),
-        p95_latency_ms=float(p95_latency_ms),
+        p95_latency_ms=measured_p95_latency_ms,
         index_bytes=index_bytes,
         chunk_count=len(indexed_passages),
         guardrails_passed=bool(guardrails_passed),
+        latency_metrics=latency_metrics,
     )
 
 

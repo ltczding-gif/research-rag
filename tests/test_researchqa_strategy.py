@@ -316,12 +316,23 @@ def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path)
     assert by_id["q-alpha"].metrics["recall_at_5"] == 1.0
     assert by_id["q-beta"].metrics["recall_at_5"] == 1.0
     assert by_id["q-diagnostic"].metrics["recall_at_5"] is None
+    assert result.primary_metric == "recall_at_5"
     assert result.primary_score == pytest.approx(1.0)
     assert result.chunk_count == 2
     assert result.index_bytes > 0
+    assert result.latency_metrics["measurement_revision"] == (
+        "stratified-warm-query-v1"
+    )
+    assert result.latency_metrics["performance_question_count"] == 3
+    assert result.latency_metrics["sample_count"] == 9
+    assert result.latency_metrics["query_p95_ms"] >= 0
+    assert result.latency_metrics["rerank_p95_ms"] == 0
+    assert result.p95_latency_ms == result.latency_metrics["p95_latency_ms"]
     assert embedder.calls
     assert reranker.calls
     assert reranked.primary_score == pytest.approx(1.0)
+    assert reranked.primary_metric == "coverage_ndcg_at_10"
+    assert reranked.latency_metrics["rerank_p95_ms"] >= 0
 
 
 def test_note_strategy_fails_closed_without_frozen_notes(tmp_path):
@@ -361,6 +372,10 @@ def test_stage_ranking_excludes_incomplete_and_diagnostic_candidates(tmp_path):
         embedder=_FakeEmbedder(),
         p95_latency_ms=20,
     )
+    assert result.latency_metrics == {
+        "measurement_revision": "external-override",
+        "p95_latency_ms": 20.0,
+    }
     fast = replace(
         result,
         candidate=replace(candidate, config_id="fast"),

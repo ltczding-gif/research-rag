@@ -245,7 +245,7 @@
             "aggregation_order"
           ],
           "properties": {
-            "chunking_primary": {"const": "evidence_group_recall_at_5"},
+            "chunking_primary": {"const": "recall_at_5"},
             "retrieval_primary": {"const": "coverage_ndcg_at_10"},
             "source_composition_primary": {"const": "coverage_ndcg_at_10"},
             "reranker_primary": {"const": "coverage_ndcg_at_10"},

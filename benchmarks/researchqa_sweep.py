@@ -31,7 +31,7 @@ from service.pdf_ir import CanonicalDocument
 
 
 SWEEP_SCHEMA_VERSION = 1
-SWEEP_ENGINE_REVISION = "researchqa-sweep-v1"
+SWEEP_ENGINE_REVISION = "researchqa-sweep-v2"
 
 
 class SweepContractError(ValueError):
@@ -644,6 +644,22 @@ def run_strategy_sweep(
     mapping_per_paper = float(
         gates.get("mapping_per_paper_minimum", 0.90)
     )
+    performance = config.get("performance")
+    if not isinstance(performance, Mapping):
+        raise SweepContractError("config.performance must be a mapping")
+    performance_sample_count = int(
+        performance.get("sample_question_count", 0)
+    )
+    performance_warmup_passes = int(performance.get("warmup_passes", 0))
+    performance_timed_passes = int(performance.get("timed_passes", 0))
+    if (
+        performance_sample_count <= 0
+        or performance_warmup_passes <= 0
+        or performance_timed_passes <= 0
+    ):
+        raise SweepContractError(
+            "config.performance counts must be greater than zero"
+        )
     config_fingerprint = fingerprint_payload(config)
 
     all_records: list[SweepCandidateRecord] = []
@@ -693,6 +709,15 @@ def run_strategy_sweep(
                         notes=frozen_notes,
                         mapping_overall_minimum=mapping_overall,
                         mapping_per_paper_minimum=mapping_per_paper,
+                        performance_sample_question_count=(
+                            performance_sample_count
+                        ),
+                        performance_warmup_passes=(
+                            performance_warmup_passes
+                        ),
+                        performance_timed_passes=(
+                            performance_timed_passes
+                        ),
                     )
                     if guardrail_check is not None:
                         result = replace(

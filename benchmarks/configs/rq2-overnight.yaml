@@ -45,17 +45,17 @@ models:
     license: Apache-2.0
 
 metrics:
-  chunking_primary: evidence_group_recall_at_5
+  chunking_primary: recall_at_5
   retrieval_primary: coverage_ndcg_at_10
   source_composition_primary: coverage_ndcg_at_10
   reranker_primary: coverage_ndcg_at_10
   guardrails:
-    - evidence_group_recall_at_5
-    - evidence_group_recall_at_10
+    - recall_at_5
+    - recall_at_10
     - mrr
     - all_required_groups_success_at_5
     - all_required_groups_success_at_10
-    - average_groups_covered
+    - groups_covered_at_10
   aggregation_order: [question, paper, domain, overall]
 
 bootstrap:
