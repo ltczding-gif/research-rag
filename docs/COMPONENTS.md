@@ -50,7 +50,7 @@
 5. **Stage B — Note Generator**（flash 或 pro）：
    - System: `prompts/note_generator.system.txt`
    - Schema: `schemas/structured_note.vertex.schema.json`
-   - User prompt 嵌入 Document Profile JSON + 模板 ID + 拼接的 `template_rules/<id>.txt + _shared_rules.txt`
+   - User prompt 嵌入 Document Profile JSON、模板 ID、rule scope 与组合后的规则；专用模板加载 `templates/<id>.txt + prompts/_universal_rules.txt + templates/_domain_quality_rules.txt`，generic 只加载前两项并排除 pack guidance
 6. **Schema 校验**：`_validate_against_schema()` 递归校验；`_sanitize_seed_terms()` 用 `title_en/title_zh/keywords/topic` 反向锚定，防止 hallucinated seed terms 漏掉
 7. **渲染**：`build_multifacet_frontmatter()`（line 764）写固定字段顺序的 YAML；注入 Zotero `abstractNote` 作为 `## 英文摘要原文` 段
 8. **落盘**：canary 路径或 live vault；按 body 里"推荐保存文件名"行规范化，加 `_review_note.md` 后缀

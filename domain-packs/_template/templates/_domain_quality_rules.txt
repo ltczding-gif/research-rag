@@ -3,7 +3,8 @@
 REPLACE the TODOs below with your field's filename slot semantics, trap
 scan checklist, and scoring axis-4 name. This file is loaded after
 `prompts/_universal_rules.txt` (which provides field-invariant evidence,
-anti-hallucination, and scoring discipline).
+anti-hallucination, and scoring discipline) for dedicated templates. It is
+deliberately excluded from `generic-research-note`.
 
 ### Recommended Filename Contract
 

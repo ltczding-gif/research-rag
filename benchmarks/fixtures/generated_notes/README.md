@@ -34,19 +34,22 @@ actually improve retrieval and note quality.
 
 ## Known baseline defects and promotion gate
 
-The current repository ships one production domain pack: `catalysis`. The four
-non-catalysis candidates therefore inherit catalysis-specific seed guidance,
-filename semantics, and the `工业应用潜力` scoring axis even though Stage A
-correctly routes their note bodies to `generic-research-note`. This is a
-domain-pack isolation defect, not acceptable cross-domain behavior.
+These fixtures were generated before the field-neutral generic contract was
+added. At that time, the four non-catalysis candidates inherited
+catalysis-specific seed guidance, filename semantics, and the `工业应用潜力`
+scoring axis even though Stage A correctly routed their note bodies to
+`generic-research-note`. This was a domain-pack isolation defect, not acceptable
+cross-domain behavior.
 
 The manifest consequently marks those four fixtures
+`rule_scope: legacy-domain-mixed` and
 `promotion_status: blocked-domain-pack-mismatch`. They remain useful as an
-honest snapshot of the current system, but they must not be copied or lightly
-edited into gold notes. First add the relevant domain contract, regenerate the
-candidate, and then begin human review. The catalysis candidate is marked
-`eligible-for-human-review`; it is still not gold until a person verifies it
-against the main PDF and SI.
+honest pre-fix snapshot, but they must not be copied or lightly edited into
+gold notes. The pipeline now excludes active domain-pack guidance and quality
+rules whenever `generic-research-note` is selected. Regenerate these four
+candidates under `rule_scope: field-neutral` before human review. The catalysis
+candidate is marked `eligible-for-human-review`; it is still not gold until a
+person verifies it against the main PDF and SI.
 
 The current citation surface also mixes `[p.X]` for the main article with
 `[SI p.X]` for supplementary information. A future cross-document citation

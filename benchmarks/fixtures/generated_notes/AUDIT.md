@@ -6,11 +6,11 @@ baseline; it does not constitute the human sign-off required for gold notes.
 
 ## Promotion blockers
 
-1. **Domain-pack isolation:** all five runs used the only production domain
+1. **Domain-pack isolation (resolved after this fixture snapshot):** all five runs used the only production domain
    pack, `catalysis`. The four non-catalysis candidates therefore inherit
    catalysis-specific seed guidance, naming semantics, and the
    `工业应用潜力` score. Their manifest records are blocked from gold review
-   until a matching domain contract exists and the notes are regenerated.
+   until the notes are regenerated with the field-neutral generic rule scope.
 2. **Template coverage:** only the catalyst used a dedicated template. The
    biomedicine, CS/ML, environment, and social-science papers all used
    `generic-research-note`. Their domain-specific methods and validity checks
@@ -66,6 +66,8 @@ baseline; it does not constitute the human sign-off required for gold notes.
 
 ## Recommended next iteration
 
-Fix domain-pack isolation first, then add the four missing domain contracts and
-regenerate the blocked candidates. Only after that should a person review the
+Regenerate the four blocked candidates with the field-neutral generic contract.
+Dedicated domain templates can still be added later when S5 evidence shows
+that they improve note quality, but they are no longer a prerequisite for a
+valid generic candidate. Only after regeneration should a person review the
 five source sets and promote corrected copies into `benchmarks/gold/notes/`.

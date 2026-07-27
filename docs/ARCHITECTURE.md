@@ -154,7 +154,7 @@ Stage B — Note Generator（Flash 或 Pro）
 
 "flash" 和 "pro" 是抽象 tier 名（由 `model_routing_policy.json` 配置，每个后端把它们翻译成自家模型——Gemini 后端用 `gemini-2.5-flash` / `gemini-2.5-pro`，Anthropic 后端用 `claude-haiku-4-5` / `claude-sonnet-4-6`，可被 env 覆盖）。
 
-Stage A 的输出直接喂给 Stage B 作为 user prompt 的一部分，并决定调用 flash 还是 pro。这把"分类"和"写作"解耦——同一个 Document Profiler 做所有论文，结构稳定；Note Generator 按 7 个模板（electrocatalysis-experimental / thermocatalysis-experimental / review-or-perspective / phd-dissertation / methods-or-materials-synthesis / foundational-theory / generic-research-note）有不同 body 结构，但共用 `_shared_rules.txt` 约束。
+Stage A 的输出直接喂给 Stage B 作为 user prompt 的一部分，并决定调用 flash 还是 pro。这把"分类"和"写作"解耦——同一个 Document Profiler 做所有论文，结构稳定；Note Generator 按 7 个模板（electrocatalysis-experimental / thermocatalysis-experimental / review-or-perspective / phd-dissertation / methods-or-materials-synthesis / foundational-theory / generic-research-note）生成不同 body 结构。专用模板组合 universal rules 与当前 domain-pack quality rules；`generic-research-note` 是领域中立例外，只组合 universal rules，并排除 pack-specific seed guidance、trap scan、命名语义和评分轴。
 
 ### 后端可插拔
 

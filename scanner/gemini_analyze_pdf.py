@@ -191,6 +191,23 @@ def load_shared_template_rules():
     return f"{universal}\n\n{domain}\n"
 
 
+def load_note_generator_system_prompt(note_template_id):
+    """Load Stage B instructions without leaking pack guidance into generic notes."""
+    if note_template_id == "generic-research-note":
+        return load_system_prompt("note_generator.system.txt")
+    return load_augmented_system_prompt("note_generator.system.txt")
+
+
+def compose_note_generator_rules(note_template_id):
+    """Compose template rules with the correct field-specificity boundary."""
+    template = load_template_rules(f"{note_template_id}.txt").rstrip()
+    universal = load_universal_rules().rstrip()
+    parts = [template, universal]
+    if note_template_id != "generic-research-note":
+        parts.append(load_domain_quality_rules().rstrip())
+    return "\n\n".join(part for part in parts if part)
+
+
 def load_model_routing_policy(path=None):
     policy_path = Path(path) if path else DEFAULT_MODEL_ROUTING_POLICY_PATH
     with policy_path.open("r", encoding="utf-8") as f:
@@ -879,6 +896,11 @@ def run_document_profiler(backend, model):
 
 
 def build_note_generator_user_prompt(document_profile, note_template_id, template_rules_text):
+    rule_scope = (
+        "field-neutral: active domain-pack guidance and quality rules are excluded"
+        if note_template_id == "generic-research-note"
+        else "active-domain: active domain-pack guidance and quality rules are included"
+    )
     return "\n".join(
         [
             "Generate a structured literature note for the attached PDF set.",
@@ -888,6 +910,9 @@ def build_note_generator_user_prompt(document_profile, note_template_id, templat
             "",
             "Use this note template:",
             note_template_id,
+            "",
+            "Use this rule scope:",
+            rule_scope,
             "",
             "Use these template rules:",
             template_rules_text,
@@ -918,16 +943,9 @@ def run_note_generator(backend, model, document_profile):
     `backend` must already have had `attach_pdfs()` called for the current paper.
     """
     schema = load_vertex_schema("structured_note.vertex.schema.json")
-    system_prompt = load_augmented_system_prompt("note_generator.system.txt")
     note_template_id = document_profile["recommended_template"]
-    template_rules_text = load_template_rules(f"{note_template_id}.txt")
-    shared_rules_text = load_shared_template_rules()
-    combined_rules_text = "\n\n".join(
-        [
-            template_rules_text.rstrip(),
-            shared_rules_text.rstrip(),
-        ]
-    )
+    system_prompt = load_note_generator_system_prompt(note_template_id)
+    combined_rules_text = compose_note_generator_rules(note_template_id)
     user_prompt = build_note_generator_user_prompt(
         document_profile=document_profile,
         note_template_id=note_template_id,

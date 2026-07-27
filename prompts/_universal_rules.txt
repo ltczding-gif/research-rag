@@ -31,6 +31,8 @@ specific behaviors via your pack's `_domain_quality_rules.txt` instead.
 
 ### Subjective Scoring (universal four-axis pattern)
 - End with concise subjective scoring when the template allows evaluative synthesis.
+- `generic-research-note` is the field-neutral exception: use the four neutral
+  axes defined by that template and do not load an active pack's domain axis.
 - Use exactly four dimensions. Three are field-invariant:
   - originality
   - rigor

@@ -52,8 +52,10 @@ def test_s5_generated_note_fixtures_are_complete_and_path_safe():
         assert re.search(r"\[SI p\.\d+", note)
 
         if record["paper_id"] == "liu-2024-single-atom-cobalt-orr":
+            assert record["rule_scope"] == "active-domain"
             assert record["promotion_status"] == "eligible-for-human-review"
         else:
+            assert record["rule_scope"] == "legacy-domain-mixed"
             assert record["promotion_status"] == "blocked-domain-pack-mismatch"
 
 

@@ -26,20 +26,17 @@ KNOWN_ISSUES = {
         "source-conflict-jk-95.2-vs-92.2",
     ],
     "papier-2024-proteomic-cancer-risk": [
-        "domain-pack-mismatch",
         "source-conflict-starting-sample-count",
     ],
     "cornelio-2023-ai-descartes": [
-        "domain-pack-mismatch",
         "timeout-not-proved-ambiguity",
     ],
-    "dorgeist-2024-terrestrial-carbon-fluxes": [
-        "domain-pack-mismatch",
-    ],
-    "smith-2024-supply-chain-regulations": [
-        "domain-pack-mismatch",
-    ],
+    "dorgeist-2024-terrestrial-carbon-fluxes": [],
+    "smith-2024-supply-chain-regulations": [],
 }
+FIELD_NEUTRAL_SCOPE_MARKER = (
+    "field-neutral: active domain-pack guidance and quality rules are excluded"
+)
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -76,6 +73,14 @@ def _prompt_sha256(manifest: dict[str, Any]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return _sha256_bytes(canonical)
+
+
+def _rule_scope(manifest: dict[str, Any], note_template: str) -> str:
+    if note_template != "generic-research-note":
+        return "active-domain"
+    if FIELD_NEUTRAL_SCOPE_MARKER in manifest["user_prompt"]:
+        return "field-neutral"
+    return "legacy-domain-mixed"
 
 
 def _paper_id_for_run(
@@ -162,6 +167,11 @@ def freeze_notes(runs_root: Path, output_root: Path, domain_pack: str) -> int:
         template_match = TEMPLATE_RE.search(sanitized)
         if not template_match:
             raise ValueError(f"{paper_id}: note_template missing from frontmatter")
+        note_template = template_match.group(1).strip()
+        rule_scope = _rule_scope(run_manifest, note_template)
+        known_issue_ids = list(KNOWN_ISSUES.get(paper_id, []))
+        if rule_scope == "legacy-domain-mixed":
+            known_issue_ids.insert(0, "domain-pack-mismatch")
 
         fixture_path = output_root / f"{paper_id}.md"
         fixture_path.write_text(sanitized, encoding="utf-8", newline="\n")
@@ -174,7 +184,8 @@ def freeze_notes(runs_root: Path, output_root: Path, domain_pack: str) -> int:
                 "backend": "subagent",
                 "model": run_manifest["model_hint"],
                 "domain_pack": domain_pack,
-                "note_template": template_match.group(1).strip(),
+                "note_template": note_template,
+                "rule_scope": rule_scope,
                 "generated_at": run_manifest["generated_at"],
                 "source_run_id": run_dir.name,
                 "prompt_sha256": _prompt_sha256(run_manifest),
@@ -183,11 +194,11 @@ def freeze_notes(runs_root: Path, output_root: Path, domain_pack: str) -> int:
                 "includes_main_pdf": True,
                 "includes_si": True,
                 "human_review_status": "pending",
-                "known_issue_ids": KNOWN_ISSUES.get(paper_id, []),
+                "known_issue_ids": known_issue_ids,
                 "promotion_status": (
-                    "eligible-for-human-review"
-                    if corpus_by_id[paper_id]["domain"] == "catalysis-materials"
-                    else "blocked-domain-pack-mismatch"
+                    "blocked-domain-pack-mismatch"
+                    if "domain-pack-mismatch" in known_issue_ids
+                    else "eligible-for-human-review"
                 ),
             }
         )

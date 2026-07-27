@@ -1,10 +1,12 @@
 # Seed-term guidance for the Note Generator (Stage B)
 #
-# This file is appended to `note_generator.system.txt` at run time under
+# For dedicated templates, this file is appended to
+# `note_generator.system.txt` at run time under
 # the heading "## Domain-specific seed_terms guidance". The base prompt
 # already defines what `seed_terms` ARE (stable machine-readable phrases
 # central to the document); this file calibrates what "stable" and
 # "central" mean in the catalysis domain via concrete examples.
+# It is deliberately excluded from `generic-research-note`.
 #
 # When forking for a new domain: replace the catalysis examples below
 # with 3-5 worked cases from your field. Keep the GOOD/BAD format —

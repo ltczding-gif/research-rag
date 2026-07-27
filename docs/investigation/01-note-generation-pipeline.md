@@ -45,8 +45,9 @@ gemini_analyze_pdf.py (one subprocess per group)
         │
         │  Stage C: Note Generator (flash or gemini-2.5-pro)
         │    System: note_generator.system.txt
-        │    Template rules: template_rules/<recommended_template>.txt
-        │                  + template_rules/_shared_rules.txt
+        │    Template rules: domain-packs/<pack>/templates/<recommended_template>.txt
+        │                  + prompts/_universal_rules.txt
+        │                  + pack quality rules (dedicated templates only)
         │    Schema: structured_note.vertex.schema.json
         │    → frontmatter fields, body_markdown, section_diagnostics,
         │      adapter_signals
@@ -96,7 +97,7 @@ Each Gemini call is constructed as `list(pdf_parts) + [user_prompt_string]` pass
 The function `_validate_against_schema()` performs a recursive Python-side check of the Gemini response against the Vertex schema JSON before the response is used. Required fields are verified, enum values checked, and type assertions made. After validation, `_sanitize_seed_terms()` grounds `seed_terms` against `title_en`, `title_zh`, `keywords`, and `topic` fields to prevent hallucinated terms from surviving.
 
 **Template Rules Selector**  
-`run_note_generator()` reads `document_profile["recommended_template"]` (set by the Document Profiler) and loads `template_rules/<recommended_template>.txt` plus `template_rules/_shared_rules.txt`. These two files are concatenated and injected into the Note Generator user prompt as writing instructions. The seven available templates are: `electrocatalysis-experimental`, `thermocatalysis-experimental`, `review-or-perspective`, `phd-dissertation`, `methods-or-materials-synthesis`, `foundational-theory`, `generic-research-note`.
+`run_note_generator()` reads `document_profile["recommended_template"]` (set by the Document Profiler) and loads the matching pack template plus the repo-root universal rules. Dedicated templates also receive the active pack's seed guidance and `_domain_quality_rules.txt`. `generic-research-note` is a field-neutral exception: both pack-specific inputs are excluded. The seven available templates are: `electrocatalysis-experimental`, `thermocatalysis-experimental`, `review-or-perspective`, `phd-dissertation`, `methods-or-materials-synthesis`, `foundational-theory`, `generic-research-note`.
 
 **Ledger (`processed_history.txt`)**  
 A plain UTF-8 text file with one SHA-256 hex string per line, located at `skills/gemini-literature-processor\processed_history.txt`. The scanner loads it into a Python `set` for O(1) lookup before dispatching subprocesses. The analyzer appends to it after a successful run. `verify_and_clean.py` computes what hashes should be in the ledger (by re-reading `pdf_N_path` fields from every note and recomputing SHA-256), identifies ghost records (in ledger but note missing/PDFs gone) and orphan records (note exists but not in ledger), and can rewrite the ledger to only valid entries. `backfill_hash.py` handles the reverse direction: adds missing `combined_hash` fields into existing notes that predate the hash field.
@@ -113,7 +114,7 @@ The pipeline uses **three distinct prompts** in `multifacet-spec` mode, but **on
 
 **Pre-classification before note generation:** Yes — the Document Profiler always runs first. Its output determines which model processes the note and which template rules are applied. This is a hard dependency; there is no path in `multifacet-spec` mode that skips profiling.
 
-**Template rule selection:** `document_profile["recommended_template"]` drives the file path `template_rules/<id>.txt`. The profiler can output any of the seven template IDs; `generic-research-note` is the fallback. The `_shared_rules.txt` file is always appended regardless of template.
+**Template rule selection:** `document_profile["recommended_template"]` drives the file path `domain-packs/<pack>/templates/<id>.txt`. The profiler can output any of the seven template IDs; `generic-research-note` is the fallback. Universal rules always apply. Active pack guidance and quality rules apply only to dedicated templates, never to generic.
 
 ---
 
@@ -169,7 +170,7 @@ From the sampled note and the `electrocatalysis-experimental.txt` template:
 12. `# 主观打分` — 4-dimension scoring (0–10 each)
 13. `# 核心结论总结` — final synthesis paragraph
 
-Other templates differ in section structure: for example, `review-or-perspective` omits the Figure-by-Figure section, and `phd-dissertation` has chapter-structure sections. All templates share the `_shared_rules.txt` constraints.
+Other templates differ in section structure: for example, `review-or-perspective` omits the Figure-by-Figure section, and `phd-dissertation` has chapter-structure sections. All templates share repo-root universal constraints; only dedicated templates receive pack-specific constraints.
 
 ---
 
