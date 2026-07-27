@@ -4,17 +4,22 @@ import hashlib
 import json
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
 from _hashing import stable_combined_hash
+from benchmarks import researchqa_live
 from benchmarks.overnight import (
     BlockedTaskError,
+    DeterministicTaskError,
     OvernightRunner,
     RunStore,
     TaskStatus,
+    TransientTaskError,
 )
+from benchmarks.researchqa_models import ModelTransportError
 from benchmarks.researchqa_live import (
     create_adapter,
     normalize_paper_id,
@@ -223,6 +228,150 @@ def _read_jsonl(path: Path) -> list[dict]:
     ]
 
 
+def _write_canary_pass(
+    run_root: Path,
+    *,
+    bad_note_sha: bool = False,
+) -> Path:
+    artifact_root = run_root / "note-runs" / "canary" / "W2792307011"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    note_path = artifact_root / "04-rendered-note.md"
+    draft_path = artifact_root / "02-note-draft.json"
+    audit_path = artifact_root / "06-audit.json"
+    note_path.write_text("Audited canary note [Main p.1]\n", encoding="utf-8")
+    draft_path.write_text(
+        json.dumps({"frontmatter": {}, "sections": []}),
+        encoding="utf-8",
+    )
+    note_sha256 = _sha256(note_path)
+    draft_sha256 = _sha256(draft_path)
+    audit_path.write_text(
+        json.dumps(
+            {
+                "paper_id": "W2792307011",
+                "verdict": "PASS",
+                "p0": 0,
+                "p1": 0,
+                "note_sha256": note_sha256,
+                "draft_sha256": draft_sha256,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    marker_path = run_root / "note-runs" / "canary-pass.json"
+    marker_path.write_text(
+        json.dumps(
+            {
+                "paper_id": "W2792307011",
+                "verdict": "PASS",
+                "p0": 0,
+                "p1": 0,
+                "note_path": str(note_path.relative_to(run_root)),
+                "note_sha256": "0" * 64 if bad_note_sha else note_sha256,
+                "draft_path": str(draft_path.relative_to(run_root)),
+                "draft_sha256": draft_sha256,
+                "audit_path": str(audit_path.relative_to(run_root)),
+                "audit_sha256": _sha256(audit_path),
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return marker_path
+
+
+def _write_frozen_notes(run_root: Path) -> Path:
+    frozen_root = run_root / "note-runs" / "frozen"
+    notes_root = frozen_root / "notes"
+    notes_root.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for index in range(1, 21):
+        paper_id = f"W{1000 + index}"
+        note_path = notes_root / f"{paper_id}.md"
+        note_path.write_text(
+            f"# {paper_id}\n\nFrozen note {index}.\n",
+            encoding="utf-8",
+        )
+        rows.append(
+            {
+                "schema_version": 1,
+                "paper_id": paper_id,
+                "template": "generic-research-note",
+                "note_sha256": _sha256(note_path),
+            }
+        )
+    manifest_path = frozen_root / "frozen-notes.jsonl"
+    _write_jsonl(manifest_path, rows)
+    return manifest_path
+
+
+def _mutate_frozen_note_and_manifest(run_root: Path) -> None:
+    manifest_path = (
+        run_root / "note-runs" / "frozen" / "frozen-notes.jsonl"
+    )
+    rows = _read_jsonl(manifest_path)
+    note_path = (
+        manifest_path.parent / "notes" / f"{rows[0]['paper_id']}.md"
+    )
+    note_path.write_text("# changed\n\nNew frozen bytes.\n", encoding="utf-8")
+    rows[0]["note_sha256"] = _sha256(note_path)
+    _write_jsonl(manifest_path, rows)
+
+
+def _fake_runtime_result(run_root: Path):
+    runtime_root = run_root / "runtime"
+    final_root = run_root / "sweep" / "final"
+    raw_root = run_root / "sweep" / "raw-results"
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    final_root.mkdir(parents=True, exist_ok=True)
+    raw_root.mkdir(parents=True, exist_ok=True)
+
+    preflight_path = runtime_root / "model-preflight.json"
+    summary_path = runtime_root / "runtime-summary.json"
+    leaderboard_path = final_root / "leaderboard.json"
+    pareto_path = final_root / "pareto-frontier.json"
+    decision_path = final_root / "decision-summary.json"
+    raw_path = raw_root / "candidate.json"
+    preflight_path.write_text(
+        json.dumps({"status": "completed"}),
+        encoding="utf-8",
+    )
+    summary_path.write_text(
+        json.dumps({"status": "completed"}),
+        encoding="utf-8",
+    )
+    leaderboard_path.write_text(
+        json.dumps({"leaderboard": []}),
+        encoding="utf-8",
+    )
+    pareto_path.write_text(
+        json.dumps({"pareto_frontier": []}),
+        encoding="utf-8",
+    )
+    decision_path.write_text(
+        json.dumps({"provisional_winner": "candidate-a"}),
+        encoding="utf-8",
+    )
+    raw_path.write_text(
+        json.dumps({"candidate_id": "candidate-a"}),
+        encoding="utf-8",
+    )
+    return SimpleNamespace(
+        model_preflight_path=str(preflight_path),
+        runtime_summary_path=str(summary_path),
+        sweep_result=SimpleNamespace(
+            artifact_paths=(
+                str(leaderboard_path),
+                str(pareto_path),
+                str(decision_path),
+                str(raw_path),
+            ),
+            provisional_winner="candidate-a",
+        ),
+    )
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -429,33 +578,190 @@ def test_adapter_run_fingerprints_do_not_change_between_commands(tmp_path):
     )
 
 
-@pytest.mark.parametrize("command", ["canary", "run"])
-def test_adapter_unconnected_live_commands_block_instead_of_succeeding(
+def test_adapter_task_fingerprints_bind_dynamic_canary_and_frozen_inputs(
     tmp_path,
-    command,
 ):
     config, _ = _fixture_cache(tmp_path)
-    run_root = tmp_path / command
+    run_root = tmp_path / "run"
     adapter = create_adapter(config, run_root)
     store = RunStore(run_root)
     state = store.create(
-        run_id=f"fixture-{command}",
+        run_id="fixture-dynamic",
         fingerprints={"fixture": "v1"},
         budget_seconds=60,
     )
-    runner = OvernightRunner(
-        state=state,
-        store=store,
-        retry_delays=(),
-    )
-    spec = tuple(adapter.task_specs(command, state))[0]
 
-    with pytest.raises(BlockedTaskError, match="not connected"):
+    canary_missing = tuple(adapter.task_specs("canary", state))[0]
+    marker_path = _write_canary_pass(run_root)
+    canary_present = tuple(adapter.task_specs("canary", state))[0]
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["created_by"] = "parent"
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    canary_changed = tuple(adapter.task_specs("canary", state))[0]
+
+    run_missing = tuple(adapter.task_specs("run", state))[0]
+    _write_frozen_notes(run_root)
+    run_present = tuple(adapter.task_specs("run", state))[0]
+    _mutate_frozen_note_and_manifest(run_root)
+    run_changed = tuple(adapter.task_specs("run", state))[0]
+
+    assert len(
+        {
+            canary_missing.input_fingerprint,
+            canary_present.input_fingerprint,
+            canary_changed.input_fingerprint,
+        }
+    ) == 3
+    assert len(
+        {
+            run_missing.input_fingerprint,
+            run_present.input_fingerprint,
+            run_changed.input_fingerprint,
+        }
+    ) == 3
+    assert adapter.fingerprints(command="prepare") == adapter.fingerprints(
+        command="run"
+    )
+
+
+def test_adapter_canary_blocks_when_marker_is_missing(tmp_path):
+    config, _ = _fixture_cache(tmp_path)
+    run_root = tmp_path / "run"
+    adapter = create_adapter(config, run_root)
+    store = RunStore(run_root)
+    state = store.create(
+        run_id="fixture-canary-missing",
+        fingerprints={"fixture": "v1"},
+        budget_seconds=60,
+    )
+    runner = OvernightRunner(state=state, store=store, retry_delays=())
+    spec = tuple(adapter.task_specs("canary", state))[0]
+
+    with pytest.raises(BlockedTaskError, match="marker is not available"):
         runner.run_task(spec, adapter.run_task)
 
     task = state.tasks[spec.task_id(state.run_id)]
     assert task.status is TaskStatus.BLOCKED
     assert not task.artifacts
+
+
+def test_adapter_canary_fails_closed_on_bad_artifact_sha(tmp_path):
+    config, _ = _fixture_cache(tmp_path)
+    run_root = tmp_path / "run"
+    _write_canary_pass(run_root, bad_note_sha=True)
+    adapter = create_adapter(config, run_root)
+    store = RunStore(run_root)
+    state = store.create(
+        run_id="fixture-canary-bad-sha",
+        fingerprints={"fixture": "v1"},
+        budget_seconds=60,
+    )
+    runner = OvernightRunner(state=state, store=store, retry_delays=())
+    spec = tuple(adapter.task_specs("canary", state))[0]
+
+    with pytest.raises(DeterministicTaskError, match="SHA-256 mismatch"):
+        runner.run_task(spec, adapter.run_task)
+
+    task = state.tasks[spec.task_id(state.run_id)]
+    assert task.status is TaskStatus.FAILED
+    assert not task.artifacts
+
+
+def test_adapter_fake_runtime_command_sequence_and_report(
+    tmp_path,
+    monkeypatch,
+):
+    config, _ = _fixture_cache(tmp_path)
+    run_root = tmp_path / "run"
+    adapter = create_adapter(config, run_root)
+    store = RunStore(run_root)
+    state = store.create(
+        run_id="fixture-command-sequence",
+        fingerprints={"fixture": "v1"},
+        budget_seconds=60,
+    )
+    runner = OvernightRunner(state=state, store=store, retry_delays=())
+    calls = []
+
+    prepare_spec = tuple(adapter.task_specs("prepare", state))[0]
+    prepare_task = runner.run_task(prepare_spec, adapter.run_task)
+
+    _write_canary_pass(run_root)
+    canary_spec = tuple(adapter.task_specs("canary", state))[0]
+    canary_task = runner.run_task(canary_spec, adapter.run_task)
+
+    _write_frozen_notes(run_root)
+
+    def fake_runtime(runtime_config, runtime_run_root):
+        calls.append((runtime_config, Path(runtime_run_root)))
+        return _fake_runtime_result(Path(runtime_run_root))
+
+    monkeypatch.setattr(
+        researchqa_live.researchqa_runtime,
+        "run_researchqa_runtime",
+        fake_runtime,
+    )
+    run_spec = tuple(adapter.task_specs("run", state))[0]
+    run_task = runner.run_task(run_spec, adapter.run_task)
+    report_artifacts = adapter.write_report(state, store)
+
+    assert prepare_task.status is TaskStatus.COMPLETED
+    assert canary_task.status is TaskStatus.COMPLETED
+    assert run_task.status is TaskStatus.COMPLETED
+    assert len(canary_task.artifacts) == 4
+    assert {artifact.path for artifact in report_artifacts} == {
+        "sweep/final/leaderboard.json",
+        "sweep/final/pareto-frontier.json",
+        "sweep/final/decision-summary.json",
+        "runtime/runtime-summary.json",
+    }
+    assert {
+        artifact.path for artifact in run_task.artifacts
+    }.issuperset(
+        {
+            "runtime/model-preflight.json",
+            "runtime/runtime-summary.json",
+            "sweep/final/leaderboard.json",
+            "sweep/final/pareto-frontier.json",
+            "sweep/final/decision-summary.json",
+            "sweep/raw-results/candidate.json",
+        }
+    )
+    assert all(store.verify_artifact(artifact) for artifact in run_task.artifacts)
+    assert calls == [(config, run_root.resolve())]
+
+
+def test_adapter_retries_runtime_model_transport_failure(tmp_path, monkeypatch):
+    config, _ = _fixture_cache(tmp_path)
+    run_root = tmp_path / "run"
+    _write_frozen_notes(run_root)
+    adapter = create_adapter(config, run_root)
+    store = RunStore(run_root)
+    state = store.create(
+        run_id="fixture-runtime-transport",
+        fingerprints={"fixture": "v1"},
+        budget_seconds=60,
+    )
+    runner = OvernightRunner(state=state, store=store, retry_delays=())
+
+    def fake_runtime(_config, _run_root):
+        transport = ModelTransportError("Ollama timed out")
+        raise researchqa_live.researchqa_runtime.ResearchQARuntimeError(
+            "runtime failed"
+        ) from transport
+
+    monkeypatch.setattr(
+        researchqa_live.researchqa_runtime,
+        "run_researchqa_runtime",
+        fake_runtime,
+    )
+    spec = tuple(adapter.task_specs("run", state))[0]
+
+    with pytest.raises(TransientTaskError, match="runtime failed"):
+        runner.run_task(spec, adapter.run_task)
+
+    task = state.tasks[spec.task_id(state.run_id)]
+    assert task.status is TaskStatus.FAILED
 
 
 @pytest.mark.skipif(

@@ -1,10 +1,10 @@
-"""Minimal live rq-2 source/note preparation adapter.
+"""Fail-closed live rq-2 source, canary, and retrieval adapter.
 
 This module bridges the audited ignored ResearchQA cache to the generic
-overnight runner.  It does not generate notes or run retrieval.  ``prepare``
-materializes hash-bound source manifests, native-coordinate IR, non-PDF source
-packets, and scanner ``NoteJob`` records.  ``canary`` and ``run`` deliberately
-block until their live execution loops are connected.
+overnight runner. ``prepare`` materializes hash-bound source manifests,
+native-coordinate IR, non-PDF source packets, and scanner ``NoteJob`` records.
+The parent process performs note generation and writes a hash-bound canary
+marker. ``run`` consumes a complete frozen note set through the live runtime.
 """
 
 from __future__ import annotations
@@ -19,16 +19,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from benchmarks import researchqa_runtime
 from benchmarks.overnight import (
+    ArtifactRecord,
     BlockedTaskError,
     DeterministicTaskError,
     RunState,
+    RunStore,
     TaskContext,
     TaskOutput,
     TaskSpec,
+    TransientTaskError,
     fingerprint_payload,
     sha256_path,
 )
+from benchmarks.researchqa_models import ModelTransportError
 from benchmarks.researchqa_notes import (
     NoteJob,
     write_native_source_packets,
@@ -49,7 +54,10 @@ from benchmarks.researchqa_sources import (
 SCHEMA_VERSION = 1
 _PAPER_ID = re.compile(r"^W[1-9][0-9]*$")
 _PREPARE_COMMAND = "prepare"
-_BLOCKED_COMMANDS = frozenset({"canary", "run"})
+_CANARY_COMMAND = "canary"
+_RUN_COMMAND = "run"
+_CANARY_PAPER_ID = "W2792307011"
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
 
 class ResearchQALiveError(ValueError):
@@ -731,8 +739,300 @@ def _prepare_input_fingerprint(config: Mapping[str, Any]) -> str:
     )
 
 
+def _require_run_owned_file(
+    path: str | Path,
+    *,
+    run_root: Path,
+    label: str,
+) -> Path:
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = run_root / candidate
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(run_root)
+    except ValueError as exc:
+        raise ResearchQALiveError(
+            f"{label} escapes the run root: {resolved}"
+        ) from exc
+    if not resolved.is_file():
+        raise ResearchQALiveError(f"{label} does not exist: {resolved}")
+    return resolved
+
+
+def _read_run_json(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ResearchQALiveError(f"{label} does not exist: {path}") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ResearchQALiveError(f"{label} is not valid UTF-8 JSON: {path}") from exc
+    if not isinstance(value, dict):
+        raise ResearchQALiveError(f"{label} must be a JSON object: {path}")
+    return value
+
+
+def _relative_run_path(path: Path, run_root: Path) -> str:
+    return path.resolve(strict=False).relative_to(run_root).as_posix()
+
+
+def _path_snapshot(path: Path, run_root: Path) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {
+        "path": _relative_run_path(path, run_root),
+        "exists": path.is_file(),
+    }
+    if path.is_file():
+        size, digest = sha256_path(path)
+        snapshot.update({"bytes": size, "sha256": digest})
+    return snapshot
+
+
+def _canary_marker_path(run_root: Path) -> Path:
+    return run_root / "note-runs" / "canary-pass.json"
+
+
+def _canary_input_fingerprint(run_root: Path) -> str:
+    marker_path = _canary_marker_path(run_root)
+    return fingerprint_payload(
+        {
+            "adapter_schema_version": SCHEMA_VERSION,
+            "command": _CANARY_COMMAND,
+            "marker": _path_snapshot(marker_path, run_root),
+        }
+    )
+
+
+def _marker_artifact_value(
+    marker: Mapping[str, Any],
+    *,
+    artifact: str,
+    field: str,
+) -> object | None:
+    value = marker.get(f"{artifact}_{field}")
+    if value is not None:
+        return value
+    nested = marker.get(artifact)
+    if isinstance(nested, Mapping):
+        return nested.get(field)
+    artifacts = marker.get("artifacts")
+    if isinstance(artifacts, Mapping):
+        nested = artifacts.get(artifact)
+        if isinstance(nested, Mapping):
+            return nested.get(field)
+    return None
+
+
+def _default_canary_artifact_paths(run_root: Path) -> dict[str, Path]:
+    jobs_path = run_root / "note-runs" / "note-jobs.jsonl"
+    jobs = _read_jsonl(jobs_path)
+    matches = [
+        row
+        for row in jobs
+        if str(row.get("paper_id") or "") == _CANARY_PAPER_ID
+    ]
+    if len(matches) != 1:
+        raise ResearchQALiveError(
+            f"note jobs must contain exactly one canary {_CANARY_PAPER_ID}, "
+            f"found {len(matches)}"
+        )
+    run_dir_value = matches[0].get("run_dir")
+    if not isinstance(run_dir_value, str) or not run_dir_value:
+        raise ResearchQALiveError("canary note job does not contain run_dir")
+    run_dir = Path(run_dir_value)
+    return {
+        "note": run_dir / "04-rendered-note.md",
+        "draft": run_dir / "02-note-draft.json",
+        "audit": run_dir / "06-audit.json",
+    }
+
+
+def _zero_defect_count(value: object, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value != 0:
+        raise ResearchQALiveError(f"{label} must be integer 0")
+    return value
+
+
+def _validate_canary_marker(run_root: Path) -> dict[str, Any]:
+    marker_path = _canary_marker_path(run_root)
+    if not marker_path.is_file():
+        raise FileNotFoundError(marker_path)
+    marker = _read_run_json(marker_path, label="canary pass marker")
+    if marker.get("paper_id") != _CANARY_PAPER_ID:
+        raise ResearchQALiveError(
+            f"canary pass marker paper_id must be {_CANARY_PAPER_ID}"
+        )
+    if marker.get("verdict") != "PASS":
+        raise ResearchQALiveError("canary pass marker verdict must be PASS")
+    _zero_defect_count(marker.get("p0"), label="canary marker p0")
+    _zero_defect_count(marker.get("p1"), label="canary marker p1")
+
+    path_values = {
+        artifact: _marker_artifact_value(
+            marker,
+            artifact=artifact,
+            field="path",
+        )
+        for artifact in ("note", "draft", "audit")
+    }
+    if any(value is None for value in path_values.values()):
+        defaults = _default_canary_artifact_paths(run_root)
+        path_values = {
+            artifact: value if value is not None else defaults[artifact]
+            for artifact, value in path_values.items()
+        }
+
+    artifact_paths: dict[str, Path] = {}
+    artifact_hashes: dict[str, str] = {}
+    for artifact in ("note", "draft", "audit"):
+        expected_sha = _marker_artifact_value(
+            marker,
+            artifact=artifact,
+            field="sha256",
+        )
+        if not isinstance(expected_sha, str) or not _SHA256.fullmatch(
+            expected_sha
+        ):
+            raise ResearchQALiveError(
+                f"canary marker {artifact}_sha256 is invalid"
+            )
+        path = _require_run_owned_file(
+            path_values[artifact],
+            run_root=run_root,
+            label=f"canary {artifact}",
+        )
+        _, actual_sha = sha256_path(path)
+        if actual_sha != expected_sha:
+            raise ResearchQALiveError(
+                f"canary {artifact} SHA-256 mismatch"
+            )
+        artifact_paths[artifact] = path
+        artifact_hashes[artifact] = actual_sha
+
+    audit = _read_run_json(artifact_paths["audit"], label="canary audit")
+    if audit.get("paper_id") != _CANARY_PAPER_ID:
+        raise ResearchQALiveError(
+            f"canary audit paper_id must be {_CANARY_PAPER_ID}"
+        )
+    if audit.get("verdict") != "PASS":
+        raise ResearchQALiveError("canary audit verdict must be PASS")
+    _zero_defect_count(audit.get("p0"), label="canary audit p0")
+    _zero_defect_count(audit.get("p1"), label="canary audit p1")
+    for artifact in ("note", "draft"):
+        if audit.get(f"{artifact}_sha256") != artifact_hashes[artifact]:
+            raise ResearchQALiveError(
+                f"canary audit does not bind the {artifact} SHA-256"
+            )
+
+    return {
+        "marker_path": marker_path,
+        "artifact_paths": artifact_paths,
+        "artifact_hashes": artifact_hashes,
+        "paper_id": _CANARY_PAPER_ID,
+        "verdict": "PASS",
+        "p0": 0,
+        "p1": 0,
+    }
+
+
+def _frozen_manifest_path(run_root: Path) -> Path:
+    return run_root / "note-runs" / "frozen" / "frozen-notes.jsonl"
+
+
+def _frozen_input_snapshot(run_root: Path) -> dict[str, Any]:
+    manifest_path = _frozen_manifest_path(run_root)
+    notes_root = manifest_path.parent / "notes"
+    note_snapshots = []
+    if notes_root.is_dir():
+        note_snapshots = [
+            _path_snapshot(path, run_root)
+            for path in sorted(notes_root.glob("*.md"))
+            if path.is_file()
+        ]
+    return {
+        "manifest": _path_snapshot(manifest_path, run_root),
+        "notes": note_snapshots,
+    }
+
+
+def _frozen_input_fingerprint(run_root: Path) -> str:
+    return fingerprint_payload(
+        {
+            "adapter_schema_version": SCHEMA_VERSION,
+            "command": _RUN_COMMAND,
+            "frozen_notes": _frozen_input_snapshot(run_root),
+        }
+    )
+
+
+def _validate_frozen_notes(run_root: Path) -> tuple[Path, tuple[Path, ...]]:
+    manifest_path = _frozen_manifest_path(run_root)
+    if not manifest_path.is_file():
+        raise FileNotFoundError(manifest_path)
+    rows = _read_jsonl(manifest_path)
+    if len(rows) != researchqa_runtime.EXPECTED_PAPER_COUNT:
+        raise ResearchQALiveError(
+            "frozen note manifest must contain exactly "
+            f"{researchqa_runtime.EXPECTED_PAPER_COUNT} rows, found {len(rows)}"
+        )
+
+    seen: set[str] = set()
+    note_paths: list[Path] = []
+    for index, row in enumerate(rows, 1):
+        paper_id = normalize_paper_id(row.get("paper_id"))
+        if row.get("paper_id") != paper_id:
+            raise ResearchQALiveError(
+                f"frozen note row {index} paper_id must be normalized"
+            )
+        if paper_id in seen:
+            raise ResearchQALiveError(
+                f"frozen note manifest contains duplicate paper_id {paper_id}"
+            )
+        seen.add(paper_id)
+        expected_sha = row.get("note_sha256")
+        if not isinstance(expected_sha, str) or not _SHA256.fullmatch(
+            expected_sha
+        ):
+            raise ResearchQALiveError(
+                f"frozen note {paper_id} has invalid note_sha256"
+            )
+        note_path = _require_run_owned_file(
+            manifest_path.parent / "notes" / f"{paper_id}.md",
+            run_root=run_root,
+            label=f"frozen note {paper_id}",
+        )
+        _, actual_sha = sha256_path(note_path)
+        if actual_sha != expected_sha:
+            raise ResearchQALiveError(
+                f"frozen note SHA-256 mismatch for {paper_id}"
+            )
+        note_paths.append(note_path)
+    return manifest_path, tuple(note_paths)
+
+
+def _artifact_media_type(path: str | Path) -> str:
+    suffix = Path(path).suffix.casefold()
+    if suffix == ".jsonl":
+        return "application/x-ndjson"
+    if suffix == ".json":
+        return "application/json"
+    if suffix == ".md":
+        return "text/markdown"
+    return "application/octet-stream"
+
+
+def _caused_by(error: BaseException, error_type: type[BaseException]) -> bool:
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, error_type):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
 class ResearchQALiveAdapter:
-    """Overnight adapter exposing only the currently implemented live stage."""
+    """Overnight adapter for source preparation and the gated live runtime."""
 
     def __init__(self, config: Mapping[str, Any], run_root: str | Path):
         self.config = dict(config)
@@ -761,15 +1061,12 @@ class ResearchQALiveAdapter:
         if command == _PREPARE_COMMAND:
             input_fingerprint = _prepare_input_fingerprint(self.config)
             stage_id = "sources"
-        elif command in _BLOCKED_COMMANDS:
-            input_fingerprint = fingerprint_payload(
-                {
-                    "adapter_schema_version": SCHEMA_VERSION,
-                    "command": command,
-                    "config_id": config_id,
-                }
-            )
+        elif command == _CANARY_COMMAND:
+            input_fingerprint = _canary_input_fingerprint(self.run_root)
             stage_id = "notes"
+        elif command == _RUN_COMMAND:
+            input_fingerprint = _frozen_input_fingerprint(self.run_root)
+            stage_id = "runtime"
         else:
             raise ResearchQALiveError(f"unsupported live command: {command}")
         return (
@@ -789,12 +1086,10 @@ class ResearchQALiveAdapter:
 
     def run_task(self, context: TaskContext) -> TaskOutput:
         command = str(context.spec.metadata.get("command") or "")
-        if command in _BLOCKED_COMMANDS:
-            raise BlockedTaskError(
-                f"{command} is not connected to the live note/retrieval loop; "
-                "source preparation is available, but this stage cannot be "
-                "reported as successful"
-            )
+        if command == _CANARY_COMMAND:
+            return self._run_canary_task(context)
+        if command == _RUN_COMMAND:
+            return self._run_runtime_task(context)
         if command != _PREPARE_COMMAND:
             raise DeterministicTaskError(
                 f"unexpected ResearchQA live task command: {command!r}"
@@ -821,6 +1116,155 @@ class ResearchQALiveAdapter:
                 for key, value in summary.items()
                 if key not in {"artifact_paths", "note_jobs_path"}
             },
+        )
+
+    def _run_canary_task(self, context: TaskContext) -> TaskOutput:
+        current_fingerprint = _canary_input_fingerprint(self.run_root)
+        if current_fingerprint != context.spec.input_fingerprint:
+            raise DeterministicTaskError(
+                "canary marker changed after task specification"
+            )
+        try:
+            validation = _validate_canary_marker(self.run_root)
+        except FileNotFoundError as exc:
+            raise BlockedTaskError(
+                f"canary pass marker is not available: {exc}"
+            ) from exc
+        except (ValueError, OSError) as exc:
+            raise DeterministicTaskError(str(exc)) from exc
+
+        paths = (
+            validation["marker_path"],
+            validation["artifact_paths"]["note"],
+            validation["artifact_paths"]["draft"],
+            validation["artifact_paths"]["audit"],
+        )
+        return TaskOutput(
+            artifacts=tuple(
+                context.store.artifact_record(
+                    path,
+                    media_type=_artifact_media_type(path),
+                )
+                for path in paths
+            ),
+            metadata={
+                "paper_id": validation["paper_id"],
+                "verdict": validation["verdict"],
+                "p0": validation["p0"],
+                "p1": validation["p1"],
+                "note_sha256": validation["artifact_hashes"]["note"],
+                "draft_sha256": validation["artifact_hashes"]["draft"],
+                "audit_sha256": validation["artifact_hashes"]["audit"],
+            },
+        )
+
+    def _run_runtime_task(self, context: TaskContext) -> TaskOutput:
+        current_fingerprint = _frozen_input_fingerprint(self.run_root)
+        if current_fingerprint != context.spec.input_fingerprint:
+            raise DeterministicTaskError(
+                "frozen notes changed after task specification"
+            )
+        try:
+            _validate_frozen_notes(self.run_root)
+        except FileNotFoundError as exc:
+            raise BlockedTaskError(
+                f"frozen note manifest is not available: {exc}"
+            ) from exc
+        except (ValueError, OSError) as exc:
+            raise DeterministicTaskError(str(exc)) from exc
+
+        try:
+            result = researchqa_runtime.run_researchqa_runtime(
+                self.config,
+                self.run_root,
+            )
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except researchqa_runtime.ResearchQARuntimeError as exc:
+            if _caused_by(exc, ModelTransportError):
+                raise TransientTaskError(str(exc)) from exc
+            raise DeterministicTaskError(str(exc)) from exc
+        except (ConnectionError, TimeoutError) as exc:
+            raise BlockedTaskError(str(exc)) from exc
+        except Exception as exc:
+            raise DeterministicTaskError(
+                f"unexpected ResearchQA runtime failure: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+        try:
+            summary_path = _require_run_owned_file(
+                result.runtime_summary_path,
+                run_root=self.run_root,
+                label="runtime summary",
+            )
+            summary = _read_run_json(summary_path, label="runtime summary")
+            if summary.get("status") != "completed":
+                raise ResearchQALiveError(
+                    "runtime summary status must be completed"
+                )
+            sweep_paths = tuple(result.sweep_result.artifact_paths)
+            candidate_paths = (
+                Path(result.model_preflight_path),
+                summary_path,
+                *(Path(path) for path in sweep_paths),
+            )
+            unique_paths: list[Path] = []
+            seen: set[Path] = set()
+            for path in candidate_paths:
+                owned = _require_run_owned_file(
+                    path,
+                    run_root=self.run_root,
+                    label="runtime artifact",
+                )
+                if owned not in seen:
+                    seen.add(owned)
+                    unique_paths.append(owned)
+        except (AttributeError, TypeError, ValueError, OSError) as exc:
+            raise DeterministicTaskError(str(exc)) from exc
+
+        return TaskOutput(
+            artifacts=tuple(
+                context.store.artifact_record(
+                    path,
+                    media_type=_artifact_media_type(path),
+                )
+                for path in unique_paths
+            ),
+            metadata={
+                "status": "completed",
+                "provisional_winner": result.sweep_result.provisional_winner,
+                "runtime_summary_path": _relative_run_path(
+                    summary_path,
+                    self.run_root,
+                ),
+            },
+        )
+
+    def write_report(
+        self,
+        state: RunState,
+        store: RunStore,
+    ) -> tuple[ArtifactRecord, ...]:
+        del state
+        summary_path = self.run_root / "runtime" / "runtime-summary.json"
+        if not summary_path.is_file():
+            return ()
+        summary = _read_run_json(summary_path, label="runtime summary")
+        if summary.get("status") != "completed":
+            return ()
+        paths = (
+            self.run_root / "sweep" / "final" / "leaderboard.json",
+            self.run_root / "sweep" / "final" / "pareto-frontier.json",
+            self.run_root / "sweep" / "final" / "decision-summary.json",
+            summary_path,
+        )
+        return tuple(
+            store.artifact_record(
+                path,
+                media_type="application/json",
+            )
+            for path in paths
         )
 
 
