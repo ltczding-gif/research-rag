@@ -55,8 +55,10 @@ def test_s5_generated_note_fixtures_are_complete_and_path_safe():
             assert record["rule_scope"] == "active-domain"
             assert record["promotion_status"] == "eligible-for-human-review"
         else:
-            assert record["rule_scope"] == "legacy-domain-mixed"
-            assert record["promotion_status"] == "blocked-domain-pack-mismatch"
+            assert record["rule_scope"] == "field-neutral"
+            assert record["promotion_status"] == "eligible-for-human-review"
+            assert "工业应用潜力" not in note
+            assert not re.search(r"\[SI p\.S\d+", note)
 
 
 def test_generated_note_manifest_contains_reproducibility_metadata():
@@ -68,3 +70,11 @@ def test_generated_note_manifest_contains_reproducibility_metadata():
         assert record["generated_at"].endswith("+00:00")
         assert record["domain_pack"]
         assert record["note_template"]
+        assert isinstance(record["repair_applied"], bool)
+        if record["repair_applied"]:
+            assert record["repair_model"] == "gpt-5.6-sol"
+            assert re.fullmatch(r"[0-9a-f]{64}", record["repair_prompt_sha256"])
+            assert re.fullmatch(r"[0-9a-f]{64}", record["repair_brief_sha256"])
+            assert re.fullmatch(
+                r"[0-9a-f]{64}", record["pre_repair_candidate_json_sha256"]
+            )

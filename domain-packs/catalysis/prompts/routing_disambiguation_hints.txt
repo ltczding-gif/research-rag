@@ -11,6 +11,12 @@
 
 ## Catalysis routing tie-breakers
 
+- Active-pack boundary gate:
+  - Treat a template as dedicated only when both the document shape and the primary scientific domain belong to this catalysis pack.
+  - If the primary domain is biomedicine, software/ML, environment/geoscience, social science/economics, or another out-of-pack field, route to `generic-research-note` even when the paper is experimental, methods-heavy, or theory-heavy.
+  - Use `foundational-theory` only when the theory's scientific object is catalysis, electrochemistry, surface science, materials, or a directly supporting transport/kinetics problem. Formal reasoning or ML methodology outside those domains routes to `generic-research-note`.
+  - Use `methods-or-materials-synthesis` only for materials synthesis, fabrication, or an in-pack experimental protocol. General software, ML, statistical, clinical, survey, or earth-system methods route to `generic-research-note`.
+
 - Electrocatalysis vs. thermocatalysis vs. photocatalysis:
   - If the paper's primary independent variable is **applied potential or current**, route to `electrocatalysis-experimental`.
   - If the primary independent variable is **temperature, pressure, or partial pressure**, route to `thermocatalysis-experimental`.

@@ -18,6 +18,20 @@ BOOTSTRAP_GENERIC = (
     / "templates"
     / "generic-research-note.txt"
 )
+CATALYSIS_ROUTING_HINTS = (
+    REPO_ROOT
+    / "domain-packs"
+    / "catalysis"
+    / "prompts"
+    / "routing_disambiguation_hints.txt"
+)
+BOOTSTRAP_ROUTING_HINTS = (
+    REPO_ROOT
+    / "domain-packs"
+    / "_template"
+    / "prompts"
+    / "routing_disambiguation_hints.txt"
+)
 
 
 def test_generic_system_prompt_excludes_domain_guidance(monkeypatch):
@@ -72,8 +86,17 @@ def test_generic_template_is_field_neutral_and_kept_in_sync():
     assert "## 审稿人视角（Adaptive Red-Team Verdict）" in catalysis
     assert "只审查 3–7 个 load-bearing claims" in catalysis
     assert "最终输出不超过三个 surviving concerns" in catalysis
+    assert "不得写成 `[SI p.S1]`" in catalysis
+    assert "不得把 `N 个关联` 改写成 `N 个独立实体`" in catalysis
+    assert "不列举或导入当前 active pack" in catalysis
+    assert "按 claim 实际限定后的强度进行裁决" in catalysis
+    assert "严重性只相对该行原样写出的 bounded claim" in catalysis
+    assert "必须在逻辑上能够区分表中所写的替代解释" in catalysis
+    assert "每个 major concern 只能指定一项最有判别力的补证设计" in catalysis
+    assert "不得合并 `timeout/unknown`" in catalysis
+    assert "不等于“按成功结果筛选”" in catalysis
     assert "具体输出结构在 reviewer-lens 方案确认后冻结" not in catalysis
-    assert len(catalysis.splitlines()) <= 230
+    assert len(catalysis.splitlines()) <= 240
 
 
 def test_note_generator_prompt_records_rule_scope():
@@ -115,3 +138,14 @@ def test_catalysis_pack_cannot_leak_into_actual_generic_prompt(monkeypatch):
     assert "## Catalysis Domain Quality Rules" not in rules
     assert "### Catalysis Trap Scan" not in rules
     assert "恰好四个领域中立维度" in rules
+
+
+def test_profiler_routes_out_of_pack_methods_and_theory_to_generic():
+    catalysis = CATALYSIS_ROUTING_HINTS.read_text(encoding="utf-8")
+    bootstrap = BOOTSTRAP_ROUTING_HINTS.read_text(encoding="utf-8")
+
+    assert "Active-pack boundary gate" in catalysis
+    assert "software/ML" in catalysis
+    assert "Formal reasoning or ML methodology" in catalysis
+    assert "earth-system methods" in catalysis
+    assert "Active-pack boundary gate (required)" in bootstrap

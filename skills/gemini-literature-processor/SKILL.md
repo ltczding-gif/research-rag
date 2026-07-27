@@ -229,6 +229,19 @@ python scanner/gemini_analyze_pdf.py /path/to/paper.pdf \
 `--resume` is idempotent: if both stages are already filled, invocations 2
 and 3 collapse into a single rendering pass.
 
+Use `parent_agent_task.resume_command` from the manifest rather than rebuilding
+the command by hand. It preserves the original canary/vault target, output
+directory, force flag, and model-routing options so a canary run cannot silently
+resume as a live-vault publish.
+
+If an independent cross-audit finds a source-verifiable P1 defect after Stage B,
+do not hand-edit the rendered Markdown and do not ask the original generator to
+self-review. Write a narrow repair brief and build a `note_repair` manifest with
+`benchmarks/scripts/build_note_repair_manifest.py`. Dispatch a fresh sub-agent
+against that manifest, validate its single repaired JSON output, quarantine the
+pre-repair candidate, resume rendering, and cross-audit again. The fixture
+freeze records both generation and repair provenance.
+
 **Batch — same loop, run on `zotero_batch_scanner.py`:**
 
 ```bash

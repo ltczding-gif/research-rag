@@ -1709,6 +1709,24 @@ def make_backend_from_args(args, *, run_dir=None):
             overrides["run_dir_provider"] = lambda: run_dir
         if resume_dir:
             overrides["resume_dir"] = resume_dir
+        resume_cli_args = []
+        if getattr(args, "force", False):
+            resume_cli_args.append("--force")
+        for flag, attribute in (
+            ("--model", "model"),
+            ("--model-router", "model_router"),
+            ("--routing-policy", "routing_policy"),
+            ("--flash-model", "flash_model"),
+            ("--pro-model", "pro_model"),
+            ("--out-dir", "out_dir"),
+            ("--publish-target", "publish_target"),
+            ("--post-publish", "post_publish"),
+            ("--note-index-file", "note_index_file"),
+        ):
+            value = getattr(args, attribute, None)
+            if value is not None:
+                resume_cli_args.extend((flag, str(value)))
+        overrides["resume_cli_args"] = resume_cli_args
     elif resume_dir:
         # User passed --resume but selected a non-subagent backend. The flag
         # has no meaning there; warn loudly so they don't think it worked.

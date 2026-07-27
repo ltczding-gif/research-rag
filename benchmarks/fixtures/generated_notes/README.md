@@ -4,12 +4,15 @@ These five files are the reproducible S5 **candidate outputs**, not reference
 notes and not gold data. Each candidate was produced through the repository's
 two-stage subagent protocol from the paper's main PDF and SI PDF, rendered by
 the normal scanner adapter, and required to pass canary validation before it
-was frozen here.
+was frozen here. When an independent cross-audit found a source-verifiable P1
+defect, a fresh subagent applied a narrow manifest-driven repair to the
+candidate JSON before it was rendered and audited again.
 
 `manifest.jsonl` records the backend, model, domain pack, routed template,
 generation time, run id, prompt fingerprint, candidate JSON checksum, rendered
-note checksum, and review status. Local absolute PDF paths are replaced with
-benchmark-relative artifact paths before commit.
+note checksum, repair provenance when applicable, and review status. Local
+absolute PDF paths are replaced with benchmark-relative artifact paths before
+commit.
 
 The fixtures intentionally remain unchanged when a human later edits the
 corresponding reference note. That preserves the generated-note baseline for
@@ -32,33 +35,27 @@ route. The four missing template families are candidates for later domain-pack
 iterations, after S5 human review identifies which sections and scoring axes
 actually improve retrieval and note quality.
 
-## Known baseline defects and promotion gate
+## Field-neutral regeneration and promotion gate
 
-These fixtures were generated before the field-neutral generic contract was
-added. At that time, the four non-catalysis candidates inherited
-catalysis-specific seed guidance, filename semantics, and the `工业应用潜力`
-scoring axis even though Stage A correctly routed their note bodies to
-`generic-research-note`. This was a domain-pack isolation defect, not acceptable
-cross-domain behavior.
+The four non-catalysis fixtures were regenerated after the generic contract
+was made field-neutral. Their Stage B manifests exclude catalysis-specific seed
+guidance, naming semantics, and quality axes; their records therefore use
+`rule_scope: field-neutral`. The catalysis candidate continues to use its
+dedicated active-domain template.
 
-The manifest consequently marks those four fixtures
-`rule_scope: legacy-domain-mixed` and
-`promotion_status: blocked-domain-pack-mismatch`. They remain useful as an
-honest pre-fix snapshot, but they must not be copied or lightly edited into
-gold notes. The pipeline now excludes active domain-pack guidance and quality
-rules whenever `generic-research-note` is selected. Regenerate these four
-candidates under `rule_scope: field-neutral` before human review. The catalysis
-candidate is marked `eligible-for-human-review`; it is still not gold until a
-person verifies it against the main PDF and SI.
+All five records are `eligible-for-human-review`, but none is gold. This status
+means only that the candidate passed the repository protocol, canary checks,
+and independent P0/P1 cross-audit. A person must still verify the five source
+sets before corrected copies can enter `benchmarks/gold/notes/`.
 
-The current citation surface also mixes `[p.X]` for the main article with
-`[SI p.X]` for supplementary information. A future cross-document citation
-contract should normalize the first form to `[Main p.X]` before automated
-source-level scoring.
+Cross-document citations use numeric physical PDF pages:
+`[Main p.X]` for the article and `[SI p.X]` for supplementary information.
+Printed labels such as `S1` may be described in prose but cannot replace the
+physical page number in the citation token.
 
 ## Maintainer refresh
 
-After completing five validated local subagent runs:
+After completing five validated Wave 0B2 local subagent runs:
 
 ```bash
 python benchmarks/scripts/freeze_generated_notes.py

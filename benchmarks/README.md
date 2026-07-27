@@ -16,10 +16,12 @@ CC BY 4.0 evidence, and SHA-256 checksums. See
 [`corpus/SOURCES.md`](corpus/SOURCES.md) for the selection and license record.
 Five main-plus-SI candidate notes are also frozen under
 [`fixtures/generated_notes/`](fixtures/generated_notes/). They were generated
-through the repository's subagent protocol, not Gemini, and are explicitly
-marked `human_review_status: pending`; they are not gold. The query, answer,
-claim, evidence-unit, and qrel ledgers remain empty until a human reviews the
-notes and the 25 S5 queries are adjudicated.
+through the repository's manifest-driven subagent protocol, not Gemini. The
+four out-of-pack papers use the field-neutral generic contract; independently
+audited P1 corrections retain separate repair provenance in the fixture
+manifest. Every note remains explicitly marked `human_review_status: pending`;
+none is gold. The query, answer, claim, evidence-unit, and qrel ledgers remain
+empty until a human reviews the notes and the 25 S5 queries are adjudicated.
 
 The contract covers:
 

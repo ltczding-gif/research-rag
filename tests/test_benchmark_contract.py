@@ -15,6 +15,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BENCHMARK_ROOT = REPO_ROOT / "benchmarks"
 
 
+def _ignore_local_benchmark_state(directory: str, names: list[str]) -> set[str]:
+    current = Path(directory)
+    if current == BENCHMARK_ROOT:
+        return {"artifacts"} & set(names)
+    if current == BENCHMARK_ROOT / "corpus":
+        return {"files"} & set(names)
+    return set()
+
+
 def _write_jsonl(path: Path, records: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = "".join(
@@ -37,7 +46,7 @@ def _write_suite(root: Path, suite_id: str, papers: list[str], queries: list[str
 
 def _minimal_valid_root(tmp_path: Path) -> Path:
     root = tmp_path / "benchmarks"
-    shutil.copytree(BENCHMARK_ROOT, root)
+    shutil.copytree(BENCHMARK_ROOT, root, ignore=_ignore_local_benchmark_state)
     sha = "a" * 64
     quote = "The catalyst reached 95 percent selectivity."
     quote_hash = hashlib.sha256(quote.encode("utf-8")).hexdigest()

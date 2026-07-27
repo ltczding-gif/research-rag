@@ -13,7 +13,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RUNS_ROOT = (
-    REPO_ROOT / "benchmarks" / "artifacts" / "wave0b1" / "subagent_pipeline" / "runs"
+    REPO_ROOT / "benchmarks" / "artifacts" / "wave0b2" / "subagent_pipeline" / "runs"
 )
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "benchmarks" / "fixtures" / "generated_notes"
 CORPUS_MANIFEST = REPO_ROOT / "benchmarks" / "corpus" / "manifest.jsonl"
@@ -28,9 +28,7 @@ KNOWN_ISSUES = {
     "papier-2024-proteomic-cancer-risk": [
         "source-conflict-starting-sample-count",
     ],
-    "cornelio-2023-ai-descartes": [
-        "timeout-not-proved-ambiguity",
-    ],
+    "cornelio-2023-ai-descartes": [],
     "dorgeist-2024-terrestrial-carbon-fluxes": [],
     "smith-2024-supply-chain-regulations": [],
 }
@@ -159,6 +157,12 @@ def freeze_notes(runs_root: Path, output_root: Path, domain_pack: str) -> int:
             raise ValueError(f"{paper_id}: run did not pass canary validation")
 
         run_manifest = _read_json(run_dir / "manifest-note_generator.json")
+        repair_manifest_path = run_dir / "manifest-note_repair.json"
+        repair_manifest = (
+            _read_json(repair_manifest_path)
+            if repair_manifest_path.exists()
+            else None
+        )
         candidate_path = run_dir / "02-note-draft.json"
         rendered_path = run_dir / "04-rendered-note.md"
         rendered = rendered_path.read_text(encoding="utf-8")
@@ -176,32 +180,45 @@ def freeze_notes(runs_root: Path, output_root: Path, domain_pack: str) -> int:
         fixture_path = output_root / f"{paper_id}.md"
         fixture_path.write_text(sanitized, encoding="utf-8", newline="\n")
 
-        fixture_records.append(
-            {
-                "schema_version": 1,
-                "paper_id": paper_id,
-                "artifact_path": f"fixtures/generated_notes/{paper_id}.md",
-                "backend": "subagent",
-                "model": run_manifest["model_hint"],
-                "domain_pack": domain_pack,
-                "note_template": note_template,
-                "rule_scope": rule_scope,
-                "generated_at": run_manifest["generated_at"],
-                "source_run_id": run_dir.name,
-                "prompt_sha256": _prompt_sha256(run_manifest),
-                "candidate_json_sha256": _sha256_file(candidate_path),
-                "note_sha256": _sha256_file(fixture_path),
-                "includes_main_pdf": True,
-                "includes_si": True,
-                "human_review_status": "pending",
-                "known_issue_ids": known_issue_ids,
-                "promotion_status": (
-                    "blocked-domain-pack-mismatch"
-                    if "domain-pack-mismatch" in known_issue_ids
-                    else "eligible-for-human-review"
-                ),
-            }
-        )
+        fixture_record = {
+            "schema_version": 1,
+            "paper_id": paper_id,
+            "artifact_path": f"fixtures/generated_notes/{paper_id}.md",
+            "backend": "subagent",
+            "model": run_manifest["model_hint"],
+            "domain_pack": domain_pack,
+            "note_template": note_template,
+            "rule_scope": rule_scope,
+            "generated_at": run_manifest["generated_at"],
+            "source_run_id": run_dir.name,
+            "prompt_sha256": _prompt_sha256(run_manifest),
+            "candidate_json_sha256": _sha256_file(candidate_path),
+            "note_sha256": _sha256_file(fixture_path),
+            "includes_main_pdf": True,
+            "includes_si": True,
+            "human_review_status": "pending",
+            "known_issue_ids": known_issue_ids,
+            "promotion_status": (
+                "blocked-domain-pack-mismatch"
+                if "domain-pack-mismatch" in known_issue_ids
+                else "eligible-for-human-review"
+            ),
+        }
+        if repair_manifest is not None:
+            fixture_record.update(
+                {
+                    "repair_applied": True,
+                    "repair_model": repair_manifest["model_hint"],
+                    "repair_prompt_sha256": _prompt_sha256(repair_manifest),
+                    "repair_brief_sha256": repair_manifest["repair_brief_sha256"],
+                    "pre_repair_candidate_json_sha256": repair_manifest[
+                        "source_candidate_sha256"
+                    ],
+                }
+            )
+        else:
+            fixture_record["repair_applied"] = False
+        fixture_records.append(fixture_record)
 
     manifest_text = "".join(
         json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"

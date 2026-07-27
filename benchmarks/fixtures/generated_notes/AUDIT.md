@@ -1,73 +1,108 @@
 # S5 generated-note cross-audit
 
-Three subagents cross-checked notes that they did not originally draft against
-the corresponding main PDFs and SI PDFs. This audit qualifies the generated
-baseline; it does not constitute the human sign-off required for gold notes.
+These fixtures are model-generated benchmark candidates, not gold notes.
+Independent subagents checked candidates they did not draft against every
+main-PDF and SI-PDF physical page. All generation, repair, and audit work used
+the repository-local `skills/gemini-literature-processor` contract; no
+machine-global skill or external search supplied note content.
 
-## Promotion blockers
+## Final gate
 
-1. **Domain-pack isolation (resolved after this fixture snapshot):** all five runs used the only production domain
-   pack, `catalysis`. The four non-catalysis candidates therefore inherit
-   catalysis-specific seed guidance, naming semantics, and the
-   `工业应用潜力` score. Their manifest records are blocked from gold review
-   until the notes are regenerated with the field-neutral generic rule scope.
-2. **Template coverage:** only the catalyst used a dedicated template. The
-   biomedicine, CS/ML, environment, and social-science papers all used
-   `generic-research-note`. Their domain-specific methods and validity checks
-   are present only opportunistically in prose rather than as stable fields.
-3. **Citation syntax:** main-paper citations use `[p.X]`, while supplementary
-   citations use `[SI p.X]`. A later citation contract should require
-   `[Main p.X]` and `[SI p.X]` for unambiguous automated scoring.
+| Paper | Template scope | Final audit | Residual candidate defects |
+|---|---|---|---|
+| `liu-2024-single-atom-cobalt-orr` | active-domain | eligible for human review | Source-set conflict retained: `95.2` vs `92.2 mA cm^-2` |
+| `papier-2024-proteomic-cancer-risk` | field-neutral | PASS: P0/P1/P2/P3 = 0/0/0/0 | None; unexplained source denominators remain explicit |
+| `cornelio-2023-ai-descartes` | field-neutral | PASS: P0/P1/P2/P3 = 0/0/0/0 | None |
+| `dorgeist-2024-terrestrial-carbon-fluxes` | field-neutral | PASS: P0/P1/P2/P3 = 0/0/0/0 | None |
+| `smith-2024-supply-chain-regulations` | field-neutral | PASS: P0/P1/P2/P3 = 0/0/0/1 | Editorial only: a heading says “three” while two concerns survive |
 
-## Candidate-specific findings
+`PASS` means no P0 or P1 defect remained after repair and re-audit. It does
+not replace the human source verification required for promotion into
+`benchmarks/gold/notes/`.
 
-### `liu-2024-single-atom-cobalt-orr`
+## What the audit changed
 
-- The kinetic current density at 0.85 V conflicts across the source set:
-  the main article reports `95.2 mA cm^-2` on p.4, while SI Table S2 reports
-  `92.2 mA cm^-2` on SI p.39. The candidate presents `95.2` as settled even
-  when discussing Table S2. Gold claims and qrels must preserve this conflict
-  rather than freezing one value silently.
+The first cross-audit found recurring problems that were more general than any
+single paper:
+
+- cross-domain papers could be routed into an in-pack methods or theory
+  template based on document shape alone;
+- participant, sample, response, association, and entity counts could be
+  silently merged or retyped;
+- printed SI labels could be emitted in place of numeric physical PDF pages;
+- timeout, explicit failure, counterexample, unknown, automatic proof, bounded
+  distance, and manual proof could be collapsed;
+- reviewer severity could target a stronger causal or general claim than the
+  bounded claim actually written;
+- a proposed “decisive” test could fail to identify one of its stated
+  alternatives.
+
+The repository contract now guards each failure mode. A source-verifiable P1
+found after Stage B triggers a narrow `note_repair` manifest for a fresh
+subagent. The original candidate is quarantined locally, the repaired JSON is
+schema-validated and rendered through the scanner, and a different subagent
+repeats the source audit. The committed fixture manifest records repair model,
+prompt, brief, and pre-repair candidate fingerprints.
+
+## Candidate-specific verification
 
 ### `papier-2024-proteomic-cancer-risk`
 
-- The source gives two starting proteomics counts in different contexts:
-  `54,306` on main p.8 and `54,221` measured EDTA plasma samples on main p.9.
-  The final observational cohort of `44,645` is unaffected, but a sample-flow
-  answer key must retain both starting counts and their meanings.
-- A future epidemiology/proteomics template should explicitly capture cohort
-  selection, participation bias, missing-data handling, proportional-hazards
-  assumptions, genetic-instrument strength, pleiotropy, and sample overlap.
+- Preserves `54,306`, `54,221`, and `44,645` as distinct participant-flow
+  denominators and does not invent an explanation for the 85-person difference.
+- Distinguishes the `337,543` exome projection ceiling from the `336,823`
+  maximum genetic-analysis sample.
+- Keeps `304` and `83` typed as protein-cancer association counts.
+- States that nine associated proteins are targets of drugs indicated for the
+  corresponding cancer; it does not rewrite this as nine drugs.
+- Records the three TNFRSF14 genetic estimates as odds ratios.
+- Judges the bounded association and prioritization claims at their stated
+  strength rather than penalizing them for not proving causality.
 
 ### `cornelio-2023-ai-descartes`
 
-- A theorem-prover timeout is not proof that a formula is non-derivable. The
-  candidate should distinguish `proved`, `disproved/counterexample`, and
-  `not proved within the run limit`.
-- Several benchmark and reproducibility judgments need explicit SI citations.
-  A future software/ML template should structure task definition, algorithms,
-  baselines, computational budget, ablations, proof status, and reproducibility.
+- Separately records automatic `Yes`, explicit `No`, the demonstrated
+  counterexample, timeout, bounded-distance results, manual parameter
+  instantiation, and the absence of reported `unknown/not tested` instances.
+- Keeps `g5`/`g7` as manual closure after automatic timeout.
+- Reports that five selected full-pipeline tasks succeeded while leaving
+  selection criteria, timing, blinding, and exclusions as unreported; it does
+  not infer selection on prior success.
+- Retains the unfiltered, equal-budget end-to-end evaluation gap as the one
+  surviving major scientific concern.
 
 ### `dorgeist-2024-terrestrial-carbon-fluxes`
 
-- No major factual or main/SI attribution error was found. A future
-  earth-system template should structure simulation variants, equations,
-  counterfactual differences, DGVM ensemble uncertainty, external flux
-  constraints, and code availability instead of repeating them across generic
-  prose sections.
+- Maps all five BLUE settings to their scenario roles and main flux-difference
+  equations.
+- Separates model min-max ranges, standard deviations, external estimate
+  ranges, input sensitivity, and structural uncertainty.
+- Treats `1.4` versus `0.2 GtC yr^-1` as a methodologically non-equivalent
+  cross-study discrepancy, not an internal source conflict.
+- Does not assign local-representation effects specifically to the 20-year
+  smoothing step without source evidence.
+- Uses a two-factor carbon-density × land-use-forcing design when claiming to
+  discriminate the two input branches, and does not use net-flux agreement to
+  validate unobservable components.
 
 ### `smith-2024-supply-chain-regulations`
 
-- No major factual or main/SI attribution error was found. A future empirical
-  social-science template should distinguish respondents from proposal
-  responses, absolute support from forced choice, randomization unit, estimand,
-  clustered uncertainty, preregistration, exclusions, multiple comparisons,
-  external validity, and null-result precision.
+- Separates respondent counts (`6,000` in the main paper; `6,001` in SI),
+  proposal responses (`20,000/20,000/20,010`), and the source-labelled
+  analytical sample/observations (`1,761/1,615/1,723`).
+- Uses numeric SI physical-page citations only.
+- Keeps online-sample support and cross-study similarity descriptive, while
+  preserving the stronger mechanism and null-effect concerns where the source
+  warrants them.
+- Avoids statistical-significance wording for an untested cross-country
+  difference.
 
-## Recommended next iteration
+## Remaining product limitation
 
-Regenerate the four blocked candidates with the field-neutral generic contract.
-Dedicated domain templates can still be added later when S5 evidence shows
-that they improve note quality, but they are no longer a prerequisite for a
-valid generic candidate. Only after regeneration should a person review the
-five source sets and promote corrected copies into `benchmarks/gold/notes/`.
+Dedicated-template coverage is still only 1/5. The four field-neutral generic
+notes are now valid candidates, but the benchmark should use human review to
+decide whether epidemiology/proteomics, software/formal reasoning,
+earth-system modelling, or survey/conjoint templates measurably improve note
+quality and retrieval. The next gate is human source review followed by the
+25-query S5 annotation and qrel pass; generic candidates must not be promoted
+to gold by copying them unchanged.

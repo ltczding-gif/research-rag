@@ -229,6 +229,38 @@ def test_manifest_resume_command_contains_real_paths(tmp_path, fake_pdf):
     assert "--backend subagent" in cmd
 
 
+def test_manifest_resume_command_preserves_safe_scanner_options(tmp_path, fake_pdf):
+    run_dir = tmp_path / "run"
+    canary_dir = tmp_path / "canary notes"
+    backend = make_backend(
+        "subagent",
+        run_dir_provider=lambda: run_dir,
+        resume_cli_args=[
+            "--force",
+            "--model",
+            "gpt-test",
+            "--out-dir",
+            str(canary_dir),
+            "--publish-target",
+            "canary",
+            "--post-publish",
+            "none",
+        ],
+    )
+    backend.attach_pdfs([fake_pdf], combined_hash="testhash")
+
+    with pytest.raises(SubagentManifestPending) as exc_info:
+        backend.call_model(**_profiler_kwargs())
+
+    payload = json.loads(exc_info.value.manifest_path.read_text(encoding="utf-8"))
+    cmd = payload["parent_agent_task"]["resume_command"]
+    assert "--force" in cmd
+    assert '--model "gpt-test"' in cmd
+    assert f'--out-dir "{canary_dir}"' in cmd
+    assert '--publish-target "canary"' in cmd
+    assert '--post-publish "none"' in cmd
+
+
 def test_attach_without_profiler_paths_is_backwards_compatible(tmp_path, fake_pdf):
     """When `profiler_pdf_paths` is not passed (the legacy 4-tests
     invariant), Stage A must continue to see the full PDF set."""
