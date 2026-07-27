@@ -74,13 +74,14 @@ def test_balanced_assignment_and_audit_rotation_are_deterministic():
 def test_parse_all_native_coordinate_shapes():
     text = " ".join(
         (
-            "[Main p.5-6]",
+            "[Main p.5, p.7-10]",
             "[SI-01 p.3]",
             "[SI-02 para.14]",
             "[SI-02 table.2 rows.3-5 cols.A-D]",
             '[SI-03 sheet."Table S1" cells.A2:F18]',
             "[SI-04 rows.20-35 cols.model,score]",
             "[AUX-01 para.2]",
+            "[Main p.3-4; SI p.13, p.15]",
         )
     )
     parsed = parse_native_citations(text)
@@ -92,10 +93,16 @@ def test_parse_all_native_coordinate_shapes():
         "xlsx_cells",
         "csv_rows",
         "docx_paragraph",
+        "pdf_page",
+        "pdf_page",
     ]
     assert invalid_native_citations(text) == []
     assert invalid_native_citations("[SI-02 page.3]") == ["[SI-02 page.3]"]
-    assert parsed[0].coordinate == {"page_start": 5, "page_end": 6}
+    assert parsed[0].coordinate == {
+        "page_spans": ((5, 5), (7, 10))
+    }
+    assert parsed[-2].file_id == "Main"
+    assert parsed[-1].file_id == "SI-01"
 
 
 def test_validate_citation_source_type_and_bounds():

@@ -19,14 +19,16 @@ from typing import Any, Iterable, Mapping, Sequence
 
 GENERIC_TEMPLATE = "generic-research-note"
 PASS_VERDICTS = frozenset({"pass", "passed"})
+_PDF_PAGE_TOKEN = r"[1-9]\d*(?:-[1-9]\d*)?"
+_PDF_PAGE_LIST = (
+    rf"{_PDF_PAGE_TOKEN}(?:,\s*(?:p\.)?{_PDF_PAGE_TOKEN})*"
+)
 _MAIN_RE = re.compile(
-    r"\[Main p\.(?P<page_start>[1-9]\d*)"
-    r"(?:-(?P<page_end>[1-9]\d*))?\]"
+    rf"\[Main p\.(?P<pages>{_PDF_PAGE_LIST})\]"
 )
 _SOURCE_FILE_ID = r"(?:SI|AUX)-\d{2}"
 _SI_PDF_RE = re.compile(
-    rf"\[(?P<file>{_SOURCE_FILE_ID}) p\.(?P<page_start>[1-9]\d*)"
-    r"(?:-(?P<page_end>[1-9]\d*))?\]"
+    rf"\[(?P<file>{_SOURCE_FILE_ID}) p\.(?P<pages>{_PDF_PAGE_LIST})\]"
 )
 _SI_PARAGRAPH_RE = re.compile(
     rf"\[(?P<file>{_SOURCE_FILE_ID}) para\.(?P<paragraph>[1-9]\d*)\]"
@@ -45,7 +47,7 @@ _SI_CSV_RE = re.compile(
     r"(?:-(?P<row_end>[1-9]\d*))? cols\.(?P<columns>[^\]\r\n]+)\]"
 )
 _ANY_NATIVE_CITATION_RE = re.compile(
-    rf"\[(?:Main|{_SOURCE_FILE_ID}) [^\]\r\n]+\]"
+    rf"\[(?:Main|SI|{_SOURCE_FILE_ID}) [^\]\r\n]+\]"
 )
 
 
@@ -157,6 +159,14 @@ def rotate_auditors(worker_ids: Sequence[str]) -> dict[str, str]:
 def _match_to_citation(match: re.Match[str], coordinate_type: str) -> NativeCitation:
     fields = {key: value for key, value in match.groupdict().items() if value}
     file_id = fields.pop("file", "Main")
+    pages = fields.pop("pages", None)
+    if pages is not None:
+        fields["page_spans"] = tuple(
+            tuple(int(value) for value in token.split("-", 1))
+            if "-" in token
+            else (int(token), int(token))
+            for token in re.split(r",\s*(?:p\.)?", pages)
+        )
     for key in (
         "page_start",
         "page_end",
@@ -176,7 +186,6 @@ def _match_to_citation(match: re.Match[str], coordinate_type: str) -> NativeCita
 
 
 def parse_native_citations(text: str) -> list[NativeCitation]:
-    matches: list[tuple[int, NativeCitation]] = []
     patterns = (
         (_MAIN_RE, "pdf_page"),
         (_SI_PDF_RE, "pdf_page"),
@@ -185,15 +194,36 @@ def parse_native_citations(text: str) -> list[NativeCitation]:
         (_SI_SHEET_RE, "xlsx_cells"),
         (_SI_CSV_RE, "csv_rows"),
     )
-    occupied: list[tuple[int, int]] = []
-    for pattern, coordinate_type in patterns:
-        for match in pattern.finditer(text):
-            span = match.span()
-            if any(start <= span[0] and span[1] <= end for start, end in occupied):
-                continue
-            occupied.append(span)
-            matches.append((span[0], _match_to_citation(match, coordinate_type)))
-    return [citation for _, citation in sorted(matches, key=lambda item: item[0])]
+    citations: list[NativeCitation] = []
+    for container in _ANY_NATIVE_CITATION_RE.finditer(text):
+        raw = container.group(0)
+        components = [
+            component.strip()
+            for component in raw[1:-1].split(";")
+        ]
+        parsed_components: list[NativeCitation] = []
+        for component in components:
+            if component.startswith("SI "):
+                component = f"SI-01 {component[3:]}"
+            candidate = f"[{component}]"
+            parsed = None
+            for pattern, coordinate_type in patterns:
+                match = pattern.fullmatch(candidate)
+                if match is not None:
+                    value = _match_to_citation(match, coordinate_type)
+                    parsed = NativeCitation(
+                        raw=raw,
+                        file_id=value.file_id,
+                        coordinate_type=value.coordinate_type,
+                        coordinate=value.coordinate,
+                    )
+                    break
+            if parsed is None:
+                parsed_components = []
+                break
+            parsed_components.append(parsed)
+        citations.extend(parsed_components)
+    return citations
 
 
 def invalid_native_citations(text: str) -> list[str]:
@@ -234,11 +264,10 @@ def validate_citation_sources(
             continue
         maximum = record.get("coordinate_max")
         if citation.coordinate_type == "pdf_page" and maximum is not None:
-            page_start = int(citation.coordinate["page_start"])
-            page_end = int(citation.coordinate.get("page_end", page_start))
-            if page_end < page_start:
+            spans = _pdf_page_spans(citation)
+            if any(page_end < page_start for page_start, page_end in spans):
                 errors.append(f"{citation.raw}: page range is reversed")
-            elif page_end > int(maximum):
+            elif any(page_end > int(maximum) for _, page_end in spans):
                 errors.append(f"{citation.raw}: page exceeds source bounds")
         if citation.coordinate_type == "docx_paragraph" and maximum is not None:
             if int(citation.coordinate["paragraph"]) > int(maximum):
@@ -246,13 +275,22 @@ def validate_citation_sources(
     return errors
 
 
+def _pdf_page_spans(
+    citation: NativeCitation,
+) -> tuple[tuple[int, int], ...]:
+    spans = citation.coordinate.get("page_spans")
+    if not isinstance(spans, tuple) or not spans:
+        raise ValueError(f"{citation.raw}: PDF citation has no page spans")
+    return tuple((int(start), int(end)) for start, end in spans)
+
+
 def _atomic_citation_coordinates(citation: NativeCitation) -> tuple[str, ...]:
     if citation.coordinate_type != "pdf_page":
         return (citation.raw,)
-    page_start = int(citation.coordinate["page_start"])
-    page_end = int(citation.coordinate.get("page_end", page_start))
     return tuple(
-        f"[{citation.file_id} p.{page}]" for page in range(page_start, page_end + 1)
+        f"[{citation.file_id} p.{page}]"
+        for page_start, page_end in _pdf_page_spans(citation)
+        for page in range(page_start, page_end + 1)
     )
 
 
