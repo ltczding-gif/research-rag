@@ -1,10 +1,10 @@
 # ADR-003：以 ResearchQA 作为唯一活跃 RAG 迭代基准
 
-**Status:** Accepted for implementation
+**Status:** Accepted for implementation; amended for the `rq-2` overnight sweep
 **Date:** 2026-07-28
 **Decider:** 项目所有者
 **Supersedes:** ADR-002 中的 S5/D20/V20/H60、自建 query/gold 与 note/SI benchmark 计划
-**Keeps:** ADR-002 的 canonical IR、隔离运行、一次只改一个变量族、版本绑定与回滚原则
+**Keeps:** ADR-002 的 canonical IR、隔离运行、版本绑定与回滚原则
 
 ## 1. 决策
 
@@ -16,7 +16,7 @@ ResearchQA 的论文是抽样单位。四个嵌套层级固定为：
 
 | Tier | 每领域论文数 | 总论文数 | 问题数 | 用途 |
 |---|---:|---:|---:|---|
-| `rq-2` | 2 | 20 | 254 | 快速验证 PDF 获取、解析、切分、索引、检索和评分接线；不作质量声明 |
+| `rq-2` | 2 | 20 | 254 | 完成笔记前置、全部候选的正交扫描和少量交叉确认；只产生 provisional winner |
 | `rq-5` | 5 | 50 | 638 | 第一轮跨领域失败分析和单变量迭代 |
 | `rq-10` | 10 | 100 | 1,263 | 扩大样本后的确认与回归 |
 | `rq-all` | 全部 | 494 | 6,211 | 完整公开 benchmark 报告 |
@@ -24,6 +24,10 @@ ResearchQA 的论文是抽样单位。四个嵌套层级固定为：
 每篇入选论文使用 ResearchQA 自带的全部问题。禁止为提高分数而删题、改题、补写答案或
 另行生成问题。四层必须由同一固定 seed 排序产生并保持
 `rq-2 ⊂ rq-5 ⊂ rq-10 ⊂ rq-all`。
+
+当前第一轮只运行 `rq-2`。它在相同的 20 篇论文、冻结笔记和 254 个问题上覆盖全部已批准的
+切分、检索、语料组合和重排序候选，但不运行全部笛卡尔积，也不自动晋级 `rq-5`。各变量族
+先正交扫描，最后只组合各阶段前两名。`rq-2` 结果用于定位组件差异，不能作为公开质量声明。
 
 ## 2. 固定数据源
 
@@ -75,6 +79,8 @@ ResearchQA 的论文是抽样单位。四个嵌套层级固定为：
 - ResearchQA 原始 JSONL；
 - 从 ResearchQA 派生的题目子集；
 - 论文 PDF；
+- 从出版方获取的 supplementary files；
+- 基于 ResearchQA 论文生成、尚未完成发布许可审查的笔记；
 - PDF 提取文本、chunks、embeddings、vector index；
 - 未经专门审查的逐题结果和引用原文。
 
@@ -95,7 +101,7 @@ sha256(seed + NUL + domain + NUL + paper_id)
 
 四层是规模递增实验，不是假装存在四个相互独立的 held-out：
 
-- `rq-2` 只验证链路和明显故障；
+- `rq-2` 验证链路、比较全部已批准候选并产生 provisional winner，不作质量声明；
 - `rq-5` 允许一次基于失败证据的参数修正；
 - 第一次查看 `rq-10` 前必须冻结候选配置；
 - `rq-all` 第一次运行前必须冻结该变量族最终候选；
@@ -103,17 +109,21 @@ sha256(seed + NUL + domain + NUL + paper_id)
 - 一旦依据 `rq-10` 或 `rq-all` 逐题结果继续调参，后续结果只能称 regression，不再称
   held-out confirmation。
 
+当前 `rq-2` 全策略扫描完成后必须停下，由项目所有者审阅晨报并决定是否进入 `rq-5`。
+
 ## 5. 评测链路
 
 ```text
 pinned ResearchQA JSONL
   -> deterministic paper/question tiers
-  -> PDF acquisition from paper_s3_url
-  -> canonical page/span IR
-  -> candidate chunker
-  -> candidate embedder/index
-  -> retrieval
-  -> ResearchQA evidence/answer evaluation
+  -> strict-TLS benchmark PDF acquisition
+  -> official supplementary-material discovery and acquisition
+  -> multi-format canonical source IR
+  -> generic note generation, independent audit and freeze
+  -> ResearchQA evidence-to-benchmark-PDF mapping
+  -> orthogonal chunking/retrieval/source/reranking sweeps
+  -> retrieval-only ResearchQA evidence evaluation
+  -> limited Top-2 interaction confirmation
   -> per-domain, per-question-type and efficiency report
 ```
 
@@ -132,6 +142,24 @@ ResearchQA 字段直接承担 benchmark 合同：
 在评分前，evidence adapter 必须把 `expected_references` 的原文 alternatives 映射到
 canonical page/span。精确匹配失败可进入显式 `unmapped` 队列，但不能静默当作检索失败；
 映射规则本身必须版本化。
+
+ResearchQA 的 primary evidence universe 只包含数据集给出的 benchmark PDF，包括已合并在
+该 PDF 内的 appendix 或 supplementary section。另行下载的 external SI 必须参与笔记生成，
+但 ResearchQA 没有为它提供 gold；因此 SI-only 命中只进入诊断，不能静默作为负样本或
+primary metric 的相关文档。笔记命中也必须回链到 benchmark PDF evidence，才能进入主评分。
+
+`rq-2` 的真实来源审计确认：
+
+- 20/20 个 benchmark PDF 下载和解析成功，共 662 页；
+- 8 篇有已下载的 external SI，共 12 个文件，其中 7 个 PDF、2 个 DOCX、2 个 XLSX、
+  1 个 CSV；
+- 1 篇在 benchmark PDF 内合并了 Supplementary Material；
+- 254 个问题中只有 3 个引用 supplementary/appendix，且都指向已合并在 benchmark PDF
+  内的 Technical Appendix；没有问题引用 external SI。
+
+多格式 SI 使用稳定 `SI-NN` 文件 ID 和原生坐标：PDF 用物理页码，DOCX 用段落或表格坐标，
+XLSX 用工作表和 cell range，CSV 用行范围和列名。不得为了继续使用 `[SI p.X]` 而伪造
+非 PDF 文件页码。旧式单 SI 引用保持兼容；新生成笔记必须使用带文件 ID 的坐标。
 
 ## 6. 活跃 baseline
 
@@ -155,16 +183,18 @@ FastEmbed/MiniLM 只保留为产品快速上手默认和可选 smoke 对照，�
 
 | 变量族 | Primary | Guardrail |
 |---|---|---|
-| chunking | evidence-group Recall@5 | document Recall@5、unmapped rate |
-| dense/lexical/hybrid | evidence-group nDCG@10 | Recall@5 |
-| reranker | evidence-group nDCG@10 | Recall@10、p95 latency |
+| chunking | evidence-group Recall@5 | Recall@10、MRR、unmapped rate |
+| dense/lexical/hybrid | coverage-nDCG@10 | Recall@5、Recall@10、MRR |
+| source composition | coverage-nDCG@10 | PDF 回链率、SI-only diagnostic |
+| reranker | coverage-nDCG@10 | Recall@10、p95 latency |
 | embedding | evidence-group Recall@5 | nDCG@10、index size、build time |
 | answer/agent | answer rubric score | citation precision、grounded refusal |
 
 另行固定：
 
 - multi-hop all-required-groups success@k；
-- adversarial false-answer rate 与 grounded-refusal rate；
+- adversarial 有反驳 evidence 时的 refutation-evidence Recall@5/10；
+- adversarial 没有 reference 时的候选分数分布；检索阶段不宣称拒答正确率；
 - 每领域宏平均和十领域宏平均；
 - 每题型结果；
 - chunks/paper、embedding input、index size、build time、query p50/p95。
@@ -172,6 +202,10 @@ FastEmbed/MiniLM 只保留为产品快速上手默认和可选 smoke 对照，�
 算法变更必须与同一 source revision、同一 tier、同一论文顺序和同一 query 集上的 baseline
 成对比较。不得只报告总平均，不得用 lookup 的数量优势掩盖 multi-hop 或 adversarial
 退化。
+
+Evidence mapping 在策略排名前必须达到全体 evidence groups 至少 95%，且每篇论文至少
+90%。所有候选必须使用相同的可评分集合。coverage-nDCG 只奖励第一次覆盖的新 evidence
+group，重复返回同一 group 不重复得分。
 
 在首轮 baseline 分布产生前，不冻结任意百分比提升阈值。迁移生产默认至少要求：
 
@@ -181,19 +215,28 @@ FastEmbed/MiniLM 只保留为产品快速上手默认和可选 smoke 对照，�
 4. p95 latency 或 index size 超过 1.5 倍时必须有明确质量收益和关闭开关；
 5. 配置、模型、source revision、代码 commit 和硬件记录完整。
 
-## 8. 单变量迭代顺序
+## 8. 当前 `rq-2` 正交扫描顺序
 
-1. **R0 Benchmark adapter**：完成四层生成、PDF 获取、evidence 映射和 C0/Qwen baseline。
-2. **R1 Chunking**：fixed C0、page-aware、section-aware、structure-aware；embedding 与
-   retriever 固定。
-3. **R2 Retrieval**：dense、lexical、hybrid/RRF；获胜 chunker 固定。
-4. **R3 Reranking**：只比较候选池大小和 reranker；chunker/retriever 固定。
-5. **R4 Embedding**：在获胜检索链路上比较 embedding；Qwen 4B 始终保留为质量基线。
-6. **R5 Agent/answer**：只有 component retrieval 稳定后才比较 query expansion、RCS、
-   self-ask 和回答策略。
+1. **R0 Source adapter**：严格 TLS 获取 benchmark PDF，发现并校验官方 SI，构建 PDF、
+   DOCX、XLSX 和 CSV 原生坐标 IR。
+2. **R1 Notes**：20 篇全部使用 field-neutral `generic-research-note`，由子代理生成、另一
+   子代理审计后冻结。官方没有 SI 记 `not_available`；明确存在但无法获取或解析才阻塞。
+3. **R2 Evidence adapter**：把 ResearchQA reference groups 映射到 benchmark PDF
+   page/span，并通过 95%/90% gate。
+4. **R3 Chunking**：扫描 7 个 PDF chunker 和 4 个 note chunker；Qwen 4B、dense、
+   paper-scoped、无 reranker 固定。
+5. **R4 Retrieval**：扫描 dense、BM25 和等权 RRF hybrid；使用 provisional winning
+   chunker。
+6. **R5 Source composition**：扫描 PDF-only、note-to-PDF、PDF+note RRF、
+   note-guided PDF 和 hierarchical PDF。
+7. **R6 Reranking**：扫描 off、Top-20→10、Top-50→10、Top-100→10；质量 reranker 固定。
+8. **R7 Interaction confirmation**：只运行 Top-2 chunker × Top-2 retriever × Top-2
+   source composition × rerank off/on，共最多 16 个组合。
+9. **R8 Stop gate**：生成晨报并停止，不自动进入 `rq-5`。
 
-每个阶段按 `rq-2 -> rq-5 -> freeze -> rq-10 -> freeze -> rq-all` 推进。一个 PR 只改变一个
-变量族；benchmark source、问题和期望答案不能夹带在算法 PR 中修改。
+正交扫描允许在同一设计 PR 中定义多个变量族，但每个候选配置必须独立、可复现、可关闭，
+且评分时一次只比较一个变量族。benchmark source、问题和期望答案不能在算法实现中修改。
+详细合同见 `docs/plans/2026-07-28-rq2-overnight-strategy-sweep-design.md`。
 
 ## 9. 明确不做
 
@@ -201,13 +244,15 @@ FastEmbed/MiniLM 只保留为产品快速上手默认和可选 smoke 对照，�
 
 - 自建或改写 benchmark 问题；
 - 人工补 S5 gold/qrels；
-- note-only、PDF+note 或 main/SI 联动评测；
+- 把 external SI 当作 ResearchQA 已标注 gold；
+- 第一晚运行答案生成、LLM judge、query expansion、RCS 或 self-ask；
+- 在 `rq-2` 完成后自动进入更大层级；
+- 运行全部变量的笛卡尔积；
 - 中文 query 到英文论文的跨语言质量声明；
 - 化学、材料、物理和工程领域泛化声明；
 - 把 ResearchQA 分数解释为完整产品体验。
 
-这些能力只有在 ResearchQA 周期完成并证明值得扩展时，才通过新的 ADR 恢复；不得在当前
-算法迭代中悄悄加入。
+这些能力必须经过新的项目所有者决议；不得在当前隔夜运行中悄悄加入。
 
 ## 10. 本次迁移完成标准
 
@@ -216,8 +261,13 @@ FastEmbed/MiniLM 只保留为产品快速上手默认和可选 smoke 对照，�
 - [x] 定义确定性、嵌套、全问题保留规则；
 - [x] 明确数据不进入 Git 和 CC-BY-NC 边界；
 - [x] 固定 C0 + Qwen 4B 质量 baseline 配置；
-- [ ] 生成并验证四层本地索引；
-- [ ] 下载 `rq-2` PDF 并建立 canonical IR；
+- [x] 下载并审计 20 个 `rq-2` benchmark PDF；
+- [x] 发现、下载并校验当前官方页面暴露的 scientific SI；
+- [x] 批准多格式 SI 原生坐标合同；
+- [x] 批准 `rq-2` 正交扫描、重排序和最多 16 个交叉确认组合；
+- [ ] 实现多格式 source manifest 和 canonical IR；
+- [ ] 生成、交叉审计并冻结 20 篇通用模板笔记；
 - [ ] 完成 ResearchQA evidence-to-page/span adapter；
 - [ ] 产出首份 `rq-2` C0/Qwen baseline；
-- [ ] 按 R1–R5 逐变量推进。
+- [ ] 完成全部 `rq-2` 正交扫描和晨报；
+- [ ] 项目所有者审阅后另行决定是否进入 `rq-5`。
