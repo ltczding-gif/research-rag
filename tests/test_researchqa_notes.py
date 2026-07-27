@@ -80,6 +80,7 @@ def test_parse_all_native_coordinate_shapes():
             "[SI-02 table.2 rows.3-5 cols.A-D]",
             '[SI-03 sheet."Table S1" cells.A2:F18]',
             "[SI-04 rows.20-35 cols.model,score]",
+            "[AUX-01 para.2]",
         )
     )
     parsed = parse_native_citations(text)
@@ -90,6 +91,7 @@ def test_parse_all_native_coordinate_shapes():
         "docx_table",
         "xlsx_cells",
         "csv_rows",
+        "docx_paragraph",
     ]
     assert invalid_native_citations(text) == []
     assert invalid_native_citations("[SI-02 page.3]") == ["[SI-02 page.3]"]

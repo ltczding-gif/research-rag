@@ -410,7 +410,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--run-root", type=Path)
     parser.add_argument(
         "--adapter",
-        default=os.environ.get("RESEARCHQA_OVERNIGHT_ADAPTER"),
+        default=os.environ.get(
+            "RESEARCHQA_OVERNIGHT_ADAPTER",
+            "benchmarks.researchqa_live:create_adapter",
+        ),
         help=(
             "Late-bound module:factory. The factory receives config= and "
             "run_root= and returns task_specs/run_task callbacks."

@@ -20,24 +20,29 @@ from typing import Any, Iterable, Mapping, Sequence
 GENERIC_TEMPLATE = "generic-research-note"
 PASS_VERDICTS = frozenset({"pass", "passed"})
 _MAIN_RE = re.compile(r"\[Main p\.(?P<page>[1-9]\d*)\]")
-_SI_PDF_RE = re.compile(r"\[(?P<file>SI-\d{2}) p\.(?P<page>[1-9]\d*)\]")
+_SOURCE_FILE_ID = r"(?:SI|AUX)-\d{2}"
+_SI_PDF_RE = re.compile(
+    rf"\[(?P<file>{_SOURCE_FILE_ID}) p\.(?P<page>[1-9]\d*)\]"
+)
 _SI_PARAGRAPH_RE = re.compile(
-    r"\[(?P<file>SI-\d{2}) para\.(?P<paragraph>[1-9]\d*)\]"
+    rf"\[(?P<file>{_SOURCE_FILE_ID}) para\.(?P<paragraph>[1-9]\d*)\]"
 )
 _SI_TABLE_RE = re.compile(
-    r"\[(?P<file>SI-\d{2}) table\.(?P<table>[1-9]\d*) "
+    rf"\[(?P<file>{_SOURCE_FILE_ID}) table\.(?P<table>[1-9]\d*) "
     r"rows\.(?P<row_start>[1-9]\d*)(?:-(?P<row_end>[1-9]\d*))? "
     r"cols\.(?P<columns>[A-Z]+(?:-[A-Z]+)?)\]"
 )
 _SI_SHEET_RE = re.compile(
-    r'\[(?P<file>SI-\d{2}) sheet\."(?P<sheet>[^"]+)" '
+    rf'\[(?P<file>{_SOURCE_FILE_ID}) sheet\."(?P<sheet>[^"]+)" '
     r"cells\.(?P<cells>[A-Z]+[1-9]\d*:[A-Z]+[1-9]\d*)\]"
 )
 _SI_CSV_RE = re.compile(
-    r"\[(?P<file>SI-\d{2}) rows\.(?P<row_start>[1-9]\d*)"
+    rf"\[(?P<file>{_SOURCE_FILE_ID}) rows\.(?P<row_start>[1-9]\d*)"
     r"(?:-(?P<row_end>[1-9]\d*))? cols\.(?P<columns>[^\]\r\n]+)\]"
 )
-_ANY_NATIVE_CITATION_RE = re.compile(r"\[(?:Main|SI-\d{2}) [^\]\r\n]+\]")
+_ANY_NATIVE_CITATION_RE = re.compile(
+    rf"\[(?:Main|{_SOURCE_FILE_ID}) [^\]\r\n]+\]"
+)
 
 
 @dataclass(frozen=True)
