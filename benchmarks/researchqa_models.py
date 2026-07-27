@@ -7,6 +7,7 @@ transient retry policy belongs to the overnight runner.
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import importlib
 import json
@@ -34,6 +35,7 @@ OLLAMA_EMBED_MODEL_DIGEST = (
 )
 OLLAMA_EMBED_DIMENSIONS = 2560
 OLLAMA_EMBED_ENDPOINT = "/api/embed"
+OLLAMA_GENERATE_ENDPOINT = "/api/generate"
 OLLAMA_TAGS_ENDPOINT = "/api/tags"
 DEFAULT_NORMALIZATION_REVISION = "exact-text-utf8-v1"
 MODEL_ADAPTER_REVISION = "researchqa-model-adapters-v1"
@@ -241,6 +243,8 @@ class OllamaBatchEmbeddingClient:
         self.timeout_seconds = float(timeout_seconds)
         self.transport = transport or UrllibJsonTransport()
         self._preflight: ModelPreflight | None = None
+        self._cache_only = False
+        self._model_loaded = False
         self.last_cache_hits = 0
         self.last_cache_misses = 0
 
@@ -251,6 +255,10 @@ class OllamaBatchEmbeddingClient:
     @property
     def tags_url(self) -> str:
         return self.base_url + OLLAMA_TAGS_ENDPOINT
+
+    @property
+    def generate_url(self) -> str:
+        return self.base_url + OLLAMA_GENERATE_ENDPOINT
 
     def _request(
         self,
@@ -310,6 +318,7 @@ class OllamaBatchEmbeddingClient:
         self,
         texts: Sequence[str],
     ) -> tuple[tuple[float, ...], ...]:
+        self._model_loaded = True
         response = self._request(
             "POST",
             self.embed_url,
@@ -380,6 +389,52 @@ class OllamaBatchEmbeddingClient:
             },
         )
         return self._preflight
+
+    def enter_cache_only(self) -> None:
+        """Forbid network-backed embedding after one successful preflight."""
+        if self._preflight is None:
+            raise ModelPreflightError(
+                "cache-only mode requires a successful model preflight"
+            )
+        self._cache_only = True
+
+    def release_model(self) -> bool:
+        """Unload this client's fixed Ollama model, at most once per load."""
+        if not self._model_loaded:
+            return False
+        response = self._request(
+            "POST",
+            self.generate_url,
+            payload={
+                "model": self.model_id,
+                "keep_alive": 0,
+            },
+        )
+        expected = {
+            "model": self.model_id,
+            "response": "",
+            "done": True,
+            "done_reason": "unload",
+        }
+        mismatches = {
+            key: response.get(key)
+            for key, value in expected.items()
+            if (
+                response.get(key) is not True
+                if key == "done"
+                else response.get(key) != value
+            )
+        }
+        created_at = response.get("created_at")
+        if not isinstance(created_at, str) or not created_at:
+            mismatches["created_at"] = created_at
+        if mismatches:
+            raise ModelResponseError(
+                "Ollama unload response mismatch: "
+                f"expected {expected}, found {mismatches}"
+            )
+        self._model_loaded = False
+        return True
 
     def _cache_key(self, text: str) -> str:
         return embedding_cache_key(
@@ -472,7 +527,8 @@ class OllamaBatchEmbeddingClient:
             return ()
         if any(not isinstance(text, str) or not text for text in texts):
             raise ValueError("embedding inputs must be non-empty strings")
-        self.preflight()
+        if not self._cache_only:
+            self.preflight()
 
         keys = tuple(self._cache_key(text) for text in texts)
         vectors_by_key: dict[str, tuple[float, ...]] = {}
@@ -492,6 +548,13 @@ class OllamaBatchEmbeddingClient:
             else:
                 missing_by_key[cache_key] = text
 
+        self.last_cache_hits = cache_hits
+        self.last_cache_misses = len(missing_by_key)
+        if missing_by_key and self._cache_only:
+            raise ModelCacheError(
+                "cache-only embedding miss for "
+                f"{len(missing_by_key)} unique input(s)"
+            )
         if missing_by_key:
             missing_keys = tuple(missing_by_key)
             missing_texts = tuple(missing_by_key.values())
@@ -510,8 +573,6 @@ class OllamaBatchEmbeddingClient:
                 )
                 vectors_by_key[cache_key] = vector
 
-        self.last_cache_hits = cache_hits
-        self.last_cache_misses = len(missing_by_key)
         return tuple(vectors_by_key[cache_key] for cache_key in keys)
 
 
@@ -699,7 +760,7 @@ class Qwen3RerankerTransformersAdapter:
 
     def preflight(self) -> ModelPreflight:
         """Load the exact revision and return its deterministic fingerprint."""
-        if self._preflight is not None:
+        if self._preflight is not None and self._model is not None:
             return self._preflight
         self._load()
         assert self._torch is not None
@@ -720,7 +781,7 @@ class Qwen3RerankerTransformersAdapter:
             "false_token_id": self._false_token_id,
             "adapter_revision": MODEL_ADAPTER_REVISION,
         }
-        self._preflight = ModelPreflight(
+        candidate = ModelPreflight(
             provider="huggingface-transformers",
             model_id=self.model_id,
             revision=self.revision,
@@ -752,7 +813,49 @@ class Qwen3RerankerTransformersAdapter:
                 ),
             },
         )
+        if (
+            self._preflight is not None
+            and candidate.to_dict() != self._preflight.to_dict()
+        ):
+            expected = self._preflight.fingerprint
+            found = candidate.fingerprint
+            self.release_model()
+            raise ModelPreflightError(
+                "reranker identity changed after reload: "
+                f"expected {expected}, found {found}"
+            )
+        if self._preflight is None:
+            self._preflight = candidate
         return self._preflight
+
+    def release_model(self) -> bool:
+        """Drop loaded reranker components while preserving proven identity."""
+        had_components = any(
+            value is not None
+            for value in (self._torch, self._tokenizer, self._model)
+        )
+        if not had_components:
+            return False
+        torch = self._torch
+        model = self._model
+        tokenizer = self._tokenizer
+        self._torch = None
+        self._tokenizer = None
+        self._model = None
+        self._prefix_tokens = ()
+        self._suffix_tokens = ()
+        self._true_token_id = None
+        self._false_token_id = None
+        self.last_effective_batch_size = None
+        del model
+        del tokenizer
+        gc.collect()
+        cuda = getattr(torch, "cuda", None)
+        empty_cache = getattr(cuda, "empty_cache", None)
+        if callable(empty_cache):
+            empty_cache()
+        del torch
+        return True
 
     def _batch_features(
         self,
@@ -931,6 +1034,7 @@ __all__ = [
     "OLLAMA_EMBED_ENDPOINT",
     "OLLAMA_EMBED_MODEL_DIGEST",
     "OLLAMA_EMBED_MODEL_ID",
+    "OLLAMA_GENERATE_ENDPOINT",
     "OllamaBatchEmbeddingClient",
     "Qwen3RerankerTransformersAdapter",
     "RERANKER_INSTRUCTION",

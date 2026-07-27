@@ -18,7 +18,7 @@ BENCHMARK_ROOT = REPO_ROOT / "benchmarks"
 def _ignore_local_benchmark_state(directory: str, names: list[str]) -> set[str]:
     current = Path(directory)
     if current == BENCHMARK_ROOT:
-        return {"artifacts"} & set(names)
+        return {"artifacts", ".cache", "__pycache__"} & set(names)
     if current == BENCHMARK_ROOT / "corpus":
         return {"files"} & set(names)
     return set()

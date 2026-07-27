@@ -20,10 +20,12 @@ class FakeTransport:
         digest: str = models.OLLAMA_EMBED_MODEL_DIGEST,
         response_model: str = models.OLLAMA_EMBED_MODEL_ID,
         dimensions: int = models.OLLAMA_EMBED_DIMENSIONS,
+        release_response=None,
     ):
         self.digest = digest
         self.response_model = response_model
         self.dimensions = dimensions
+        self.release_response = release_response
         self.calls = []
 
     def request_json(
@@ -48,6 +50,16 @@ class FakeTransport:
                         },
                     }
                 ]
+            }
+        if url.endswith("/api/generate"):
+            if self.release_response is not None:
+                return self.release_response
+            return {
+                "model": models.OLLAMA_EMBED_MODEL_ID,
+                "created_at": "2026-07-28T00:00:00Z",
+                "response": "",
+                "done": True,
+                "done_reason": "unload",
             }
         assert url.endswith("/api/embed")
         assert payload["truncate"] is False
@@ -216,6 +228,109 @@ def test_ollama_base_url_cannot_override_fixed_api_paths(tmp_path):
         )
 
 
+def test_ollama_release_uses_fixed_keep_alive_zero_request_and_is_idempotent(
+    tmp_path,
+):
+    transport = FakeTransport()
+    client = models.OllamaBatchEmbeddingClient(
+        cache_dir=tmp_path,
+        timeout_seconds=7.0,
+        transport=transport,
+    )
+    client.preflight()
+
+    assert client.release_model() is True
+    assert client.release_model() is False
+    assert transport.calls[-1] == (
+        "POST",
+        "http://localhost:11434/api/generate",
+        {
+            "model": models.OLLAMA_EMBED_MODEL_ID,
+            "keep_alive": 0,
+        },
+        7.0,
+    )
+    assert sum(
+        url.endswith("/api/generate")
+        for _method, url, _payload, _timeout in transport.calls
+    ) == 1
+
+
+@pytest.mark.parametrize(
+    "release_response",
+    [
+        {
+            "model": "wrong-model",
+            "response": "",
+            "done": True,
+            "done_reason": "unload",
+        },
+        {
+            "model": models.OLLAMA_EMBED_MODEL_ID,
+            "created_at": "2026-07-28T00:00:00Z",
+            "response": "",
+            "done": True,
+        },
+        {
+            "model": models.OLLAMA_EMBED_MODEL_ID,
+            "created_at": "2026-07-28T00:00:00Z",
+            "response": "not empty",
+            "done": True,
+            "done_reason": "unload",
+        },
+        {
+            "model": models.OLLAMA_EMBED_MODEL_ID,
+            "created_at": "2026-07-28T00:00:00Z",
+            "response": "",
+            "done": 1,
+            "done_reason": "unload",
+        },
+    ],
+)
+def test_ollama_release_strictly_rejects_mismatched_response(
+    tmp_path,
+    release_response,
+):
+    transport = FakeTransport(release_response=release_response)
+    client = models.OllamaBatchEmbeddingClient(
+        cache_dir=tmp_path,
+        transport=transport,
+    )
+    client.preflight()
+
+    with pytest.raises(models.ModelResponseError, match="unload response"):
+        client.release_model()
+
+    assert transport.calls[-1][1].endswith("/api/generate")
+
+
+def test_ollama_cache_only_requires_preflight_and_never_uses_network(tmp_path):
+    transport = FakeTransport()
+    client = models.OllamaBatchEmbeddingClient(
+        cache_dir=tmp_path,
+        transport=transport,
+    )
+
+    with pytest.raises(models.ModelPreflightError, match="requires"):
+        client.enter_cache_only()
+
+    expected = client.embed_texts(("alpha",))
+    assert client.release_model() is True
+    client.enter_cache_only()
+    calls_before_cache_only_reads = len(transport.calls)
+
+    assert client.embed_texts(("alpha", "alpha")) == (
+        expected[0],
+        expected[0],
+    )
+    with pytest.raises(models.ModelCacheError, match="cache-only.*miss"):
+        client.embed_texts(("not-cached",))
+
+    assert len(transport.calls) == calls_before_cache_only_reads
+    assert client.last_cache_hits == 0
+    assert client.last_cache_misses == 1
+
+
 class FakeScoreVector:
     def __init__(self, values):
         self.values = list(values)
@@ -331,10 +446,18 @@ class FakeTorch:
 
 
 class FakeModel:
-    def __init__(self, revision, *, oom_above=None, always_oom=False):
+    def __init__(
+        self,
+        revision,
+        *,
+        oom_above=None,
+        always_oom=False,
+        dtype="unknown",
+    ):
         self.config = SimpleNamespace(_commit_hash=revision)
         self.oom_above = oom_above
         self.always_oom = always_oom
+        self.dtype = dtype
         self.batch_sizes = []
 
     def __call__(self, **batch):
@@ -492,6 +615,57 @@ def test_reranker_preflight_rejects_resolved_revision_mismatch(tmp_path):
         match="resolved revision mismatch",
     ):
         adapter.preflight()
+
+
+def test_reranker_release_is_idempotent_and_reloads_identical_preflight(
+    tmp_path,
+):
+    loader, calls, torch, _tokenizer, _model = _fake_loader()
+    adapter = models.Qwen3RerankerTransformersAdapter(
+        hf_home=tmp_path,
+        component_loader=loader,
+    )
+    first = adapter.preflight()
+
+    assert adapter.release_model() is True
+    assert adapter._torch is None
+    assert adapter._tokenizer is None
+    assert adapter._model is None
+    assert torch.cuda.empty_cache_calls == 1
+    assert adapter.release_model() is False
+    assert torch.cuda.empty_cache_calls == 1
+
+    second = adapter.preflight()
+
+    assert second is first
+    assert len(calls) == 2
+
+
+def test_reranker_reload_rejects_identity_drift(tmp_path):
+    calls = []
+    dtypes = iter(("float16", "float32"))
+
+    def loader(model_id, revision, hf_home, device, local_files_only):
+        calls.append((model_id, revision, hf_home, device, local_files_only))
+        return (
+            FakeTorch(),
+            FakeTokenizer(revision),
+            FakeModel(revision, dtype=next(dtypes)),
+        )
+
+    adapter = models.Qwen3RerankerTransformersAdapter(
+        hf_home=tmp_path,
+        component_loader=loader,
+    )
+    first = adapter.preflight()
+    adapter.release_model()
+
+    with pytest.raises(models.ModelPreflightError, match="identity changed"):
+        adapter.preflight()
+
+    assert adapter._preflight is first
+    assert adapter._model is None
+    assert len(calls) == 2
 
 
 def test_default_transformers_loader_pins_revision_cache_and_device(
