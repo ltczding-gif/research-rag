@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/config.schema.json",
+  "title": "Benchmark candidate configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "config_id",
+    "description",
+    "extractor",
+    "chunker",
+    "embedding",
+    "retriever",
+    "reranker"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "config_id": {"$ref": "#/$defs/id"},
+    "description": {"type": "string", "minLength": 1},
+    "extractor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "revision": {"type": "string", "minLength": 1}
+      }
+    },
+    "chunker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "size", "step", "min_length"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "size": {"type": "integer", "minimum": 1},
+        "step": {"type": "integer", "minimum": 1},
+        "min_length": {"type": "integer", "minimum": 0}
+      }
+    },
+    "embedding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "revision"],
+      "properties": {
+        "provider": {"enum": ["fastembed", "ollama", "openai-compat"]},
+        "model": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "minLength": 1}
+      }
+    },
+    "retriever": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "distance_metric", "top_k"],
+      "properties": {
+        "mode": {"enum": ["dense", "lexical", "hybrid"]},
+        "distance_metric": {"type": "string", "minLength": 1},
+        "top_k": {"type": "integer", "minimum": 1}
+      }
+    },
+    "reranker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "model": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "minLength": 1},
+        "top_k": {"type": "integer", "minimum": 1}
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+schema_version: 1
+benchmark_version: 0.1.0
+suite_id: v20
+description: Public 20-paper repeat-validation partition; not used for tuning.
+paper_ids: []
+query_ids: []

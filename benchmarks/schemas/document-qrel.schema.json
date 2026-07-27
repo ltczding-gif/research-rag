@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/document-qrel.schema.json",
+  "title": "Document relevance judgment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "query_id", "paper_id", "relevance"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "query_id": {"$ref": "#/$defs/id"},
+    "paper_id": {"$ref": "#/$defs/id"},
+    "relevance": {"type": "integer", "minimum": -1, "maximum": 3},
+    "assessor_id": {"type": ["string", "null"]},
+    "adjudication_status": {
+      "enum": ["single", "reviewed", "independent-double", "adjudicated"]
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    }
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/manifest.schema.json",
+  "title": "Benchmark corpus manifest record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "paper_id",
+    "domain",
+    "document_type",
+    "main_pdf",
+    "si",
+    "language",
+    "structure_tags"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "paper_id": {"$ref": "#/$defs/id"},
+    "domain": {"$ref": "#/$defs/domain"},
+    "document_type": {
+      "enum": ["research-article", "review-perspective", "methods", "theory"]
+    },
+    "main_pdf": {"$ref": "#/$defs/file"},
+    "si": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/file"},
+      "uniqueItems": true
+    },
+    "doi": {"type": ["string", "null"], "minLength": 1},
+    "language": {"type": "string", "pattern": "^[a-z]{2,3}(?:-[A-Za-z0-9]+)*$"},
+    "structure_tags": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "domain": {
+      "enum": [
+        "catalysis-materials",
+        "biomedicine",
+        "cs-ml",
+        "environment-energy-geoscience",
+        "social-science-economics"
+      ]
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file_id",
+        "artifact_path",
+        "source_url",
+        "sha256",
+        "license",
+        "license_url",
+        "redistribution",
+        "verified_at",
+        "attribution"
+      ],
+      "properties": {
+        "file_id": {"$ref": "#/$defs/id"},
+        "artifact_path": {"type": "string", "minLength": 1},
+        "source_url": {"type": "string", "format": "uri"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "license": {"type": "string", "minLength": 1},
+        "license_url": {"type": "string", "format": "uri"},
+        "redistribution": {"const": "allowed"},
+        "verified_at": {"type": "string", "format": "date"},
+        "attribution": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

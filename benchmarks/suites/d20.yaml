@@ -1,0 +1,6 @@
+schema_version: 1
+benchmark_version: 0.1.0
+suite_id: d20
+description: Public 20-paper development and parameter-selection partition.
+paper_ids: []
+query_ids: []

@@ -22,6 +22,11 @@ env/
 build/
 dist/
 *.egg-info/
+benchmarks/.cache/
+benchmarks/artifacts/
+benchmarks/corpus/files/
+benchmarks/reports/*
+!benchmarks/reports/.gitkeep
 
 # --- User state (never check in personal data) ---
 service/chroma/

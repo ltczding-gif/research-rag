@@ -1,0 +1,5 @@
+# Wave 0 benchmark contract and validator dependencies.
+# Kept separate from the product runtime: users who only run research-rag
+# do not need these packages.
+jsonschema>=4.22,<5
+pyyaml>=6.0,<7

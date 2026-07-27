@@ -1,0 +1,6 @@
+schema_version: 1
+benchmark_version: 0.1.0
+suite_id: h60
+description: Sealed 60-paper release partition; queries and qrels are added after unsealing.
+paper_ids: []
+query_ids: []
