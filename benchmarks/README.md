@@ -23,11 +23,12 @@ manifest. Every note remains explicitly marked `human_review_status: pending`;
 none is gold. The query, answer, claim, evidence-unit, and qrel ledgers remain
 empty until a human reviews the notes and the 25 S5 queries are adjudicated.
 
-The proposed 25-query allocation, wording, negative cases, claim IDs, and
-evidence-group targets are reviewable in
-[`design/S5_QUERY_DESIGN.md`](design/S5_QUERY_DESIGN.md). This is deliberately
-not copied into the official ledgers yet: source quotes, canonical page
-locators, second-person review, and owner approval are required first.
+The benchmark design workbench is indexed in
+[`design/README.md`](design/README.md). Its current S5 proposal defines the
+25-query allocation, hard/very-hard rubric, wording, negative cases, claim IDs,
+and evidence-group targets. It is deliberately not copied into the official
+ledgers yet: source quotes, canonical page locators, second-person review, and
+owner approval are required first.
 
 The contract covers:
 
