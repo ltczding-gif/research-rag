@@ -151,6 +151,7 @@ def discover_pending(runs_root: Path) -> list[dict]:
                 "expected_output_path": str(expected_path),
                 "combined_hash": manifest.get("combined_hash", run_dir.name),
                 "pdf_paths": list(manifest.get("pdf_paths") or []),
+                "source_artifacts": list(manifest.get("source_artifacts") or []),
             }
         )
     return pending
@@ -170,10 +171,15 @@ def _format_human(pending: Iterable[dict]) -> str:
         lines.append(f"    expected_output: {entry['expected_output_path']}")
         if entry["pdf_paths"]:
             lines.append(f"    pdfs:            {len(entry['pdf_paths'])} file(s)")
+        if entry["source_artifacts"]:
+            lines.append(
+                f"    source packets:  {len(entry['source_artifacts'])} file(s)"
+            )
         lines.append("")
     lines.append("Next action: dispatch one sub-agent per manifest with:")
     lines.append("  Read the manifest at <manifest_path>. Read each PDF in")
-    lines.append("  pdf_paths. Apply system_prompt + user_prompt. Produce a JSON")
+    lines.append("  pdf_paths and each packet in source_artifacts. Apply")
+    lines.append("  system_prompt + user_prompt. Produce a JSON")
     lines.append("  object that strictly conforms to response_schema. Write it")
     lines.append("  to expected_output_path. Then re-run the batch command.")
     return "\n".join(lines)

@@ -10,6 +10,8 @@ def test_build_repair_manifest_is_narrow_and_provenance_preserving(tmp_path: Pat
     run_dir.mkdir()
     pdf = tmp_path / "paper.pdf"
     pdf.write_bytes(b"%PDF")
+    source_packet = tmp_path / "si-native.json"
+    source_packet.write_text('{"coordinate":"[SI-01 para.1]"}', encoding="utf-8")
     candidate = run_dir / "02-note-draft.json"
     candidate.write_text('{"frontmatter": {}, "body_markdown": "draft"}', encoding="utf-8")
     rendered = run_dir / "04-rendered-note.md"
@@ -19,6 +21,7 @@ def test_build_repair_manifest_is_narrow_and_provenance_preserving(tmp_path: Pat
     generation = {
         "combined_hash": "a" * 64,
         "pdf_paths": [str(pdf)],
+        "source_artifacts": [str(source_packet)],
         "system_prompt": "system",
         "user_prompt": "user",
         "response_schema": {"type": "OBJECT"},
@@ -44,6 +47,7 @@ def test_build_repair_manifest_is_narrow_and_provenance_preserving(tmp_path: Pat
         brief.read_bytes()
     ).hexdigest()
     assert payload["expected_output_path"].endswith("02-note-draft.repaired.json")
+    assert payload["source_artifacts"] == [str(source_packet)]
     assert "overwrite source_candidate_path" in " ".join(
         payload["subagent_task"]["must_not"]
     ).lower()
