@@ -166,7 +166,8 @@ XLSX 用工作表和 cell range，CSV 用行范围和列名。不得为了继续
 首个质量 baseline 固定在
 `benchmarks/configs/baseline-fixed-800.yaml`：
 
-- canonical pdfplumber page IR；
+- canonical pdfplumber page IR，按 PDF content stream 读取
+  （`use_text_flow=true`、`x_tolerance=1`）；
 - C0 fixed-character：size 800、step 700、min length 100；
 - Ollama `qwen3-embedding:4b`；
 - 固定本机模型 digest；
@@ -222,7 +223,10 @@ group，重复返回同一 group 不重复得分。
 2. **R1 Notes**：20 篇全部使用 field-neutral `generic-research-note`，由子代理生成、另一
    子代理审计后冻结。官方没有 SI 记 `not_available`；明确存在但无法获取或解析才阻塞。
 3. **R2 Evidence adapter**：把 ResearchQA reference groups 映射到 benchmark PDF
-   page/span，并通过 95%/90% gate。
+   page/span。先对 NFKC 小写字母数字流做页内精确定位，再用 chunk 的 source span 投影到
+   实际重叠字符范围；仅对版本差异残余使用 ResearchQA 官方 page/section hint，在限定范围
+   内选择词面最接近的 chunk，不得把整页或整节全部标成 relevant。完成后通过 95%/90%
+   gate。
 4. **R3 Chunking**：扫描 7 个 PDF chunker 和 4 个 note chunker；Qwen 4B、dense、
    paper-scoped、无 reranker 固定。
 5. **R4 Retrieval**：扫描 dense、BM25 和等权 RRF hybrid；使用 provisional winning

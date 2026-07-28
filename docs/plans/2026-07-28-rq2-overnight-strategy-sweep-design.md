@@ -222,8 +222,11 @@ chunker × retriever × source × reranker 笛卡尔积。
 ## 10. Evidence mapping 和评分
 
 ResearchQA reference groups 之间是 AND，同组 alternatives 是 OR。一个 group 只需一个
-alternative 成功映射即可评分。映射顺序为规范化精确匹配，再使用版本化、有阈值的模糊
-匹配。失败必须进入 `unmapped`。
+alternative 成功映射即可评分。PDF page IR 使用 content-stream reading order
+（`use_text_flow=true`、`x_tolerance=1`）。映射顺序为：NFKC 小写字母数字流页内精确
+定位 → source-span 字符区间投影 → ResearchQA 官方 page hint 限域最佳 chunk →
+section hint 限域最佳 chunk → 版本化且有阈值的全局模糊匹配。hint fallback 不得把整页
+或整节全部标成 relevant；失败必须进入 `unmapped`。
 
 排名 gate：
 

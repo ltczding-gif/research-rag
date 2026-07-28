@@ -23,7 +23,11 @@ class _FakePage:
     def __init__(self, text: str | None):
         self._text = text
 
-    def extract_text(self):
+    def extract_text(self, **kwargs):
+        assert kwargs == {
+            "use_text_flow": True,
+            "x_tolerance": 1,
+        }
         return self._text
 
 

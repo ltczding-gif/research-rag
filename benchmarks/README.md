@@ -86,7 +86,8 @@ python benchmarks/scripts/prepare_researchqa.py --source /path/to/eval_dataset.j
 [`configs/baseline-fixed-800.yaml`](configs/baseline-fixed-800.yaml) freezes
 the first ResearchQA quality baseline:
 
-- canonical pdfplumber page IR;
+- canonical pdfplumber page IR with content-stream reading order
+  (`use_text_flow=true`, `x_tolerance=1`);
 - fixed-character C0 chunks: size 800, step 700, minimum 100;
 - Ollama `qwen3-embedding:4b`, pinned by model digest;
 - cosine dense retrieval with `top_k=10`;
@@ -101,6 +102,12 @@ ResearchQA supplies the questions, expected answers, evidence alternatives,
 multi-hop section requirements, and adversarial refusal metadata. The
 benchmark adapter must map each expected evidence alternative to canonical
 PDF page/span coordinates before scoring candidate chunks.
+
+The versioned evidence adapter normalizes NFKC alphanumeric text, locates an
+alternative in the canonical page, and projects the exact character range
+through each chunk's source spans. ResearchQA page and section hints are used
+only as bounded fallbacks for known edition drift; they select the
+best-matching chunk rather than marking a whole page or section relevant.
 
 Retrieval and answer generation are evaluated separately. Reports must include
 per-domain and per-question-type results, especially multi-hop and

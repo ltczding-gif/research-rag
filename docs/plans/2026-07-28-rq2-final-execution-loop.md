@@ -255,6 +255,10 @@ canary 必须验证 batch `/api/embed`、2560 维、reranker revision、source �
 总覆盖率低于 95% 或任一论文低于 90% 时停止排名，输出 unmapped 清单。不得通过删除难题
 或改变 evaluable set 绕过 gate。
 
+映射固定为版本化的 page/span 流程：content-stream PDF IR → NFKC 字母数字精确页内定位
+→ source-span 字符投影；仅对 ResearchQA 版本差异残余使用官方 page/section hint 限域
+选择最佳 chunk。不得通过降低阈值或把整页/整节全部标成 relevant 绕过 gate。
+
 ### Gate E：策略扫描
 
 质量使用全部 254 问；性能使用固定的 40 问分层样本，warm-up 后 3 个 timed passes。

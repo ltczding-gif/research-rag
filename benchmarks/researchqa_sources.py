@@ -82,7 +82,9 @@ _COORDINATE_TYPE_BY_MEDIA = {
 }
 _PARSER_CONFIG_BY_MEDIA: Mapping[str, Mapping[str, object]] = {
     MEDIA_PDF: {
-        "extractor": "pdfplumber-page-text",
+        "extractor": "pdfplumber-page-text-flow",
+        "use_text_flow": True,
+        "x_tolerance": 1,
         "layout_structure": "unclassified",
         "normalization": "lf-newlines",
         "schema_version": 1,

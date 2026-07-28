@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import time
 import unicodedata
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -68,11 +66,11 @@ from benchmarks.researchqa_scoring import (
 from service.pdf_ir import CanonicalDocument, DocumentPage, hash_text
 
 
-REFERENCE_MATCH_REVISION = "nfkc-whitespace-partial-sequence-v1"
-REFERENCE_EXACT_METHOD = "nfkc-whitespace-exact-v1"
+REFERENCE_MATCH_REVISION = "nfkc-alnum-page-span-v2"
+REFERENCE_EXACT_METHOD = "nfkc-alnum-page-span-exact-v2"
+REFERENCE_PAGE_HINT_METHOD = "researchqa-page-hint-best-chunk-v2"
+REFERENCE_SECTION_HINT_METHOD = "researchqa-section-hint-best-chunk-v2"
 DEFAULT_FUZZY_THRESHOLD = 0.86
-DEFAULT_MAPPING_WORKERS = 8
-PARALLEL_MAPPING_MIN_QUESTIONS = 32
 RETRIEVER_IDS = ("dense", "bm25", "hybrid-rrf")
 RERANKER_IDS = (
     "rerank-off",
@@ -268,11 +266,38 @@ def _is_sha256(value: object) -> bool:
 
 
 def normalize_reference_text(text: str) -> str:
-    """Apply the versioned NFKC + whitespace reference normalization."""
+    """Apply versioned NFKC + lowercase alphanumeric normalization."""
 
     if not isinstance(text, str) or not text.strip():
         raise StrategyContractError("reference text must be non-empty")
-    return " ".join(unicodedata.normalize("NFKC", text).split())
+    normalized = "".join(
+        normalized_character
+        for character in text
+        for normalized_character in unicodedata.normalize(
+            "NFKC",
+            character,
+        ).lower()
+        if normalized_character.isalnum()
+    )
+    if not normalized:
+        raise StrategyContractError(
+            "reference text must contain an alphanumeric character"
+        )
+    return normalized
+
+
+def _normalize_page_with_offsets(text: str) -> tuple[str, tuple[int, ...]]:
+    compact: list[str] = []
+    offsets: list[int] = []
+    for offset, character in enumerate(text):
+        for normalized_character in unicodedata.normalize(
+            "NFKC",
+            character,
+        ).lower():
+            if normalized_character.isalnum():
+                compact.append(normalized_character)
+                offsets.append(offset)
+    return "".join(compact), tuple(offsets)
 
 
 def _partial_sequence_ratio(left: str, right: str) -> float:
@@ -330,10 +355,126 @@ class EvidenceMappingBundle:
         }
 
 
+@dataclass(frozen=True)
+class _ReferenceAlignmentContext:
+    paper_id: str
+    chunks: tuple[ResearchQAChunk, ...]
+    compact_chunks: Mapping[str, str]
+    chunks_by_page: Mapping[int, tuple[ResearchQAChunk, ...]]
+    pages: tuple[tuple[str, tuple[int, ...]], ...]
+
+
+def _build_reference_alignment_context(
+    paper_id: str,
+    chunks: Sequence[ResearchQAChunk],
+    document: CanonicalDocument | None,
+) -> _ReferenceAlignmentContext:
+    paper_chunks = tuple(
+        sorted(
+            (chunk for chunk in chunks if chunk.paper_id == paper_id),
+            key=lambda chunk: chunk.chunk_id,
+        )
+    )
+    chunks_by_page: dict[int, list[ResearchQAChunk]] = defaultdict(list)
+    for chunk in paper_chunks:
+        for page_index in dict.fromkeys(
+            span.pdf_page_index for span in chunk.source_spans
+        ):
+            chunks_by_page[page_index].append(chunk)
+    pages: tuple[tuple[str, tuple[int, ...]], ...] = ()
+    if document is not None:
+        if document.paper_id != paper_id:
+            raise StrategyContractError(
+                f"document paper_id mismatch: {document.paper_id} != {paper_id}"
+            )
+        pages = tuple(
+            _normalize_page_with_offsets(page.normalized_text)
+            for page in document.pages
+        )
+    return _ReferenceAlignmentContext(
+        paper_id=paper_id,
+        chunks=paper_chunks,
+        compact_chunks={
+            chunk.chunk_id: normalize_reference_text(chunk.text)
+            for chunk in paper_chunks
+        },
+        chunks_by_page={
+            page_index: tuple(page_chunks)
+            for page_index, page_chunks in chunks_by_page.items()
+        },
+        pages=pages,
+    )
+
+
+def _overlapping_chunk_ids(
+    context: _ReferenceAlignmentContext,
+    *,
+    page_index: int,
+    start: int,
+    end: int,
+) -> tuple[str, ...]:
+    matches = []
+    for chunk in context.chunks_by_page.get(page_index, ()):
+        if any(
+            span.pdf_page_index == page_index
+            and span.char_start_in_normalized_page < end
+            and start < span.char_end_in_normalized_page
+            for span in chunk.source_spans
+        ):
+            matches.append(chunk.chunk_id)
+    return tuple(matches)
+
+
+def _exact_page_span_matches(
+    reference: str,
+    context: _ReferenceAlignmentContext,
+) -> tuple[str, ...]:
+    matches: list[str] = []
+    for page_index, (page_text, offsets) in enumerate(context.pages):
+        position = page_text.find(reference)
+        while position >= 0:
+            start = offsets[position]
+            end = offsets[position + len(reference) - 1] + 1
+            matches.extend(
+                _overlapping_chunk_ids(
+                    context,
+                    page_index=page_index,
+                    start=start,
+                    end=end,
+                )
+            )
+            position = page_text.find(reference, position + 1)
+    return tuple(dict.fromkeys(matches))
+
+
+def _best_chunk_matches(
+    reference: str,
+    chunks: Sequence[ResearchQAChunk],
+    compact_chunks: Mapping[str, str],
+) -> tuple[tuple[str, ...], float] | None:
+    scores = {
+        chunk.chunk_id: _partial_sequence_ratio(
+            reference,
+            compact_chunks[chunk.chunk_id],
+        )
+        for chunk in chunks
+    }
+    if not scores:
+        return None
+    best = max(scores.values())
+    matches = tuple(
+        chunk_id
+        for chunk_id, score in sorted(scores.items())
+        if math.isclose(score, best, rel_tol=0.0, abs_tol=1e-12)
+    )
+    return matches, best
+
+
 def map_question_references(
     question: Mapping[str, Any],
     chunks: Sequence[ResearchQAChunk],
     *,
+    document: CanonicalDocument | None = None,
     fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
 ) -> EvidenceMapping:
     """Map one question's AND/OR reference groups to stable chunk IDs."""
@@ -341,36 +482,30 @@ def map_question_references(
     if not 0.0 <= fuzzy_threshold <= 1.0:
         raise StrategyContractError("fuzzy_threshold must be in [0, 1]")
     paper_id = normalize_paper_id(question.get("paper_id"))
-    paper_chunks = tuple(
-        sorted(
-            (chunk for chunk in chunks if chunk.paper_id == paper_id),
-            key=lambda chunk: chunk.chunk_id,
-        )
+    context = _build_reference_alignment_context(
+        paper_id,
+        chunks,
+        document,
     )
-    normalized_chunks = {
-        chunk.chunk_id: normalize_reference_text(chunk.text)
-        for chunk in paper_chunks
-    }
-    return _map_question_with_normalized_chunks(
+    return _map_question_with_context(
         question,
-        normalized_chunks,
+        context,
         fuzzy_threshold=fuzzy_threshold,
-        reference_cache={},
     )
 
 
-def _map_question_with_normalized_chunks(
+def _map_question_with_context(
     question: Mapping[str, Any],
-    normalized_chunks: Mapping[str, str],
+    context: _ReferenceAlignmentContext,
     *,
     fuzzy_threshold: float,
-    reference_cache: MutableMapping[
-        str,
-        Mapping[str, object] | None,
-    ],
 ) -> EvidenceMapping:
     row_id = _required_text(question, "row_id")
     paper_id = normalize_paper_id(question.get("paper_id"))
+    if context.paper_id != paper_id:
+        raise StrategyContractError(
+            f"{row_id}: alignment context paper mismatch"
+        )
     domain = _required_text(question, "domain")
     question_type = _required_text(question, "question_type")
     references = question.get("expected_references")
@@ -379,15 +514,35 @@ def _map_question_with_normalized_chunks(
             f"{row_id}: expected_references must be a list"
         )
 
+    section_by_reference = {
+        normalize_reference_text(alternative): str(
+            group.get("section_label") or ""
+        ).strip()
+        for group in references
+        if isinstance(group, Mapping)
+        for alternative in group.get("alternatives", ())
+        if isinstance(alternative, str) and alternative.strip()
+    }
+    page_hint = question.get("metadata_page_hint")
+    hinted_page = (
+        page_hint - 1
+        if isinstance(page_hint, int)
+        and not isinstance(page_hint, bool)
+        and 1 <= page_hint <= len(context.pages)
+        else None
+    )
+    reference_cache: dict[
+        tuple[str, str],
+        Mapping[str, object] | None,
+    ] = {}
+
     def mapper(reference: str) -> Mapping[str, object] | None:
         normalized = normalize_reference_text(reference)
-        if normalized in reference_cache:
-            return reference_cache[normalized]
-        exact = tuple(
-            chunk_id
-            for chunk_id, chunk_text in normalized_chunks.items()
-            if normalized in chunk_text
-        )
+        section_label = section_by_reference.get(normalized, "")
+        cache_key = (normalized, section_label)
+        if cache_key in reference_cache:
+            return reference_cache[cache_key]
+        exact = _exact_page_span_matches(normalized, context)
         if exact:
             result: Mapping[str, object] | None = {
                 "mapped_item_ids": exact,
@@ -395,33 +550,54 @@ def _map_question_with_normalized_chunks(
                 "match_score": 1.0,
             }
         else:
-            scores = {
-                chunk_id: _partial_sequence_ratio(normalized, chunk_text)
-                for chunk_id, chunk_text in normalized_chunks.items()
-            }
-            if not scores:
+            method = REFERENCE_MATCH_REVISION
+            candidate_chunks: Sequence[ResearchQAChunk] = context.chunks
+            enforce_threshold = True
+            if hinted_page is not None:
+                candidate_chunks = context.chunks_by_page.get(
+                    hinted_page,
+                    (),
+                )
+                method = REFERENCE_PAGE_HINT_METHOD
+                enforce_threshold = False
+            elif section_label and context.pages:
+                normalized_section = normalize_reference_text(section_label)
+                section_pages = tuple(
+                    page_index
+                    for page_index, (page_text, _) in enumerate(context.pages)
+                    if normalized_section in page_text
+                )
+                section_chunk_ids = {
+                    chunk.chunk_id
+                    for page_index in section_pages
+                    for chunk in context.chunks_by_page.get(page_index, ())
+                }
+                if section_chunk_ids:
+                    candidate_chunks = tuple(
+                        chunk
+                        for chunk in context.chunks
+                        if chunk.chunk_id in section_chunk_ids
+                    )
+                    method = REFERENCE_SECTION_HINT_METHOD
+                    enforce_threshold = False
+            best_match = _best_chunk_matches(
+                normalized,
+                candidate_chunks,
+                context.compact_chunks,
+            )
+            if best_match is None:
                 result = None
             else:
-                best = max(scores.values())
-                if best < fuzzy_threshold:
+                matches, best = best_match
+                if enforce_threshold and best < fuzzy_threshold:
                     result = None
                 else:
-                    matches = tuple(
-                        chunk_id
-                        for chunk_id, score in sorted(scores.items())
-                        if math.isclose(
-                            score,
-                            best,
-                            rel_tol=0.0,
-                            abs_tol=1e-12,
-                        )
-                    )
                     result = {
                         "mapped_item_ids": matches,
-                        "match_method": REFERENCE_MATCH_REVISION,
+                        "match_method": method,
                         "match_score": best,
                     }
-        reference_cache[normalized] = result
+        reference_cache[cache_key] = result
         return result
 
     return map_reference_groups(
@@ -434,40 +610,14 @@ def _map_question_with_normalized_chunks(
     )
 
 
-def _map_paper_reference_batch(
-    payload: tuple[
-        tuple[Mapping[str, Any], ...],
-        tuple[ResearchQAChunk, ...],
-        float,
-    ],
-) -> tuple[EvidenceMapping, ...]:
-    questions, chunks, fuzzy_threshold = payload
-    paper_id = normalize_paper_id(questions[0].get("paper_id"))
-    normalized_chunks = {
-        chunk.chunk_id: normalize_reference_text(chunk.text)
-        for chunk in sorted(chunks, key=lambda item: item.chunk_id)
-        if chunk.paper_id == paper_id
-    }
-    reference_cache: dict[str, Mapping[str, object] | None] = {}
-    return tuple(
-        _map_question_with_normalized_chunks(
-            question,
-            normalized_chunks,
-            fuzzy_threshold=fuzzy_threshold,
-            reference_cache=reference_cache,
-        )
-        for question in questions
-    )
-
-
 def map_all_references(
     questions: Sequence[Mapping[str, Any]],
     chunks: Sequence[ResearchQAChunk],
     *,
+    documents: Mapping[str, CanonicalDocument] | None = None,
     fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
     overall_minimum: float = 0.95,
     per_paper_minimum: float = 0.90,
-    mapping_workers: int | None = None,
 ) -> EvidenceMappingBundle:
     """Map all questions and retain an explicit unmapped-group ledger."""
 
@@ -476,49 +626,35 @@ def map_all_references(
         raise StrategyContractError("question row_ids must be unique")
     if not 0.0 <= fuzzy_threshold <= 1.0:
         raise StrategyContractError("fuzzy_threshold must be in [0, 1]")
-    if mapping_workers is not None and mapping_workers < 1:
-        raise StrategyContractError("mapping_workers must be at least 1")
-    questions_by_paper: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
-    for question in questions:
-        questions_by_paper[
-            normalize_paper_id(question.get("paper_id"))
-        ].append(question)
     chunks_by_paper: dict[str, list[ResearchQAChunk]] = defaultdict(list)
     for chunk in chunks:
         chunks_by_paper[chunk.paper_id].append(chunk)
-    if mapping_workers is None:
-        mapping_workers = (
-            min(DEFAULT_MAPPING_WORKERS, os.cpu_count() or 1, len(questions))
-            if len(questions) >= PARALLEL_MAPPING_MIN_QUESTIONS
-            else 1
+    paper_ids = tuple(
+        dict.fromkeys(
+            normalize_paper_id(question.get("paper_id"))
+            for question in questions
         )
-    jobs = []
-    for paper_id, paper_questions in questions_by_paper.items():
-        batch_count = min(mapping_workers, len(paper_questions))
-        batch_size = math.ceil(len(paper_questions) / batch_count)
-        paper_chunks = tuple(chunks_by_paper.get(paper_id, ()))
-        jobs.extend(
-            (
-                tuple(paper_questions[start : start + batch_size]),
-                paper_chunks,
-                fuzzy_threshold,
+    )
+    contexts = {}
+    for paper_id in paper_ids:
+        document = documents.get(paper_id) if documents is not None else None
+        if documents is not None and document is None:
+            raise StrategyContractError(
+                f"question paper has no alignment document: {paper_id}"
             )
-            for start in range(0, len(paper_questions), batch_size)
+        contexts[paper_id] = _build_reference_alignment_context(
+            paper_id,
+            chunks_by_paper.get(paper_id, ()),
+            document,
         )
-    job_batch = tuple(jobs)
-    if mapping_workers == 1 or len(job_batch) <= 1:
-        batches = tuple(_map_paper_reference_batch(job) for job in job_batch)
-    else:
-        with ProcessPoolExecutor(
-            max_workers=min(mapping_workers, len(job_batch))
-        ) as executor:
-            batches = tuple(
-                executor.map(_map_paper_reference_batch, job_batch)
-            )
-    mapping_by_row = {
-        mapping.row_id: mapping for batch in batches for mapping in batch
-    }
-    mappings = tuple(mapping_by_row[row_id] for row_id in row_ids)
+    mappings = tuple(
+        _map_question_with_context(
+            question,
+            contexts[normalize_paper_id(question.get("paper_id"))],
+            fuzzy_threshold=fuzzy_threshold,
+        )
+        for question in questions
+    )
     unmapped = tuple(
         UnmappedEvidenceGroup(
             row_id=mapping.row_id,
@@ -1368,6 +1504,7 @@ def run_complete_candidate(
         mapping = map_all_references(
             questions,
             corpus.pdf_chunks,
+            documents=documents,
             fuzzy_threshold=fuzzy_threshold,
             overall_minimum=mapping_overall_minimum,
             per_paper_minimum=mapping_per_paper_minimum,

@@ -16,7 +16,10 @@ from benchmarks.researchqa_retrieval import (
 )
 from benchmarks.researchqa_strategy import (
     ConfirmationSelection,
+    REFERENCE_EXACT_METHOD,
     REFERENCE_MATCH_REVISION,
+    REFERENCE_PAGE_HINT_METHOD,
+    REFERENCE_SECTION_HINT_METHOD,
     StrategyContractError,
     generate_orthogonal_candidates,
     load_main_documents,
@@ -229,13 +232,14 @@ def test_reference_mapping_uses_nfkc_exact_then_versioned_fuzzy(tmp_path):
     bundle = map_all_references(
         questions,
         chunks,
+        documents=documents,
         fuzzy_threshold=0.90,
         overall_minimum=0.0,
         per_paper_minimum=0.0,
     )
     groups = bundle.mappings[0].groups
 
-    assert groups[0].alternatives[0].match_method == "nfkc-whitespace-exact-v1"
+    assert groups[0].alternatives[0].match_method == REFERENCE_EXACT_METHOD
     assert groups[1].alternatives[0].match_method == REFERENCE_MATCH_REVISION
     assert groups[0].mapped and groups[1].mapped
     assert not groups[2].mapped
@@ -244,7 +248,7 @@ def test_reference_mapping_uses_nfkc_exact_then_versioned_fuzzy(tmp_path):
     )
 
 
-def test_parallel_reference_mapping_is_identical_to_serial(tmp_path):
+def test_page_aligned_reference_mapping_is_deterministic(tmp_path):
     documents, questions = _fixture_corpus(tmp_path)
     chunks = tuple(
         chunk
@@ -256,22 +260,104 @@ def test_parallel_reference_mapping_is_identical_to_serial(tmp_path):
         ).chunks
     )
 
-    serial = map_all_references(
+    first = map_all_references(
         questions,
         chunks,
+        documents=documents,
         overall_minimum=0.0,
         per_paper_minimum=0.0,
-        mapping_workers=1,
     )
-    parallel = map_all_references(
+    second = map_all_references(
         questions,
         chunks,
+        documents=documents,
         overall_minimum=0.0,
         per_paper_minimum=0.0,
-        mapping_workers=2,
     )
 
-    assert parallel.to_dict() == serial.to_dict()
+    assert second.to_dict() == first.to_dict()
+
+
+def test_reference_mapping_uses_researchqa_page_hint_for_version_drift(
+    tmp_path,
+):
+    documents, _ = _fixture_corpus(tmp_path)
+    chunks = chunk_pdf(
+        documents["W1"],
+        "pdf-fixed-400",
+        is_main=True,
+    ).chunks
+    question = {
+        "row_id": "q-page-hint",
+        "paper_id": "W1",
+        "domain": "d",
+        "question_type": "lookup",
+        "question": "q",
+        "metadata_page_hint": 1,
+        "expected_references": [
+            {
+                "section_label": "Results",
+                "alternatives": ["A wording found only in another edition."],
+            }
+        ],
+    }
+
+    bundle = map_all_references(
+        [question],
+        chunks,
+        documents={"W1": documents["W1"]},
+        overall_minimum=0.0,
+        per_paper_minimum=0.0,
+    )
+    alternative = bundle.mappings[0].groups[0].alternatives[0]
+
+    assert alternative.mapped
+    assert alternative.match_method == REFERENCE_PAGE_HINT_METHOD
+
+
+def test_reference_mapping_uses_section_hint_without_page_hint(tmp_path):
+    _write_native_ir(
+        tmp_path,
+        "W1",
+        [
+            "Methods\n"
+            + "Observed evidence in the available edition. " * 5
+        ],
+    )
+    documents = load_main_documents(
+        tmp_path,
+        expected_paper_ids=["https://openalex.org/W1"],
+    )
+    chunks = chunk_pdf(
+        documents["W1"],
+        "pdf-fixed-400",
+        is_main=True,
+    ).chunks
+    question = {
+        "row_id": "q-section-hint",
+        "paper_id": "W1",
+        "domain": "d",
+        "question_type": "adversarial",
+        "question": "q",
+        "expected_references": [
+            {
+                "section_label": "Methods",
+                "alternatives": ["Wording from the published HTML edition."],
+            }
+        ],
+    }
+
+    bundle = map_all_references(
+        [question],
+        chunks,
+        documents=documents,
+        overall_minimum=0.0,
+        per_paper_minimum=0.0,
+    )
+    alternative = bundle.mappings[0].groups[0].alternatives[0]
+
+    assert alternative.mapped
+    assert alternative.match_method == REFERENCE_SECTION_HINT_METHOD
 
 
 def test_candidate_plan_is_orthogonal_and_confirmation_is_capped_at_16():

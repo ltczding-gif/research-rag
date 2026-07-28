@@ -35,7 +35,9 @@ except ImportError:  # Support the existing flat service/ import convention.
 CHUNK_SCHEMA_VERSION = 1
 _SHA256_LENGTH = 64
 _EXTRACTOR_CONFIG = {
-    "extractor": "pdfplumber-page-text",
+    "extractor": "pdfplumber-page-text-flow",
+    "use_text_flow": True,
+    "x_tolerance": 1,
     "normalization": "lf-newlines",
     "layout_structure": "unclassified",
     "schema_version": CHUNK_SCHEMA_VERSION,
@@ -306,7 +308,10 @@ def extract_pdf_document(
     pages = []
     with pdfplumber.open(path) as pdf:
         for page_index, page in enumerate(pdf.pages):
-            raw_text = page.extract_text()
+            raw_text = page.extract_text(
+                use_text_flow=True,
+                x_tolerance=1,
+            )
             warnings = []
             if raw_text is None or not raw_text:
                 warnings.append("empty-page-text")
