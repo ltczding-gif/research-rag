@@ -222,6 +222,18 @@ reranker depth 20/50/100 三个，加 6 个 rerank-50 confirmation；不是先�
 旧 9 个 envelope 和 17 个旧 final/stage/report 文件已移动到 run-owned quarantine，并
 逐文件验证 SHA-256。
 
+六组 confirmation 的 rerank/off 配对不是按文件名猜测，而是由冻结 candidate plan
+重新生成后与 current/quarantine 逐文件核对：
+
+| rerank-50 config ID | rerank-off baseline config ID | PDF | retriever | source |
+|---|---|---|---|---|
+| `top2-confirmation-2d5a2ea0484f0cf3f1fc` | `top2-confirmation-0d3b98ed0b9c6f728106` | `pdf-fixed-800` | `dense` | `pdf-only` |
+| `top2-confirmation-3a21a2f681c8a31d68fe` | `top2-confirmation-cd8278d4f8da181e0f14` | `pdf-fixed-800` | `hybrid-rrf` | `pdf-only` |
+| `top2-confirmation-4ed5e80f8af0d963b8a2` | `top2-confirmation-ff5d2f5f70537d7f0ea6` | `pdf-fixed-1200` | `dense` | `pdf-only` |
+| `top2-confirmation-83a878a5daa76b1bb7ff` | `top2-confirmation-4a54989ab9420c780d49` | `pdf-fixed-1200` | `hybrid-rrf` | `pdf-only` |
+| `top2-confirmation-f8a0b35f82e5b973d89f` | `top2-confirmation-b9f5e20ef5468f52dd25` | `pdf-parent-child` | `dense` | `hierarchical-pdf` |
+| `top2-confirmation-61e18c1d40a13e571292` | `top2-confirmation-c5b661c074b674db2ad5` | `pdf-parent-child` | `hybrid-rrf` | `hierarchical-pdf` |
+
 同一提交还把 `execution_complete` 与 `guardrail_finalized` 分开：没有
 `guardrail_diagnostics` 的 completed envelope 只能是 `pending`，不能称 pass；
 incomplete、pending、基础设施或未知失败会阻止 stage/final/public export。失败 envelope
