@@ -182,8 +182,14 @@ reranker 基础设施失败的直接根因已经由代码和 live 资源共同�
    `[batch, sequence, 151669]` 的完整词表 logits，随后才取最后 token；
 2. 实际最长格式化输入约 1,171 tokens，旧进程曾占用约 7.70/8 GB GPU memory；
 3. 固定模型的 `forward` 原生支持 `logits_to_keep=1`；
-4. 4 个真实 query/passage pair 的旧、新路径 score 最大绝对差为 `0.0`，排序完全一致；
-5. 修复后的 fresh CUDA 进程进入首个候选时约占 2.1 GB，尚未观察到 CUDA/OOM；该项在
+4. 4 个真实 query/passage pair 的 canary 旧、新 score 最大绝对差为 `0.0`，排序一致；
+5. 第一个完整 depth-20 候选进一步证明 254/254 的 ranked item IDs、逐题 metrics、
+   aggregate 和 mapping 全部相同；只有 1 个 rank-7 raw BF16 score 从 `2.25` 变为
+   `2.375`，最大差 `0.125`。因此合同应写成 rank/metric parity，而不是宣称所有 raw
+   score 位级一致；
+6. 该候选 observed p95 从 `1822.03 ms` 降到 `1447.25 ms`（约 `20.6%`），但 GPU
+   software thermal slowdown 为 active，所以不能把这次差值当作最终受控 latency；
+7. 修复后的 fresh CUDA 进程运行时约占 2.1–2.4 GB，尚未观察到 CUDA/OOM；该项在
    9 个定向候选全部完成前只记作运行健康证据，不记作完成。
 
 代码提交 `48d4d01` 同时关闭了三个复用漏洞：last-token-only logits、显式
