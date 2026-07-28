@@ -274,6 +274,26 @@ fresh envelope 的 payload SHA 均有效，fresh input fingerprint 已随 adapte
 6. `guardrail_finalized=false` 仍表示 confirmation stage pending。即使 provisional
    `guardrails_passed=true`，也不能在全阶段相对门和上游 eligibility 关闭前称为 pass。
 
+第三个 fresh confirmation `top2-confirmation-3a21a2f681c8a31d68fe` 已于
+2026-07-29 06:20（Asia/Shanghai）写出。它对应
+`pdf-fixed-800 + hybrid-rrf + pdf-only + rerank-50-to-10`，配对的 rerank-off baseline
+是 `top2-confirmation-cd8278d4f8da181e0f14`。旧隔离 envelope 同样是
+`AcceleratorError` + CUDA illegal-memory-access；旧失败、off baseline 和 fresh payload
+SHA 均有效，fresh input fingerprint 已随 adapter 修复改变：
+
+1. fresh 结果覆盖 20/20 papers、254/254 questions、239 evaluable questions 和
+   380/380 mapped groups，`execution_complete=true`；
+2. 254/254 fresh pre-rerank item ID lists 与 off baseline 完全相同，所有重叠的
+   pre-rerank metric 值也完全相同；额外的 `Recall@20/50/100` 仍只是字段扩展；
+3. post-rerank 的 254 条排序全部变化，97 条题目指标变化；primary 从
+   `0.8184880536` 提升到 `0.8333640555`，差值 `+0.0148760019`；
+4. rerank 恢复 2 个旧 Recall@10 hard failures，但新增
+   `W3154248945_adversarial0`。总体上涨仍不能洗白新的 hard failure；
+5. observed p95 为 `3551.36 ms`；审计时 GPU 仍为 86°C、software thermal slowdown
+   active，只能记录为 observed-only；
+6. `guardrail_finalized=false` 表示 confirmation stage 仍 pending，不能依据 provisional
+   `guardrails_passed=true` 宣称通过。
+
 同一提交还把 `execution_complete` 与 `guardrail_finalized` 分开：没有
 `guardrail_diagnostics` 的 completed envelope 只能是 `pending`，不能称 pass；
 incomplete、pending、基础设施或未知失败会阻止 stage/final/public export。失败 envelope
