@@ -426,8 +426,28 @@ incomplete、pending、基础设施或未知失败会阻止 stage/final/public e
     adapter 结果一起作废；只有不满足合同的 legacy 候选会重执行。回归覆盖 valid-SHA
     completed/incomplete/failed 篡改、truthy 字段、身份错配、完成集合不全和 exporter
     旁路，共 `56 passed`；完整仓库为 `459 passed, 2 skipped`，Wave 0A benchmark
-    validator 通过。代码合同已验证，但当前正式 run 的 26 个 legacy envelope 仍须在下一步
-    实际重执行后才能关闭数据门禁。
+    validator 通过。
+11. 2026-07-29 07:35:56 至 07:47:12（Asia/Shanghai）执行了严格 loader 驱动的最小
+    validity replay。它只重执行 26 个不满足新状态合同的 legacy 候选；stdout 正常写出
+    `candidate_count=35` 和 complete event，stderr 为空。随后用冻结配置逐阶段重新生成
+    7/4/3/5/4/12 个候选并与正式目录逐一核对，结果为：
+    - 35/35 config ID、stage ID、payload candidate、engine/schema revision、canonical
+      payload SHA 和状态合同均有效；
+    - 34 个 completed，1 个 `pdf-structure-aware` 确定性
+      `StrategyContractError`；strategy/infra/unknown 分别为 1/0/0；
+    - 34 个 completed 的集合完全一致：20 papers、254 questions、239 evaluable
+      questions、380/380 mapped groups，且 `execution_complete=true`、
+      `guardrail_finalized=true`、metric bundle 完整；
+    - 六个 stage ranking 均为 completed，incomplete 和 pending guardrail 均为 0；
+    - 9 个 adapter repair 候选的 current input fingerprint 全部不同于隔离旧
+      fingerprint，没有回退到旧 reranker adapter；
+    - 独立调用 public-export fail-closed 入口接受全部 35 个候选，并确认相同的
+      20/254/380 覆盖。
+
+因此 26 项 legacy 状态欠账已从 26 降为 0，P0 数据真实性门关闭。后续不得再次全量回放
+这 35 项；下一步先实现候选内部的原子 checkpoint/resume，再按 F2、N0/N3、RR1、R1、
+S1 的冻结依赖顺序做扩展评测。现有 leaderboard、Pareto 和 decision summary 仍只是
+基线诊断产物，不能替代扩展策略完成后的最终报告。
 
 这只关闭了 fail-open 发布，还没有实现候选内部恢复。`run_complete_candidate` 当前先执行
 全部 254 条 quality rows，再执行 warmup/timed latency passes，最后才返回完整结果；
