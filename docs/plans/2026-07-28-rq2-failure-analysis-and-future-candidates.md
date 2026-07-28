@@ -20,17 +20,17 @@
    内容。
 5. “确认”表示代码路径或 artifact 直接证明；“高置信假设”表示成对结果和实现路径共同
    支持；“待验证”表示只能由下一层单变量实验判断。
-6. 审计发现当前实现使用全局 20 篇共享索引，与 ADR 的 `paper-scoped` 合同不一致；
-   已完成 artifact 只保留为 global-corpus diagnostic。按项目所有者确认的执行顺序，
-   先完成当前已启动的原批准策略矩阵并形成完整诊断报告，再修复合同和重跑；不能用
-   global 结果完成 ADR 的最终 `rq-2`。
+6. 历史 run 使用全局 20 篇共享索引，与 ADR 的 `paper-scoped` 合同不一致；该批 artifact
+   只保留为 global-corpus diagnostic。实现现已改为逐论文索引，并已启动正式 paper-scoped
+   run；global 结果不能完成 ADR 的最终 `rq-2`。
 
-### 1.1 P0 合同偏差：当前实现不是 paper-scoped
+### 1.1 已修复的 P0 合同偏差：旧实现不是 paper-scoped
 
-ADR-003 的 R3 和 sweep design 都明确写了 `paper-scoped`，但
-`run_complete_candidate` 当前只构建一份包含 20 篇的 PDF、note 和 parent 共享索引。
-每个 query 对三个全局索引直接 `_search`，没有使用 `question.paper_id` 限定候选。现有双
-论文 fixture 只断言目标命中，没有断言跨论文结果必须排除，因此未捕获该偏差。
+ADR-003 的 R3 和 sweep design 都明确写了 `paper-scoped`，但旧版
+`run_complete_candidate` 只构建一份包含 20 篇的 PDF、note 和 parent 共享索引。
+每个 query 对三个全局索引直接 `_search`，没有使用 `question.paper_id` 限定候选。旧双
+论文 fixture 只断言目标命中，没有断言跨论文结果必须排除，因此未捕获该偏差。当前实现已
+为每篇建立独立检索视图，并有跨论文排除回归。
 
 239 个可评分问题的 global-corpus 诊断为：
 
@@ -49,7 +49,7 @@ ADR-003 的 R3 和 sweep design 都明确写了 `paper-scoped`，但
 三条 note source 路线的大部分灾难性退化来自 global note 污染。事后过滤不是正式分数，
 因为它没有重新构建 paper-specific BM25/embedding/rank 语义，只能用于确认根因。
 
-为保留原测试计划的完整性，执行顺序固定为：
+为保留原测试计划的完整性，执行顺序曾冻结为：
 
 1. 当前 global-corpus sweep 按原批准矩阵完成全部 35 个唯一候选；
 2. 生成完整但明确标记 `diagnostic` 的同口径报告；
@@ -57,7 +57,8 @@ ADR-003 的 R3 和 sweep design 都明确写了 `paper-scoped`，但
 4. 复用不受 retrieval scope 影响的 source、note、chunk 和 embedding 缓存；
 5. paper-scoped 的 35 个唯一候选全部完成后，才生成 ADR 最终榜单。
 
-`rq-2` 的合同修复要求：
+前四步已完成；第五步已写出 35 个 envelope，但仍在修复 9 个旧 adapter 候选和无效 final，
+状态详见 1.3。`rq-2` 的合同修复要求是：
 
 1. 为每篇建立或选择独立的 PDF/note/parent 检索视图；
 2. query 只在其 benchmark paper 内排名；
@@ -288,20 +289,20 @@ Paper-scoped 结果还更新了三个后续判断：
 ### 3.1 聚合结果
 
 `pdf-fixed-1200` 的 evidence-group Recall@5 为 `0.9143`，高于
-`pdf-fixed-800` 的 `0.9036` 和 `pdf-fixed-400` 的 `0.8293`。但它不是所有 slice
+`pdf-fixed-800` 的 `0.9047` 和 `pdf-fixed-400` 的 `0.8312`。但它不是所有 slice
 都占优：
 
 | 对比 | 结果 |
 |---|---|
-| fixed-1200 vs fixed-800，逐题 nDCG@10 均值 | `+0.0199` |
+| fixed-1200 vs fixed-800，逐题 nDCG@10 均值 | `+0.0213` |
 | 至少提升 0.1 的题 | 49 |
-| 至少退化 0.1 的题 | 34 |
-| comprehension | `+0.0563` |
+| 至少退化 0.1 的题 | 33 |
+| comprehension | `+0.0559` |
 | multi-hop | `+0.0222` |
 | lookup | `-0.0013` |
-| adversarial（有 reference） | `-0.0183` |
+| adversarial（有 reference） | `-0.0078` |
 | 2 个 evidence groups | `+0.0539` |
-| 3 个 evidence groups | `+0.1023` |
+| 3 个及以上 evidence groups | `+0.0837` |
 
 `fixed-800` 更适合局部精确命中，`fixed-1200` 更容易把跨句或跨段的完整证据留在同一块。
 因此平均分提升同时伴随细粒度问题退化，属于真实的粒度权衡。
@@ -375,12 +376,12 @@ fixed-800 的 p95/max 从 `2.095x/2.167x` 降到 `1.481x/1.678x`。这些统计�
 
 ### 4.1 聚合结果与 coverage 偏差
 
-| note chunker | 笔记块 | 覆盖论文 | 可回链块（fixed-1200） | primary score |
-|---|---:|---:|---:|---:|
-| `note-whole` | 20 | 20/20 | 20 | 0.2456 |
-| `note-section` | 323 | 20/20 | 270 | 0.4172 |
-| `note-claim-evidence` | 103 | 20/20 | 103 | 0.3678 |
-| `note-reviewer-concern` | 4 | 2/20 | 4 | 0.6770 |
+| note chunker | 笔记块 | 覆盖论文 | 可回链块（fixed-1200） | paper-scoped R@5 | 旧 global R@5 |
+|---|---:|---:|---:|---:|---:|
+| `note-whole` | 20 | 20/20 | 20 | 0.4688 | 0.2456 |
+| `note-section` | 323 | 20/20 | 270 | 0.4608 | 0.4172 |
+| `note-claim-evidence` | 103 | 20/20 | 103 | 0.4651 | 0.3678 |
+| `note-reviewer-concern` | 4 | 2/20 | 4 | 0.8878 | 0.6770 |
 
 `note-reviewer-concern` 的表面第一名不是广泛有效的 reviewer 检索。当前解析器只把 verdict
 表中结尾为 `major` 的行生成 concern chunk；通用模板允许论文没有 fatal/major concern，
@@ -471,24 +472,27 @@ note 做受控消融。
 
 | retriever | coverage-nDCG@10 | 明显特征 |
 |---|---:|---|
-| `dense` | 0.8202 | comprehension、多组证据相对更稳 |
-| `bm25` | 0.7966 | lookup 最强，其他题型明显偏弱 |
-| `hybrid-rrf` | 0.8302 | 总体第一，单组、lookup、adversarial 受益 |
+| `dense` | 0.8216 | comprehension、多组证据相对更稳 |
+| `bm25` | 0.7850 | lookup 最强，其他题型明显偏弱 |
+| `hybrid-rrf` | 0.8345 | 总体较高、lookup 受益，但当前 guardrail 不通过 |
 
-hybrid 相对 dense 的逐题均值为 `+0.0117`，但 slice 方向不一致：
+paper-scoped hybrid 相对 dense 的 primary 为 `+0.01294`，逐题 nDCG 均值为
+`+0.01436`，但 slice 方向不一致：
 
 | slice | hybrid - dense |
 |---|---:|
-| lookup | `+0.0418` |
-| adversarial（有 reference） | `+0.0414` |
-| comprehension | `-0.0205` |
-| multi-hop | `-0.0090` |
-| 1 个 evidence group | `+0.0299` |
-| 2 个 evidence groups | `-0.0076` |
-| 3 个及以上 evidence groups | `-0.0402` |
+| lookup | `+0.0391` |
+| adversarial（有 reference，逐题均值） | `+0.0173` |
+| comprehension | `-0.0054` |
+| multi-hop | `+0.0023` |
+| 1 个 evidence group | `+0.0230` |
+| 2 个 evidence groups | `+0.0114` |
+| 3 个及以上 evidence groups | `-0.0181` |
 
 等权 RRF 带来稳定的词法补救，但会让 BM25 对多证据问题的弱排序稀释 dense 结果。
-下一步应先测固定权重，不使用 benchmark 的 `question_type` 或 gold group count 做路由。
+宏平均的 adversarial slice 实际退化 `-0.0521`，all-required-groups success@10 退化
+`-0.00608`，并新增 3 个 Recall@10 hard failures，因此不能被总体增益洗白。下一步应先测
+固定权重，不使用 benchmark 的 `question_type` 或 gold group count 做路由。
 
 ### 5.2 后续候选
 
@@ -515,6 +519,19 @@ hybrid 相对 dense 的逐题均值为 `+0.0117`，但 slice 方向不一致：
 | `pdf-note-rrf` | 0.5487 | 只改善 3/239，退化 171/239 |
 | `note-guided-pdf` | 0.0827 | 硬过滤造成大面积召回坍塌 |
 | `note-to-pdf` | 0.0073 | 只依赖笔记引用投影，几乎丢失直接 PDF 召回 |
+
+paper-scoped 重跑把 global note 污染从结果中移除，但没有把这些路线变成合格候选：
+
+| source composition | paper-scoped coverage-nDCG@10 | 相对 PDF-only | 新 Recall@10 hard failures |
+|---|---:|---:|---:|
+| `pdf-only` | 0.8345 | baseline | 0 |
+| `pdf-note-rrf` | 0.8027 | -0.0318 | 3 |
+| `hierarchical-pdf` | 0.7343 | -0.1002 | 9 |
+| `note-guided-pdf` | 0.0810 | -0.7535 | 209 |
+| `note-to-pdf` | 0.0186 | -0.8160 | 221 |
+
+因此 global scope 的确严重夸大了 `pdf-note-rrf` 的损失（从 `-0.2815` 收窄到
+`-0.0318`），但 hard-filter 和 note-only 路线的失败仍然是 paper-scoped 下的真实结果。
 
 已确认的实现行为：
 
@@ -546,6 +563,9 @@ hybrid 相对 dense 的逐题均值为 `+0.0117`，但 slice 方向不一致：
 ## 7. Reranker 丢分
 
 ### 7.1 质量—延迟权衡
+
+下表是旧 global-corpus diagnostic，用于保留历史机制分析；paper-scoped depth-20/50 的
+新 adapter 对账见 1.3，完整当前表须等待 depth-100 和六个 confirmation 全部结束。
 
 | reranker | coverage-nDCG@10 | p95 latency |
 |---|---:|---:|
