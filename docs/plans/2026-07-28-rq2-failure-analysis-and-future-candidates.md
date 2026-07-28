@@ -282,6 +282,13 @@ incomplete、pending、基础设施或未知失败会阻止 stage/final/public e
    `execution_complete is True`。定向 rerank 退出后只重执行这 26 个 legacy 集合，
    不能静默把旧 `status=completed` 翻译成新 `execution_complete=true`。这样既保留
    fresh 9 个 adapter 修复结果，又不以迁移字段伪装重新验证。
+7. 2026-07-29 05:48（Asia/Shanghai）在定向 rerank 仍运行时再次只读审计当前 30 个正式
+   envelope：30/30 payload SHA 均有效；本轮已经落盘的 3 个 depth 和首个 confirmation
+   共 4 个 fresh envelope 满足显式状态合同，其余 26 个仍是上一项所列 legacy 集合。
+   其中 25 个 completed 缺少 `execution_complete`，另 1 个 structure-aware failed
+   envelope 缺少完整失败合同。这个数字来自 envelope/hash/state 盘点；最终 payload
+   candidate 精确身份仍必须由修复后的 loader 对当次实际候选逐项验证，不能使用另一份
+   默认配置推断。
 
 这只关闭了 fail-open 发布，还没有实现候选内部恢复。`run_complete_candidate` 当前先执行
 全部 254 条 quality rows，再执行 warmup/timed latency passes，最后才返回完整结果；
