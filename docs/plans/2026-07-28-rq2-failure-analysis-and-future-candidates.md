@@ -230,8 +230,13 @@ incomplete、pending、基础设施或未知失败会阻止 stage/final/public e
    `execution_complete=false`、`failure_kind=strategy` 和 `failure_context`；
 5. 根因是 `48d4d01` 改变了 checkpoint/发布状态语义，但
    `SWEEP_ENGINE_REVISION` 仍为 `researchqa-sweep-v9`，当前 loader 也没有拒绝缺少新
-   必填字段的旧 envelope。最终修复必须让 loader 对 completed/incomplete/failed 分别
-   验证新必填字段并 fail closed；定向 rerank 退出后只重执行这 26 个 legacy 集合，
+   必填字段的旧 envelope；更严重的是 `SweepCandidateRecord.is_complete()` 当前只检查
+   顶层 `status=completed` 和 paper/question ID 集合，完全不读取显式
+   `execution_complete`。因此 valid-SHA envelope 即使明确写
+   `execution_complete=false`，仍可能被当作完整候选进入后续门禁；
+6. 最终修复必须让 loader 对 completed/incomplete/failed 分别验证新必填字段、校验
+   payload candidate 身份，并让 `is_complete()` 强制要求
+   `execution_complete is True`。定向 rerank 退出后只重执行这 26 个 legacy 集合，
    不能静默把旧 `status=completed` 翻译成新 `execution_complete=true`。这样既保留
    fresh 9 个 adapter 修复结果，又不以迁移字段伪装重新验证。
 
