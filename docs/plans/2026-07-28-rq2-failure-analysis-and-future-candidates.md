@@ -1,6 +1,6 @@
 # `rq-2` 失败归因与后续候选策略
 
-- **Status:** Active correction ledger; global run is diagnostic-only
+- **Status:** Active correction ledger; paper-scoped validity repair in progress
 - **Date:** 2026-07-29
 - **Benchmark:** ResearchQA `rq-2`，20 篇、254 问、380 个 evidence groups
 - **Scope:** 记录 `rq-2` 的失败模式、实现缺陷和可验证优化假设
@@ -156,6 +156,60 @@ hybrid、parent-child 或 hierarchical 上游失败而不能成为最终可用�
 `note-reviewer-concern` 只是为了让 scope 修复前后 35 个 config ID 可成对比较；它本身
 仍为 `rankable: false`，后续 `N0/N3` 才会用通用笔记 eligibility 修复替代它。
 
+### 1.3 Paper-scoped v1 的有效性复盘
+
+正式 run `rq2-20260729-paper-scoped-v1` 已在相同的 20 篇、254 问、239 个可评分问题和
+380/380 evidence groups 上写出 35 个候选 envelope，但不能据此发布 winner。终态为：
+
+| 阶段 | 完成 | 确定性策略失败 | 基础设施失败 |
+|---|---:|---:|---:|
+| PDF chunker | 6 | 1 | 0 |
+| note chunker | 4 | 0 | 0 |
+| retriever | 3 | 0 | 0 |
+| source composition | 5 | 0 | 0 |
+| reranker | 3 | 0 | 1 |
+| Top-2 confirmation | 6 | 0 | 6 |
+| **合计** | **27** | **1** | **7** |
+
+`pdf-structure-aware` 的 `StrategyContractError` 是可复现的策略合同失败；depth-100 的
+`SystemError` 和 6 个 rerank-50 confirmation 的 CUDA illegal-memory-access 是基础设施
+失败，不能转换成策略分数。旧 runner 仍在这种状态下生成了 `decision-summary`、
+leaderboard 和 Pareto，因此这些 final artifacts 已隔离，不能保留或发布。
+
+reranker 基础设施失败的直接根因已经由代码和 live 资源共同确认：
+
+1. 旧 `_score_batch` 调用 `model(**batch)`，让 causal LM 生成
+   `[batch, sequence, 151669]` 的完整词表 logits，随后才取最后 token；
+2. 实际最长格式化输入约 1,171 tokens，旧进程曾占用约 7.70/8 GB GPU memory；
+3. 固定模型的 `forward` 原生支持 `logits_to_keep=1`；
+4. 4 个真实 query/passage pair 的旧、新路径 score 最大绝对差为 `0.0`，排序完全一致；
+5. 修复后的 fresh CUDA 进程进入首个候选时约占 2.1 GB，尚未观察到 CUDA/OOM；该项在
+   9 个定向候选全部完成前只记作运行健康证据，不记作完成。
+
+代码提交 `48d4d01` 同时关闭了三个复用漏洞：last-token-only logits、显式
+`adapter_revision`、以及 rerank-enabled candidate fingerprint。`rerank-off` fingerprint
+保持不变。冻结配置重新生成 candidate plan 后，受旧 adapter 影响的精确集合是 **9 个**：
+reranker depth 20/50/100 三个，加 6 个 rerank-50 confirmation；不是先前估计的 10 个。
+其余 26 个 checkpoint 可以复用。旧 9 个 envelope 和 17 个旧 final/stage/report 文件已
+移动到 run-owned quarantine，并逐文件验证 SHA-256。
+
+同一提交还把 `execution_complete` 与 `guardrail_finalized` 分开：没有
+`guardrail_diagnostics` 的 completed envelope 只能是 `pending`，不能称 pass；
+incomplete、pending、基础设施或未知失败会阻止 stage/final/public export。失败 envelope
+现在保留 candidate、failure kind、phase/row/pass/progress 和 traceback。当前回归证据为
+`416 passed, 2 skipped`，benchmark validator 在仓库 Wave 0A 合同下通过。
+
+Paper-scoped 结果还更新了三个后续判断：
+
+- `F1` 800/1200 多粒度路线停止：2,152/2,153 个 fixed-1200 chunk 已被 fixed-800 高度
+  覆盖，平均 overlap 约 `0.965`，核心指标没有变化；
+- `RR1` 冻结为 depth-20、保留 base top-1、再做等权 rank-RRF。离线重放 primary
+  `0.853774`，相对 rerank-off `+0.019248`，没有新增 hard failure；
+- `R1` 冻结为保留 dense top-1，再做 dense:BM25=`2:1`、`k=60` 的 RRF。离线重放
+  primary `0.831811`，相对 dense `+0.010229`，没有新增 hard failure。
+
+这些离线重放只用于冻结下一候选，不替代正式 runner、完整 guardrails 或最终报告。
+
 ## 2. 总体判断
 
 当前主要瓶颈不是 embedding 模型，而是五类策略边界：
@@ -206,6 +260,15 @@ chunks 是 fixed-1200 的约 3.1 倍，但 R@5 低约 8.5 个百分点，显示�
 启发式结构标记时直接返回 failed，而不是局部记录“不适用”或切换到另一个有独立 ID 的
 确定性策略。这是确认的候选适用性问题，不能据此断言结构切分本身无效。
 
+只在 `detected=False` 时回退 fixed-1200 的初版 F2 虽能覆盖 20/20、映射 380/380，
+仍不能直接进入正式比较。其总 chunk 数只是 fixed-800 的 `1.170x`，但逐论文 expansion
+p95 为 `2.095x`、最大 `2.167x`：`W3040245690` 从 126 块增至 273 块；
+`W2792307011` 产生 251 块，中位长度仅 51 字符，167 块短于 100 字符且有 25 个重复文本；
+`W3094793347` 产生 1,061 块并有 65 个重复文本。根因是 heading heuristic 过检后，
+聚合被限制在每个伪 section 内，短 section 无法跨边界合并。因此 F2 的 fallback 必须同时
+覆盖 detection failure 和“检测成功但病态碎片化”，并在查看质量分数前冻结逐论文
+expansion、短块率、重复文本数和全局成本门。
+
 `pdf-parent-child` 的 Recall@5 为 `0.8156`，低于固定切分；它的层级组合还存在二次召回
 瓶颈，见第 6 节。
 
@@ -213,16 +276,15 @@ chunks 是 fixed-1200 的约 3.1 倍，但 R@5 低约 8.5 个百分点，显示�
 
 | ID | 单变量候选 | 目的 | 验证要求 |
 |---|---|---|---|
-| `F1` | `pdf-multigranular-800-1200-rrf` | 融合 800 的局部精度与 1200 的多证据覆盖 | 分别报告两路命中贡献；不得把重复 span 当新证据 |
-| `F2` | `pdf-structure-aware-fallback` | 无结构标记的单文档回退到 fixed-1200 | 报告每篇 fallback 率；不得让一篇失败拖垮全候选 |
+| `F1` | `pdf-multigranular-800-1200-rrf` | 融合 800 的局部精度与 1200 的多证据覆盖 | 已停止：chunk 高度重叠且核心指标零变化 |
+| `F2` | `pdf-structure-aware-fallback` | 无结构或病态碎片化时回退 fixed-1200 | 冻结逐论文 expansion/短块/重复/全局成本门；报告 fallback 率 |
 | `F3` | `pdf-fixed-1200-adjacent-expand` | 命中后只扩展相邻块，补跨边界证据 | 主排序不变；单独计 expansion 带来的召回和字节成本 |
 | `F4` | `pdf-heading-prefixed-1200` | 把 section path 作为可检索上下文 | provenance span 仍只指向正文；标题不得伪装成证据 |
 | `F5` | `section-aware-min200-merge` | 合并过短标题/短段，保留结构但减少碎片 | 报告短块率、MRR、跨 section R@5 |
 | `F6` | `multi-hop-decompose-diversify` | 生成无答案泄漏的 2–3 个检索子查询并做 page/section 多样化 | 只看线上 query；主门是 all-required-groups success@5/10 |
 | `F7` | `adversarial-claim-verification` | 分别检索研究范围与被断言结果，寻找限定/反驳证据 | 不读取 expected_refusal、false_premise 或 gold evidence |
 
-优先级为 `F2`（恢复实验有效性）后 `F1`（最有证据的质量候选）。`F3/F4` 只在
-`F1` 不能解释剩余跨边界失败时再测。
+优先级只保留 `F2`（恢复实验有效性）。`F1` 已停止；`F3/F4` 不在当前 rq-2 自动执行范围。
 
 所有成功 PDF chunker 都难以处理的 14 题中有 10 题是 multi-hop。三个全策略 R@5 为零
 的稳定反驳案例为 `W3094793347_adversarial1`、`W3154248945_adversarial0`、
@@ -303,12 +365,12 @@ hybrid 相对 dense 的逐题均值为 `+0.0117`，但 slice 方向不一致：
 
 | ID | 单变量候选 | 目的 | 验证要求 |
 |---|---|---|---|
-| `R1` | `hybrid-dense-heavy-fixed` | 保留 lookup 词法补救，减少多证据稀释 | 权重在查看 `rq-10` 前冻结；报告 dense/BM25 独立召回 |
+| `R1` | preserve dense top-1 + dense:BM25 `2:1` rank-RRF (`k=60`) | 保留 lookup 词法补救，减少多证据稀释 | 参数已冻结；正式 runner 报告 dense/BM25 独立召回和 hard failures |
 | `R2` | `dense-plus-bm25-rescue` | dense 为主，只补入未覆盖的高置信词法结果 | 固定 score/rank 门槛；补救结果须增加新 evidence group |
 | `R3` | `hybrid-diversity-aware` | 减少 top-k 被同页、同段近重复块占满 | 报告去重前后 evidence coverage 和排序变化 |
 | `R4` | `adaptive-retrieval-nonoracle` | 用线上可获得的 score gap、熵、两路分歧决定融合强度 | 禁止读取 question_type、paper_id gold 或 expected references |
 
-`R1` 优先于 `R4`；先验证简单固定权重，再考虑自适应路由。
+`R1` 优先于 `R4`；当前只验证上述冻结权重，不再扫描更多比例。
 
 ## 6. Source composition 丢分
 
@@ -413,14 +475,15 @@ evidence groups”的目标不完全一致，这是 adversarial 退化和多样�
 
 | ID | 单变量候选 | 目的 | 验证要求 |
 |---|---|---|---|
-| `RR1` | `rerank50-base-rank-fusion` | 融合 base rank 与 reranker rank，限制灾难性重排 | 上述 8 个稳定 row 全部列入回归表；不允许新增 hard failure |
+| `RR1` | depth-20 + preserve base top-1 + equal-rank RRF | 融合 base rank 与 reranker rank，限制灾难性重排 | 参数已冻结；上述稳定 row 全部列入回归表，不允许新增 hard failure |
 | `RR2` | `rerank50-score-calibration` | 归一化 base retrieval 与 cross-encoder score 后固定权重融合 | calibration 不读取 gold；权重在扩大层级前冻结 |
 | `RR3` | `rerank50-diversity-aware` | 保留不同页/parent/evidence route 的候选多样性 | 报告 MMR/去重对 multi-hop all-groups success 的影响 |
 | `RR4` | `adaptive-rerank-nonoracle` | 只在基础结果不确定或两路分歧高时付出重排延迟 | 路由特征必须是线上可观测量；报告触发率和整体 p95 |
 | `RR5` | `rerank50-evidence-intent-prompt` | 使用 support/qualify/refute 均适用的通用相关性 instruction | prompt 在扩大层级前冻结；不得读取 question_type |
 
-`RR1` 是首选；它最直接针对已观察到的“正确基础结果被整体替换”问题。depth 固定为 50，
-不再把 100 作为默认优化方向。
+`RR1` 是首选；它最直接针对已观察到的“正确基础结果被整体替换”问题。正式候选固定
+depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50/100 作为默认深度，
+也不继续扫描融合权重。
 
 ## 8. 后续优先级与最小实验矩阵
 
@@ -428,19 +491,22 @@ evidence groups”的目标不完全一致，这是 adversarial 退化和多样�
 
 | 项目 | 当前状态 | 下一验证 |
 |---|---|---|
-| paper-scoped 独立索引 | 代码已修复 | 同 35 候选正式重跑 |
-| 相对 baseline guardrail | 代码、配置和回归测试已修复 | 新 run 检查每个 payload 的 diagnostics |
-| 上游 eligibility 传递 | 代码已修复 | confirmation 不得洗白失败 component |
+| paper-scoped 独立索引 | 35 个候选均已执行到可审计终态 | 定向补跑 9 个旧 adapter 候选 |
+| 相对 baseline guardrail | paper-scoped completed 候选已有 diagnostics | 新 rerank envelope 必须 finalized |
+| 上游 eligibility 传递 | paper-scoped artifacts 已验证 | 修复后 confirmation 不得洗白失败 component |
 | Top-2 维度冻结 | 配置与 schema 已修复 | scope 修复前后均为相同 12/35 矩阵 |
 | 正交阶段 anchor 冻结 | 配置、schema 和公开 manifest 已修复 | 新旧 35 个 config ID 成对一致 |
 | reviewer-concern rankability | 已设为 diagnostic-only | 新 run 不得进入排名 |
 | pre-rerank Recall@20/50/100 和 pre/post rows | 已实现 | 新 reranker artifact 必须非空 |
 | 无 reference adversarial 分数分布 | 已实现 | 15/15 保持 null retrieval metric，并输出 score diagnostic |
 | stale FP16 candidate 隔离 | 已移动到 `stale-candidates` | final-plan membership 必须仍为 35 |
-| Pareto/public exporter 完整性 | 已修复 | 公开导出必须原子通过 |
-| `F2 pdf-structure-aware-fallback` | 待单变量实现 | 使用新 config ID，不覆盖明确失败 |
-| `N0 note-route-eligibility-gate` | 待单变量实现 | paper-scoped 基线后执行 |
-| `N3 note-concern-parser-contract` | 待单变量实现 | diagnostic coverage 验证 |
+| Pareto/public exporter 完整性 | fail-closed 代码已修复，旧假 final 已隔离 | 公开导出必须在零基础设施失败后原子通过 |
+| reranker last-token-only + adapter identity | 代码、parity 和回归测试已通过 | 精确 9 个候选 fresh-CUDA 定向重跑 |
+| execution/guardrail/failure 状态分离 | 代码和回归测试已通过 | 新 stage/final 必须 fail closed |
+| 旧 adapter 与假 final 隔离 | 9 个候选、17 个 artifact 已移入 run-owned quarantine | 新旧 SHA ledger 对账 |
+| `F2 pdf-structure-aware-fallback` | 已发现 detection failure 与病态碎片化两类失败 | 冻结生产输入结构门后使用新 config ID |
+| `N0 note-route-eligibility-gate` | 已冻结每篇非空且至少一条 backlinkable | paper-scoped 基线后执行 |
+| `N3 note-concern-parser-contract` | 已确认需支持 fatal/major/minor/zero | 结构化 severity coverage 验证 |
 | controlled finalist latency | 待执行 | 随机/交错顺序复测并列候选 |
 
 P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、失败可以局部降级、恢复不会混入
@@ -448,14 +514,16 @@ P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、�
 
 ### P1：最有证据的质量候选
 
-1. `RR1 rerank50-base-rank-fusion`
-2. `F1 pdf-multigranular-800-1200-rrf`
-3. `S0 + N1 + S1`：有 eligibility/fallback 的 PDF 主导笔记增强
+1. `RR1`：depth-20 + preserve base top-1 + equal-rank RRF
+2. `R1`：preserve dense top-1 + dense:BM25 `2:1` RRF (`k=60`)
+3. `S0 + N1 + S1`：仅在 N0/N3 和全论文 N1 claim+reviewer 路线完成后进入
 4. `H1 hierarchical-parent-expand-direct-fallback`
-5. `R1 hybrid-dense-heavy-fixed`
 
 这些候选不得一次全叠加。先分别与 fixed-1200 + hybrid + PDF-only + rerank-off 基线做
 单变量成对比较，再只对通过 guardrail 的候选做极少量交互确认。
+
+`F1` 已因 chunk 高度重叠且零质量增益停止；不得为了填满矩阵重新启动。当前也不继续扫描
+RR1/R1 权重。
 
 ### P2：证据不足或过拟合风险较高
 
@@ -490,14 +558,15 @@ P2 只有在 P1 无法解释剩余错误、且项目所有者另行批准后才�
 ## 10. 结论
 
 `rq-2` 已经足以排除三条粗糙路线：纯 note-to-PDF、无 fallback 的 note-guided hard
-filter、depth-100 默认重排。它也暴露了两个必须先修的实验合同：结构切分的单文档
-fallback，以及笔记策略的覆盖率可比性。
+filter、depth-100 默认重排。当前仍没有可发布 winner：必须先让 9 个 rerank-enabled
+候选在 fresh CUDA 进程中取得可审计终态，并证明基础设施失败、pending eligibility 和
+假 final 都为零。
 
-最值得进入后续单变量验证的不是再换一个更大的模型，而是：
+基线关闭后，最值得进入后续单变量验证的不是再换一个更大的模型，而是：
 
-1. 800/1200 多粒度融合；
-2. base rank + depth-50 rerank 融合；
-3. 有 coverage gate、confidence gate 和 PDF-only fallback 的笔记增强；
+1. 保留 base top-1 的 depth-20 重排融合；
+2. 保留 dense top-1 的 dense-heavy RRF；
+3. 有逐论文 coverage gate 和 PDF-only fallback 的笔记增强；
 4. 真正的 parent 命中后 child 重检索，而不是双重 top-k 硬门。
 
 这些候选在 `rq-2` 完成前只作为 backlog 记录；是否进入 `rq-5` 仍由 ADR-003 的 stop gate
