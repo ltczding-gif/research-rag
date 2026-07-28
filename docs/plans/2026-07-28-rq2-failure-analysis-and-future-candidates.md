@@ -21,8 +21,9 @@
 5. “确认”表示代码路径或 artifact 直接证明；“高置信假设”表示成对结果和实现路径共同
    支持；“待验证”表示只能由下一层单变量实验判断。
 6. 审计发现当前实现使用全局 20 篇共享索引，与 ADR 的 `paper-scoped` 合同不一致；
-   已完成 artifact 只保留为 global-corpus diagnostic。当前原子候选结束后停止该语义，
-   修复合同并重跑，不能用不合规结果完成 `rq-2`。
+   已完成 artifact 只保留为 global-corpus diagnostic。按项目所有者确认的执行顺序，
+   先完成当前已启动的原批准策略矩阵并形成完整诊断报告，再修复合同和重跑；不能用
+   global 结果完成 ADR 的最终 `rq-2`。
 
 ### 1.1 P0 合同偏差：当前实现不是 paper-scoped
 
@@ -48,7 +49,15 @@ ADR-003 的 R3 和 sweep design 都明确写了 `paper-scoped`，但
 三条 note source 路线的大部分灾难性退化来自 global note 污染。事后过滤不是正式分数，
 因为它没有重新构建 paper-specific BM25/embedding/rank 语义，只能用于确认根因。
 
-`rq-2` 的修复要求：
+为保留原测试计划的完整性，执行顺序固定为：
+
+1. 当前 global-corpus sweep 按原批准矩阵完成全部 35 个唯一候选；
+2. 生成完整但明确标记 `diagnostic` 的同口径报告；
+3. 再修复 paper-scoped 实现和两论文干扰回归；
+4. 复用不受 retrieval scope 影响的 source、note、chunk 和 embedding 缓存；
+5. paper-scoped 的 35 个唯一候选全部完成后，才生成 ADR 最终榜单。
+
+`rq-2` 的合同修复要求：
 
 1. 为每篇建立或选择独立的 PDF/note/parent 检索视图；
 2. query 只在其 benchmark paper 内排名；
