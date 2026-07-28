@@ -1414,7 +1414,7 @@ def run_complete_candidate(
     reranker: RerankerAdapter | None = None,
     notes: Mapping[str, str] | None = None,
     embedding_batch_size: int = 64,
-    reranker_batch_size: int = 8,
+    reranker_batch_size: int = 1,
     fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
     mapping_overall_minimum: float = 0.95,
     mapping_per_paper_minimum: float = 0.90,
@@ -1442,6 +1442,10 @@ def run_complete_candidate(
     ):
         raise StrategyContractError(
             "performance_sample_question_count must be greater than zero"
+        )
+    if reranker_batch_size <= 0:
+        raise StrategyContractError(
+            "reranker_batch_size must be greater than zero"
         )
     if performance_warmup_passes <= 0 or performance_timed_passes <= 0:
         raise StrategyContractError(
@@ -1732,11 +1736,12 @@ def run_complete_candidate(
 
         measured_p95_latency_ms = percentile(latency_samples_ms, 0.95)
         latency_metrics = {
-            "measurement_revision": "stratified-warm-query-v1",
+            "measurement_revision": "stratified-warm-query-v2",
             "question_selection": (
                 "minimum sha256(row_id) per domain x question_type"
             ),
             "query_embedding_mode": "precomputed",
+            "reranker_batch_size": reranker_batch_size,
             "warmup_passes": performance_warmup_passes,
             "timed_passes": performance_timed_passes,
             "performance_question_count": len(performance_questions),

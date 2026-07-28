@@ -440,7 +440,7 @@ def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path)
     assert result.chunk_count == 2
     assert result.index_bytes > 0
     assert result.latency_metrics["measurement_revision"] == (
-        "stratified-warm-query-v1"
+        "stratified-warm-query-v2"
     )
     assert result.latency_metrics["performance_question_count"] == 3
     assert result.latency_metrics["sample_count"] == 9
@@ -449,9 +449,11 @@ def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path)
     assert result.p95_latency_ms == result.latency_metrics["p95_latency_ms"]
     assert embedder.calls
     assert reranker.calls
+    assert {call[2] for call in reranker.calls} == {1}
     assert reranked.primary_score == pytest.approx(1.0)
     assert reranked.primary_metric == "coverage_ndcg_at_10"
     assert reranked.latency_metrics["rerank_p95_ms"] >= 0
+    assert reranked.latency_metrics["reranker_batch_size"] == 1
     assert len(evidence_mapping_cache) == 1
     assert reranked.mapping is result.mapping
 
