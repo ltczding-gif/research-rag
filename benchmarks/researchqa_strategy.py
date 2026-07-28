@@ -71,7 +71,7 @@ from service.pdf_ir import CanonicalDocument, DocumentPage, hash_text
 REFERENCE_MATCH_REVISION = "nfkc-whitespace-partial-sequence-v1"
 REFERENCE_EXACT_METHOD = "nfkc-whitespace-exact-v1"
 DEFAULT_FUZZY_THRESHOLD = 0.86
-DEFAULT_MAPPING_WORKERS = 4
+DEFAULT_MAPPING_WORKERS = 8
 PARALLEL_MAPPING_MIN_QUESTIONS = 32
 RETRIEVER_IDS = ("dense", "bm25", "hybrid-rrf")
 RERANKER_IDS = (
@@ -340,15 +340,7 @@ def map_question_references(
 
     if not 0.0 <= fuzzy_threshold <= 1.0:
         raise StrategyContractError("fuzzy_threshold must be in [0, 1]")
-    row_id = _required_text(question, "row_id")
     paper_id = normalize_paper_id(question.get("paper_id"))
-    domain = _required_text(question, "domain")
-    question_type = _required_text(question, "question_type")
-    references = question.get("expected_references")
-    if not isinstance(references, list):
-        raise StrategyContractError(
-            f"{row_id}: expected_references must be a list"
-        )
     paper_chunks = tuple(
         sorted(
             (chunk for chunk in chunks if chunk.paper_id == paper_id),
@@ -359,39 +351,78 @@ def map_question_references(
         chunk.chunk_id: normalize_reference_text(chunk.text)
         for chunk in paper_chunks
     }
+    return _map_question_with_normalized_chunks(
+        question,
+        normalized_chunks,
+        fuzzy_threshold=fuzzy_threshold,
+        reference_cache={},
+    )
+
+
+def _map_question_with_normalized_chunks(
+    question: Mapping[str, Any],
+    normalized_chunks: Mapping[str, str],
+    *,
+    fuzzy_threshold: float,
+    reference_cache: MutableMapping[
+        str,
+        Mapping[str, object] | None,
+    ],
+) -> EvidenceMapping:
+    row_id = _required_text(question, "row_id")
+    paper_id = normalize_paper_id(question.get("paper_id"))
+    domain = _required_text(question, "domain")
+    question_type = _required_text(question, "question_type")
+    references = question.get("expected_references")
+    if not isinstance(references, list):
+        raise StrategyContractError(
+            f"{row_id}: expected_references must be a list"
+        )
 
     def mapper(reference: str) -> Mapping[str, object] | None:
         normalized = normalize_reference_text(reference)
+        if normalized in reference_cache:
+            return reference_cache[normalized]
         exact = tuple(
             chunk_id
             for chunk_id, chunk_text in normalized_chunks.items()
             if normalized in chunk_text
         )
         if exact:
-            return {
+            result: Mapping[str, object] | None = {
                 "mapped_item_ids": exact,
                 "match_method": REFERENCE_EXACT_METHOD,
                 "match_score": 1.0,
             }
-        scores = {
-            chunk_id: _partial_sequence_ratio(normalized, chunk_text)
-            for chunk_id, chunk_text in normalized_chunks.items()
-        }
-        if not scores:
-            return None
-        best = max(scores.values())
-        if best < fuzzy_threshold:
-            return None
-        matches = tuple(
-            chunk_id
-            for chunk_id, score in sorted(scores.items())
-            if math.isclose(score, best, rel_tol=0.0, abs_tol=1e-12)
-        )
-        return {
-            "mapped_item_ids": matches,
-            "match_method": REFERENCE_MATCH_REVISION,
-            "match_score": best,
-        }
+        else:
+            scores = {
+                chunk_id: _partial_sequence_ratio(normalized, chunk_text)
+                for chunk_id, chunk_text in normalized_chunks.items()
+            }
+            if not scores:
+                result = None
+            else:
+                best = max(scores.values())
+                if best < fuzzy_threshold:
+                    result = None
+                else:
+                    matches = tuple(
+                        chunk_id
+                        for chunk_id, score in sorted(scores.items())
+                        if math.isclose(
+                            score,
+                            best,
+                            rel_tol=0.0,
+                            abs_tol=1e-12,
+                        )
+                    )
+                    result = {
+                        "mapped_item_ids": matches,
+                        "match_method": REFERENCE_MATCH_REVISION,
+                        "match_score": best,
+                    }
+        reference_cache[normalized] = result
+        return result
 
     return map_reference_groups(
         row_id=row_id,
@@ -411,11 +442,19 @@ def _map_paper_reference_batch(
     ],
 ) -> tuple[EvidenceMapping, ...]:
     questions, chunks, fuzzy_threshold = payload
+    paper_id = normalize_paper_id(questions[0].get("paper_id"))
+    normalized_chunks = {
+        chunk.chunk_id: normalize_reference_text(chunk.text)
+        for chunk in sorted(chunks, key=lambda item: item.chunk_id)
+        if chunk.paper_id == paper_id
+    }
+    reference_cache: dict[str, Mapping[str, object] | None] = {}
     return tuple(
-        map_question_references(
+        _map_question_with_normalized_chunks(
             question,
-            chunks,
+            normalized_chunks,
             fuzzy_threshold=fuzzy_threshold,
+            reference_cache=reference_cache,
         )
         for question in questions
     )
@@ -435,6 +474,8 @@ def map_all_references(
     row_ids = [_required_text(question, "row_id") for question in questions]
     if len(row_ids) != len(set(row_ids)):
         raise StrategyContractError("question row_ids must be unique")
+    if not 0.0 <= fuzzy_threshold <= 1.0:
+        raise StrategyContractError("fuzzy_threshold must be in [0, 1]")
     if mapping_workers is not None and mapping_workers < 1:
         raise StrategyContractError("mapping_workers must be at least 1")
     questions_by_paper: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
@@ -445,27 +486,35 @@ def map_all_references(
     chunks_by_paper: dict[str, list[ResearchQAChunk]] = defaultdict(list)
     for chunk in chunks:
         chunks_by_paper[chunk.paper_id].append(chunk)
-    jobs = tuple(
-        (
-            tuple(paper_questions),
-            tuple(chunks_by_paper.get(paper_id, ())),
-            fuzzy_threshold,
-        )
-        for paper_id, paper_questions in questions_by_paper.items()
-    )
     if mapping_workers is None:
         mapping_workers = (
-            min(DEFAULT_MAPPING_WORKERS, os.cpu_count() or 1, len(jobs))
+            min(DEFAULT_MAPPING_WORKERS, os.cpu_count() or 1, len(questions))
             if len(questions) >= PARALLEL_MAPPING_MIN_QUESTIONS
             else 1
         )
-    if mapping_workers == 1 or len(jobs) <= 1:
-        batches = tuple(_map_paper_reference_batch(job) for job in jobs)
+    jobs = []
+    for paper_id, paper_questions in questions_by_paper.items():
+        batch_count = min(mapping_workers, len(paper_questions))
+        batch_size = math.ceil(len(paper_questions) / batch_count)
+        paper_chunks = tuple(chunks_by_paper.get(paper_id, ()))
+        jobs.extend(
+            (
+                tuple(paper_questions[start : start + batch_size]),
+                paper_chunks,
+                fuzzy_threshold,
+            )
+            for start in range(0, len(paper_questions), batch_size)
+        )
+    job_batch = tuple(jobs)
+    if mapping_workers == 1 or len(job_batch) <= 1:
+        batches = tuple(_map_paper_reference_batch(job) for job in job_batch)
     else:
         with ProcessPoolExecutor(
-            max_workers=min(mapping_workers, len(jobs))
+            max_workers=min(mapping_workers, len(job_batch))
         ) as executor:
-            batches = tuple(executor.map(_map_paper_reference_batch, jobs))
+            batches = tuple(
+                executor.map(_map_paper_reference_batch, job_batch)
+            )
     mapping_by_row = {
         mapping.row_id: mapping for batch in batches for mapping in batch
     }
