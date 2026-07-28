@@ -455,6 +455,19 @@ note 做受控消融。
    多 claim、范围、无 major/fatal、未知 severity 和缺失 reviewer 节；本修复不以质量分
    提升为验收条件。
 
+`N1 note-claim-plus-reviewer` 也据此冻结为确定性组合，不重新生成笔记：
+
+1. 每篇的 `note-claim-evidence` 是必需底座；当前生产输入为 20/20 篇、103/103 块可回链。
+   任一论文底座不满足 N0 时，该论文按 N0 退化为 PDF-only，不能仅靠 reviewer 块补成
+   eligible。
+2. N3 解析出的 `fatal`/`major` chunks 作为可选 reviewer 支路加入同一论文；没有
+   fatal/major 时，N1 必须与该论文的 claim route 等价。`minor`/`zero` 只保留 metadata。
+3. base/reviewer chunk role、severity、claim/evidence IDs、backlinks 和逐论文块数进入
+   diagnostics 与 fingerprint。不得按当前问题、gold evidence 或观察到的质量分决定是否
+   启用 reviewer 支路。
+4. N1 使用新 config ID；现有 `note-claim-evidence` 和 diagnostic reviewer-only 结果继续
+   保留，不能被覆盖或改写成 N1 分数。
+
 ### 4.3 后续候选
 
 | ID | 单变量候选 | 目的 | 验证要求 |
@@ -556,6 +569,17 @@ paper-scoped 重跑把 global note 污染从结果中移除，但没有把这些
 | `H2` | `hierarchical-parent-child-score-fusion` | 校准 parent、child 和 direct 分数，避免双重硬门 | 不用 benchmark gold 调权 |
 
 `S0` 是所有笔记增强路线的前置合同。`S1` 只有与 `N0/N1` 配套才有公平比较价值。
+
+本轮只实现一个冻结的 `S0+N1+S1` 单变量候选，不扫描其他权重：
+
+1. direct PDF 与 N1 note-derived PDF 使用 `k=60` rank-RRF，权重固定为 `0.9/0.1`；
+2. 论文未通过 N0，或某个 query 的 note projection 为空时，必须直接调用 PDF-only 路线，
+   其 item IDs、顺序、scores 和 source metadata 全部与同输入 PDF-only 输出相同；不设置
+   观察分数后才能确定的“低置信”阈值；
+3. 报告每题 note projection 是否非空、note 独有 top-10 项、排序变化、rescue/loss 和新增
+   hard failures，并单列有/无 fatal-major reviewer 的论文；
+4. 只有 primary 改善且所有现有 guardrails 通过才晋级；否则保留为已验证失败，不继续把
+   `0.1` 调成其他权重。
 
 对产品级全库搜索可另记 `S3 document-router-top1-3-5`，但它必须用 query-only 路由并单独
 报告 paper recall；不得在 ResearchQA 运行时直接读取 gold `paper_id`。
