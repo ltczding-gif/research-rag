@@ -419,6 +419,15 @@ incomplete、pending、基础设施或未知失败会阻止 stage/final/public e
    completed checkpoint 前核对当次预期 paper/question ID 集合，不能恢复
    `execution_complete=true` 但集合不完整的自相矛盾 envelope。public exporter 也必须要求
    mapping coverage 的 `passed` 为真实布尔值。
+10. 2026-07-29 07:34（Asia/Shanghai）已实现上述状态合同：record 属性使用严格布尔门，
+    completed 判定强制显式 execution complete；loader 校验 payload candidate、三类状态
+    必填字段及预期 paper/question 集合；public exporter 独立拒绝未 finalized completion
+    和非完整 strategy failure。没有提升全局 engine revision，避免把刚验证的 9 个 fresh
+    adapter 结果一起作废；只有不满足合同的 legacy 候选会重执行。回归覆盖 valid-SHA
+    completed/incomplete/failed 篡改、truthy 字段、身份错配、完成集合不全和 exporter
+    旁路，共 `56 passed`；完整仓库为 `459 passed, 2 skipped`，Wave 0A benchmark
+    validator 通过。代码合同已验证，但当前正式 run 的 26 个 legacy envelope 仍须在下一步
+    实际重执行后才能关闭数据门禁。
 
 这只关闭了 fail-open 发布，还没有实现候选内部恢复。`run_complete_candidate` 当前先执行
 全部 254 条 quality rows，再执行 warmup/timed latency passes，最后才返回完整结果；

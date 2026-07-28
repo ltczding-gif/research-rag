@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from benchmarks.overnight import fingerprint_payload
 from benchmarks.researchqa_models import ModelTransportError
 from benchmarks.researchqa_retrieval import (
     RERANKER_MODEL_ID,
@@ -21,6 +22,7 @@ from benchmarks.researchqa_strategy import (
     CandidateRunResult,
     EvidenceMappingBundle,
     QuestionStrategyResult,
+    StrategyContractError,
     generate_orthogonal_candidates,
 )
 from benchmarks.researchqa_sweep import (
@@ -403,6 +405,16 @@ def test_guardrail_pass_is_pending_until_diagnostics_are_finalized():
     assert record.guardrail_finalized is False
     assert record.guardrails_passed is False
 
+    diagnostics_only = replace(
+        record,
+        payload={
+            **provisional_payload,
+            "guardrail_diagnostics": {"passed": True, "failures": []},
+        },
+    )
+    assert diagnostics_only.guardrail_finalized is False
+    assert diagnostics_only.guardrails_passed is False
+
     finalized = replace(
         record,
         payload={
@@ -413,6 +425,88 @@ def test_guardrail_pass_is_pending_until_diagnostics_are_finalized():
     )
     assert finalized.guardrail_finalized is True
     assert finalized.guardrails_passed is True
+
+    truthy_strings = replace(
+        record,
+        payload={
+            **provisional_payload,
+            "guardrail_finalized": "true",
+            "guardrails_passed": "true",
+        },
+    )
+    assert truthy_strings.guardrail_finalized is False
+    assert truthy_strings.guardrails_passed is False
+
+    mapping = provisional_payload["mapping"]
+    coverage = mapping["coverage"]
+    truthy_mapping = replace(
+        record,
+        payload={
+            **provisional_payload,
+            "mapping": {
+                **mapping,
+                "coverage": {**coverage, "passed": "false"},
+            },
+        },
+    )
+    assert truthy_mapping.mapping_passed is False
+
+
+def test_record_completion_requires_explicit_execution_complete():
+    candidate = generate_orthogonal_candidates(_config()).stages[
+        "pdf-chunker"
+    ][0]
+    payload = _candidate_result(candidate).to_dict()
+    record = SweepCandidateRecord(
+        candidate=candidate,
+        status="completed",
+        input_fingerprint="input",
+        payload=payload,
+        result_path="candidate.json",
+    )
+
+    assert not record.is_complete(
+        expected_paper_ids=("W1",),
+        expected_question_ids=("q1",),
+    )
+    explicitly_incomplete = replace(
+        record,
+        payload={**payload, "execution_complete": False},
+    )
+    assert not explicitly_incomplete.is_complete(
+        expected_paper_ids=("W1",),
+        expected_question_ids=("q1",),
+    )
+    explicitly_complete = replace(
+        record,
+        payload={**payload, "execution_complete": True},
+    )
+    assert explicitly_complete.is_complete(
+        expected_paper_ids=("W1",),
+        expected_question_ids=("q1",),
+    )
+
+
+def test_failure_kind_requires_an_explicit_enum():
+    candidate = generate_orthogonal_candidates(_config()).stages[
+        "pdf-chunker"
+    ][0]
+    record = SweepCandidateRecord(
+        candidate=candidate,
+        status="failed",
+        input_fingerprint="input",
+        payload={
+            "error_type": "StrategyContractError",
+            "error": "structure-detection-failed",
+        },
+        result_path="candidate.json",
+    )
+
+    assert record.failure_kind is None
+    assert replace(
+        record,
+        payload={**record.payload, "failure_kind": "strategy"},
+    ).failure_kind == "strategy"
 
 
 def test_relative_guardrails_reject_slice_regressions_and_new_hard_failure():
@@ -699,6 +793,165 @@ def test_bad_payload_sha_reexecutes_only_the_corrupt_candidate(tmp_path):
     assert sum(record.resumed for record in resumed.records) == 34
     repaired = json.loads(path.read_text(encoding="utf-8"))
     assert repaired["payload"]["primary_score"] > 0
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "missing-execution-complete",
+        "missing-guardrail-finalized",
+        "guardrail-finalized-not-bool",
+        "completed-claims-execution-incomplete",
+        "guardrails-passed-not-bool",
+        "mapping-passed-not-bool",
+        "completed-missing-paper-id",
+        "completed-missing-question-id",
+        "payload-candidate-mismatch",
+        "incomplete-claims-execution-complete",
+        "incomplete-missing-guardrail-finalized",
+        "incomplete-claims-guardrail-finalized",
+    ),
+)
+def test_valid_sha_with_invalid_checkpoint_contract_reexecutes_only_candidate(
+    tmp_path,
+    corruption,
+):
+    result = _run(tmp_path, _FakeExecutor(), [])
+    record = result.records[0]
+    path = Path(record.result_path)
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+
+    if corruption == "missing-execution-complete":
+        envelope["payload"].pop("execution_complete")
+    elif corruption == "missing-guardrail-finalized":
+        envelope["payload"].pop("guardrail_finalized")
+    elif corruption == "guardrail-finalized-not-bool":
+        envelope["payload"]["guardrail_finalized"] = "false"
+    elif corruption == "completed-claims-execution-incomplete":
+        envelope["payload"]["execution_complete"] = False
+    elif corruption == "guardrails-passed-not-bool":
+        envelope["payload"]["guardrails_passed"] = "false"
+    elif corruption == "mapping-passed-not-bool":
+        envelope["payload"]["mapping"]["coverage"]["passed"] = "false"
+    elif corruption == "completed-missing-paper-id":
+        envelope["payload"]["completed_paper_ids"] = []
+    elif corruption == "completed-missing-question-id":
+        envelope["payload"]["completed_question_ids"] = []
+    elif corruption == "payload-candidate-mismatch":
+        envelope["payload"]["candidate"]["config_id"] = "wrong-candidate"
+    elif corruption == "incomplete-claims-execution-complete":
+        envelope["status"] = "incomplete"
+        envelope["payload"]["execution_complete"] = True
+        envelope["payload"]["guardrail_finalized"] = False
+    elif corruption == "incomplete-missing-guardrail-finalized":
+        envelope["status"] = "incomplete"
+        envelope["payload"]["execution_complete"] = False
+        envelope["payload"].pop("guardrail_finalized")
+    else:
+        envelope["status"] = "incomplete"
+        envelope["payload"]["execution_complete"] = False
+        envelope["payload"]["guardrail_finalized"] = True
+    envelope["payload_sha256"] = fingerprint_payload(envelope["payload"])
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+
+    executor = _FakeExecutor()
+    resumed = _run(tmp_path, executor, [])
+
+    assert executor.calls == [record.candidate.config_id]
+    assert sum(item.resumed for item in resumed.records) == 34
+    repaired = json.loads(path.read_text(encoding="utf-8"))
+    assert repaired["status"] == "completed"
+    assert repaired["payload"]["candidate"] == record.candidate.to_dict()
+    assert repaired["payload"]["execution_complete"] is True
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "legacy-minimal",
+        "missing-candidate",
+        "payload-candidate-mismatch",
+        "execution-claims-complete",
+        "missing-failure-kind",
+        "invalid-failure-kind",
+        "missing-failure-context",
+        "failure-context-not-mapping",
+        "missing-guardrail-finalized",
+        "guardrail-claims-finalized",
+        "guardrail-finalized-not-bool",
+        "missing-traceback",
+        "empty-traceback",
+        "missing-error-type",
+        "empty-error-type",
+        "missing-error",
+        "empty-error",
+    ),
+)
+def test_valid_sha_invalid_failed_checkpoint_is_reexecuted(
+    tmp_path,
+    corruption,
+):
+    class StrategyFailFirst(_FakeExecutor):
+        def __call__(self, candidate, *args, **kwargs):
+            if not self.calls:
+                self.calls.append(candidate.config_id)
+                raise StrategyContractError("deterministic strategy failure")
+            return super().__call__(candidate, *args, **kwargs)
+
+    result = _run(tmp_path, StrategyFailFirst(), [])
+    record = next(item for item in result.records if item.status == "failed")
+    path = Path(record.result_path)
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    payload = envelope["payload"]
+    if corruption == "legacy-minimal":
+        payload = {
+            "error_type": "StrategyContractError",
+            "error": "structure-detection-failed",
+        }
+    elif corruption == "missing-candidate":
+        payload.pop("candidate")
+    elif corruption == "payload-candidate-mismatch":
+        payload["candidate"]["config_id"] = "wrong-candidate"
+    elif corruption == "execution-claims-complete":
+        payload["execution_complete"] = True
+    elif corruption == "missing-failure-kind":
+        payload.pop("failure_kind")
+    elif corruption == "invalid-failure-kind":
+        payload["failure_kind"] = "other"
+    elif corruption == "missing-failure-context":
+        payload.pop("failure_context")
+    elif corruption == "failure-context-not-mapping":
+        payload["failure_context"] = "candidate-execution"
+    elif corruption == "missing-guardrail-finalized":
+        payload.pop("guardrail_finalized")
+    elif corruption == "guardrail-claims-finalized":
+        payload["guardrail_finalized"] = True
+    elif corruption == "guardrail-finalized-not-bool":
+        payload["guardrail_finalized"] = "false"
+    elif corruption == "missing-traceback":
+        payload.pop("traceback")
+    elif corruption == "empty-traceback":
+        payload["traceback"] = ""
+    elif corruption == "missing-error-type":
+        payload.pop("error_type")
+    elif corruption == "empty-error-type":
+        payload["error_type"] = ""
+    elif corruption == "missing-error":
+        payload.pop("error")
+    else:
+        payload["error"] = ""
+    envelope["payload"] = payload
+    envelope["payload_sha256"] = fingerprint_payload(envelope["payload"])
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+
+    executor = _FakeExecutor()
+    resumed = _run(tmp_path, executor, [])
+
+    assert executor.calls == [record.candidate.config_id]
+    assert sum(item.resumed for item in resumed.records) == 34
+    repaired = json.loads(path.read_text(encoding="utf-8"))
+    assert repaired["status"] == "completed"
+    assert repaired["payload"]["execution_complete"] is True
 
 
 def test_records_keep_verbose_candidate_rows_on_disk_only(tmp_path):

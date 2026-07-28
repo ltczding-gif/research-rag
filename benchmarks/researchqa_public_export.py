@@ -247,7 +247,10 @@ def _candidate_envelopes(
                 or len(questions) != 254
                 or len(set(map(str, papers))) != 20
                 or len(set(map(str, questions))) != 254
+                or payload.get("execution_complete") is not True
+                or payload.get("guardrail_finalized") is not True
                 or not isinstance(payload.get("guardrails_passed"), bool)
+                or not isinstance(coverage.get("passed"), bool)
                 or payload.get("retrieval_scope") != "paper-scoped"
             ):
                 raise RQ2PublicExportError(
@@ -280,12 +283,30 @@ def _candidate_envelopes(
                 }
             )
         else:
+            candidate = payload.get("candidate")
+            if (
+                not isinstance(candidate, Mapping)
+                or candidate.get("config_id") != config_id
+                or candidate.get("stage_id") != stage_id
+                or payload.get("execution_complete") is not False
+                or payload.get("guardrail_finalized") is not False
+                or payload.get("failure_kind") != "strategy"
+                or not isinstance(payload.get("failure_context"), Mapping)
+                or any(
+                    not isinstance(payload.get(key), str)
+                    or not payload[key].strip()
+                    for key in ("error", "error_type", "traceback")
+                )
+            ):
+                raise RQ2PublicExportError(
+                    f"candidate failure gates failed: {config_id}"
+                )
             public_candidates.append(
                 {
                     "config_id": config_id,
                     "stage_id": stage_id,
                     "status": status,
-                    "rankable": stage_id != "note-chunker",
+                    "rankable": bool(candidate.get("rankable")),
                     "mapping_passed": False,
                     "guardrails_passed": False,
                 }

@@ -80,24 +80,19 @@ class SweepCandidateRecord:
         return bool(
             isinstance(mapping, Mapping)
             and isinstance(mapping.get("coverage"), Mapping)
-            and mapping["coverage"].get("passed")
+            and mapping["coverage"].get("passed") is True
         )
 
     @property
     def guardrails_passed(self) -> bool:
-        return self.guardrail_finalized and bool(
-            self.payload.get("guardrails_passed")
+        return (
+            self.guardrail_finalized
+            and self.payload.get("guardrails_passed") is True
         )
 
     @property
     def guardrail_finalized(self) -> bool:
-        explicit = self.payload.get("guardrail_finalized")
-        if explicit is not None:
-            return bool(explicit)
-        return isinstance(
-            self.payload.get("guardrail_diagnostics"),
-            Mapping,
-        )
+        return self.payload.get("guardrail_finalized") is True
 
     @property
     def failure_kind(self) -> str | None:
@@ -106,27 +101,7 @@ class SweepCandidateRecord:
         explicit = self.payload.get("failure_kind")
         if explicit in {"strategy", "infrastructure", "unknown"}:
             return str(explicit)
-        error_type = str(self.payload.get("error_type", ""))
-        error = str(self.payload.get("error", "")).lower()
-        if error_type == "StrategyContractError":
-            return "strategy"
-        if error_type in {
-            "AcceleratorError",
-            "MemoryError",
-            "ModelInferenceError",
-            "ModelPreflightError",
-            "SystemError",
-        } or any(
-            marker in error
-            for marker in (
-                "cuda",
-                "out of memory",
-                "error return without exception set",
-                "illegal memory access",
-            )
-        ):
-            return "infrastructure"
-        return "unknown"
+        return None
 
     @property
     def p95_latency_ms(self) -> float:
@@ -181,6 +156,7 @@ class SweepCandidateRecord:
     ) -> bool:
         return (
             self.status == "completed"
+            and self.payload.get("execution_complete") is True
             and set(self.completed_paper_ids)
             == {normalize_paper_id(value) for value in expected_paper_ids}
             and set(self.completed_question_ids) == set(expected_question_ids)
@@ -531,11 +507,53 @@ def _failure_kind(exc: Exception) -> str:
     return "unknown"
 
 
+def _candidate_payload_contract_is_valid(
+    *,
+    status: object,
+    payload: Mapping[str, Any],
+    candidate: StrategyCandidate,
+) -> bool:
+    if payload.get("candidate") != candidate.to_dict():
+        return False
+    if status == "completed":
+        mapping = payload.get("mapping")
+        coverage = (
+            mapping.get("coverage") if isinstance(mapping, Mapping) else None
+        )
+        return (
+            payload.get("execution_complete") is True
+            and isinstance(payload.get("guardrail_finalized"), bool)
+            and isinstance(payload.get("guardrails_passed"), bool)
+            and isinstance(coverage, Mapping)
+            and isinstance(coverage.get("passed"), bool)
+        )
+    if status == "incomplete":
+        return (
+            payload.get("execution_complete") is False
+            and payload.get("guardrail_finalized") is False
+        )
+    if status != "failed":
+        return False
+    return (
+        payload.get("execution_complete") is False
+        and payload.get("failure_kind")
+        in {"strategy", "infrastructure", "unknown"}
+        and isinstance(payload.get("failure_context"), Mapping)
+        and payload.get("guardrail_finalized") is False
+        and all(
+            isinstance(payload.get(key), str) and bool(payload[key].strip())
+            for key in ("error", "error_type", "traceback")
+        )
+    )
+
+
 def _load_candidate_record(
     path: Path,
     *,
     candidate: StrategyCandidate,
     input_fingerprint: str,
+    expected_paper_ids: Sequence[str],
+    expected_question_ids: Sequence[str],
 ) -> SweepCandidateRecord | None:
     try:
         envelope = json.loads(path.read_text(encoding="utf-8"))
@@ -554,9 +572,14 @@ def _load_candidate_record(
         or status not in {"completed", "incomplete", "failed"}
         or not isinstance(payload, Mapping)
         or envelope.get("payload_sha256") != fingerprint_payload(payload)
+        or not _candidate_payload_contract_is_valid(
+            status=status,
+            payload=payload,
+            candidate=candidate,
+        )
     ):
         return None
-    return SweepCandidateRecord(
+    record = SweepCandidateRecord(
         candidate=candidate,
         status=str(status),
         input_fingerprint=input_fingerprint,
@@ -564,6 +587,12 @@ def _load_candidate_record(
         result_path=str(path.resolve()),
         resumed=True,
     )
+    if status == "completed" and not record.is_complete(
+        expected_paper_ids=expected_paper_ids,
+        expected_question_ids=expected_question_ids,
+    ):
+        return None
+    return record
 
 
 def _read_full_candidate_payload(
@@ -1840,6 +1869,8 @@ def run_strategy_sweep(
                 path,
                 candidate=candidate,
                 input_fingerprint=input_fingerprint,
+                expected_paper_ids=paper_ids,
+                expected_question_ids=question_ids,
             )
             if record is None:
                 if rerank_phase:
@@ -1930,7 +1961,7 @@ def run_strategy_sweep(
                             "execution_complete": False,
                             "failure_kind": _failure_kind(exc),
                             "error_type": type(exc).__name__,
-                            "error": str(exc),
+                            "error": str(exc) or type(exc).__name__,
                             "failure_context": {
                                 "phase": "candidate-execution",
                                 "row_id": None,

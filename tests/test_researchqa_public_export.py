@@ -4,6 +4,7 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from benchmarks.overnight import fingerprint_payload
@@ -48,7 +49,28 @@ def _fixture_run(tmp_path: Path) -> Path:
                 stage_id == "retriever" and index == count - 1
             )
             payload = (
-                {"error_type": "FixtureError", "error": r"F:\private\paper.pdf"}
+                {
+                    "candidate": {
+                        "config_id": config_id,
+                        "stage_id": stage_id,
+                        "rankable": True,
+                    },
+                    "execution_complete": False,
+                    "failure_kind": "strategy",
+                    "failure_context": {
+                        "phase": "candidate-execution",
+                        "row_id": None,
+                        "pass_index": None,
+                        "progress": {
+                            "completed_paper_ids": [],
+                            "completed_question_ids": [],
+                        },
+                    },
+                    "guardrail_finalized": False,
+                    "error_type": "StrategyContractError",
+                    "error": r"F:\private\paper.pdf",
+                    "traceback": "fixture traceback",
+                }
                 if failed
                 else {
                     "candidate": {
@@ -61,6 +83,8 @@ def _fixture_run(tmp_path: Path) -> Path:
                     "completed_paper_ids": paper_ids,
                     "completed_question_ids": question_ids,
                     "mapping": {"coverage": coverage},
+                    "execution_complete": True,
+                    "guardrail_finalized": True,
                     "guardrails_passed": guardrails_passed,
                     "retrieval_scope": "paper-scoped",
                 }
@@ -283,3 +307,74 @@ def test_rq2_public_export_is_allowlisted_valid_and_replaceable(
     )
     assert "F:\\private" not in serialized
     assert '"error"' not in serialized
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "completed-missing-execution-complete",
+        "completed-execution-incomplete",
+        "completed-missing-guardrail-finalized",
+        "completed-guardrail-not-finalized",
+        "completed-guardrails-passed-not-bool",
+        "completed-mapping-passed-not-bool",
+        "failed-missing-candidate",
+        "failed-execution-complete",
+        "failed-infrastructure-kind",
+        "failed-missing-context",
+        "failed-guardrail-finalized",
+        "failed-empty-traceback",
+    ),
+)
+def test_public_export_rejects_invalid_candidate_state_contract(
+    tmp_path,
+    corruption,
+):
+    run_root = _fixture_run(tmp_path)
+    envelopes = [
+        (path, json.loads(path.read_text(encoding="utf-8")))
+        for path in (
+            run_root / "sweep" / "candidates"
+        ).rglob("*.json")
+    ]
+    target_status = (
+        "completed" if corruption.startswith("completed-") else "failed"
+    )
+    path, envelope = next(
+        item for item in envelopes if item[1]["status"] == target_status
+    )
+    payload = envelope["payload"]
+
+    if corruption == "completed-missing-execution-complete":
+        payload.pop("execution_complete")
+    elif corruption == "completed-execution-incomplete":
+        payload["execution_complete"] = False
+    elif corruption == "completed-missing-guardrail-finalized":
+        payload.pop("guardrail_finalized")
+    elif corruption == "completed-guardrail-not-finalized":
+        payload["guardrail_finalized"] = False
+    elif corruption == "completed-guardrails-passed-not-bool":
+        payload["guardrails_passed"] = "false"
+    elif corruption == "completed-mapping-passed-not-bool":
+        payload["mapping"]["coverage"]["passed"] = "false"
+    elif corruption == "failed-missing-candidate":
+        payload.pop("candidate")
+    elif corruption == "failed-execution-complete":
+        payload["execution_complete"] = True
+    elif corruption == "failed-infrastructure-kind":
+        payload["failure_kind"] = "infrastructure"
+    elif corruption == "failed-missing-context":
+        payload.pop("failure_context")
+    elif corruption == "failed-guardrail-finalized":
+        payload["guardrail_finalized"] = True
+    else:
+        payload["traceback"] = ""
+
+    envelope["payload_sha256"] = fingerprint_payload(payload)
+    _write_json(path, envelope)
+
+    with pytest.raises(
+        public_export.RQ2PublicExportError,
+        match=r"candidate (completion|failure) gates failed",
+    ):
+        public_export._candidate_envelopes(run_root)
