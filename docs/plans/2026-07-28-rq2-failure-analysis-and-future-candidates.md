@@ -230,6 +230,28 @@ incomplete、pending、基础设施或未知失败会阻止 stage/final/public e
    progress 才能 finalized。source/note/model/adapter/config/code 任一 fingerprint 不同都使
    resume 失效并 fail closed。
 
+当前 latency 还有独立的假 winner 风险。`rank_candidates` 对 primary 差不超过 `0.005`
+的候选立即用 `p95_latency_ms` 决胜，Pareto 也无条件把该值当作可比维度；但 sweep 是逐
+候选串行测量，未平衡候选顺序和 GPU 热状态。修复后的 depth-20 实测期间 GPU software
+thermal slowdown 已为 active，所以其 p95 只能解释为 observed cost，不能作为并列决胜
+证据。
+
+冻结 controlled finalist latency 合同：
+
+1. 每个 latency artifact 显式写 `validity=decisive|observed-only`、原因、相同的 40 个
+   performance row IDs、每 pass 样本、模型/adapter、batch/dtype、CPU/RAM/GPU 和热降频
+   状态；聚合值不能丢掉 pass-level 证据。
+2. 初始全矩阵的串行 p95 默认 `observed-only`，只用于成本诊断。先按质量与 guardrails
+   形成 `0.005` tie group，再只对该小组做受控复测，避免为了延迟重跑全部策略。
+3. 每个 finalist 先独立 warmup；timed passes 在候选间按固定 seed 轮换/交错，保证相同
+   pass 数和 sample count。中断只丢弃当前不完整 pass，并按上面的原子 progress 合同恢复。
+4. 任一 timed pass 出现 hardware/software thermal slowdown 或状态未知，该 pass 不得成为
+   decisive。若一次冷却后的交错复测仍无法取得无热降频环境，保留 observed-only 数值并在
+   tie-break 中跳过 latency，继续使用 index bytes、chunk count、config ID；不得无限重跑
+   到偶然有利。
+5. observed-only latency 不得支配 Pareto 点，也不得产生 winner 文案。只有完整受控 artifact
+   通过相同输入、等样本和环境门后，p95 才能进入正式 tie-break。
+
 Paper-scoped 结果还更新了三个后续判断：
 
 - `F1` 800/1200 多粒度路线停止：2,152/2,153 个 fixed-1200 chunk 已被 fixed-800 高度
@@ -607,7 +629,7 @@ depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50
 | `F2 pdf-structure-aware-fallback` | 生产输入结构门已冻结，代码待实现 | 使用新 config ID，不按质量分数调阈值 |
 | `N0 note-route-eligibility-gate` | 已冻结逐论文同一非空块须 backlinkable；失败逐论文 PDF-only fallback | paper-scoped 基线后实现并报告 fallback IDs/rate |
 | `N3 note-concern-parser-contract` | 已冻结 58 行生产分布、多 claim/range、四级 severity 与 fail-closed 边界 | 实现结构化 parser；reviewer-only 仍 diagnostic-only |
-| controlled finalist latency | 待执行 | 随机/交错顺序复测并列候选 |
+| controlled finalist latency | 已确认串行 p95 在热降频下只能 observed-only；合同已冻结 | 只交错复测质量 tie group；不可比时跳过 latency 决胜 |
 
 P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、失败可以局部降级、恢复不会混入
 旧 selection 结果。
