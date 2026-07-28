@@ -340,6 +340,24 @@ expansion、短块率、重复文本数和全局成本门。
 5. 完成逐论文回退后，全局 chunk count / fixed-1200 chunk count 必须 `<= 1.25`；
    超过则候选合同失败，不查看质量分数后继续补调阈值。
 
+F2 的代码接入边界也在质量评测前冻结，避免把修复候选混入原 35 项基线或复用错误
+provenance：
+
+1. `PDF_CHUNKER_IDS`、`rq2-overnight.yaml` 和 config schema 继续只表示原批准的 7 个
+   PDF chunker；F2 进入独立的 repair/extension ID 集合，不能改变原候选数、原候选
+   fingerprint 或 stage membership；
+2. chunk dispatch 和 `StrategyCandidate` 只把
+   `pdf-structure-aware-fallback` 加入“可执行 ID”全集；原
+   `generate_orthogonal_candidates()` 仍严格验证并生成原 7 项，F2 由显式 repair
+   candidate 入口创建，`stage_id=pdf-chunker` 且使用新的候选 config ID；
+3. 无论论文采用 structure 路线还是 fixed-1200 fallback，都必须用 F2 的 chunker ID、
+   canonical source spans、文本和 F2 fingerprint 重新物化 chunk ID；禁止只替换
+   `config_id` 或复用 `pdf-structure-aware` / `pdf-fixed-1200` 的旧 chunk ID；
+4. 每篇输出 detection 状态、structure/fixed-1200 块数比、短块率、重复数与比例、
+   是否 fallback 及唯一 fallback reason；这些诊断和阈值 revision 进入候选输入指纹。
+   全局输出总块数比、fallback paper IDs/rate 和最终合同状态。partial/超成本结果
+   不可排名，也不能覆盖原 structure-aware 的确定性失败记录。
+
 `2.5` 相对 800/1200 的目标粒度仍保留了充足结构开销；`40%` 短块意味着近半索引单位
 已经与 800 字符目标相悖；重复门同时要求绝对数量和比例，避免短论文因单个重复误触发。
 在当前 20 篇生产输入上，该门使 9 篇 detection failure 和 4 篇病态碎片化论文回退；
