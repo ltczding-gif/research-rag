@@ -697,7 +697,7 @@ def test_default_transformers_loader_pins_revision_cache_and_device(
 
     tokenizer = object()
     model = LoadedModel()
-    fake_torch = object()
+    fake_torch = SimpleNamespace(float16="float16")
     fake_transformers = SimpleNamespace(
         AutoTokenizer=Factory(tokenizer),
         AutoModelForCausalLM=Factory(model),
@@ -737,6 +737,7 @@ def test_default_transformers_loader_pins_revision_cache_and_device(
             "local_files_only": True,
             "trust_remote_code": False,
             "use_safetensors": True,
+            "dtype": "float16",
         },
     )
     assert model.to_calls == ["cuda:3"]

@@ -40,7 +40,7 @@ from service.pdf_ir import CanonicalDocument
 
 
 SWEEP_SCHEMA_VERSION = 1
-SWEEP_ENGINE_REVISION = "researchqa-sweep-v5"
+SWEEP_ENGINE_REVISION = "researchqa-sweep-v6"
 
 
 class SweepContractError(ValueError):

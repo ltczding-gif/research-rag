@@ -38,7 +38,7 @@ OLLAMA_EMBED_ENDPOINT = "/api/embed"
 OLLAMA_GENERATE_ENDPOINT = "/api/generate"
 OLLAMA_TAGS_ENDPOINT = "/api/tags"
 DEFAULT_NORMALIZATION_REVISION = "exact-text-utf8-v1"
-MODEL_ADAPTER_REVISION = "researchqa-model-adapters-v1"
+MODEL_ADAPTER_REVISION = "researchqa-model-adapters-v2"
 RERANKER_MAX_LENGTH = 8192
 RERANKER_INSTRUCTION = (
     "Given a web search query, retrieve relevant passages that answer the query"
@@ -605,13 +605,18 @@ def _load_transformers_components(
         padding_side="left",
         trust_remote_code=False,
     )
+    model_kwargs = {
+        "revision": revision,
+        "cache_dir": str(hf_home),
+        "local_files_only": local_files_only,
+        "trust_remote_code": False,
+        "use_safetensors": True,
+    }
+    if device.casefold().startswith("cuda"):
+        model_kwargs["dtype"] = torch.float16
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_id,
-        revision=revision,
-        cache_dir=str(hf_home),
-        local_files_only=local_files_only,
-        trust_remote_code=False,
-        use_safetensors=True,
+        **model_kwargs,
     )
     model.to(device)
     model.eval()
