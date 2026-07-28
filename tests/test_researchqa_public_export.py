@@ -44,6 +44,9 @@ def _fixture_run(tmp_path: Path) -> Path:
         for index in range(count):
             config_id = f"{stage_id}-{index:02d}"
             failed = stage_id == "pdf-chunker" and index == count - 1
+            guardrails_passed = not (
+                stage_id == "retriever" and index == count - 1
+            )
             payload = (
                 {"error_type": "FixtureError", "error": r"F:\private\paper.pdf"}
                 if failed
@@ -58,7 +61,8 @@ def _fixture_run(tmp_path: Path) -> Path:
                     "completed_paper_ids": paper_ids,
                     "completed_question_ids": question_ids,
                     "mapping": {"coverage": coverage},
-                    "guardrails_passed": True,
+                    "guardrails_passed": guardrails_passed,
+                    "retrieval_scope": "paper-scoped",
                 }
             )
             envelope = {
@@ -267,6 +271,13 @@ def test_rq2_public_export_is_allowlisted_valid_and_replaceable(
         (output / "run-manifest.json").read_text(encoding="utf-8")
     )
     validate_rq2_public_manifest(manifest)
+    assert manifest["retrieval_scope"] == "paper-scoped"
+    assert manifest["stage_anchors"]["pdf_chunker"] == "pdf-fixed-1200"
+    assert any(
+        row["status"] == "completed"
+        and row["guardrails_passed"] is False
+        for row in manifest["candidates"]
+    )
     serialized = "\n".join(
         path.read_text(encoding="utf-8") for path in output.iterdir()
     )

@@ -1,7 +1,7 @@
 # `rq-2` 失败归因与后续候选策略
 
-- **Status:** Evidence log; future candidates are not active
-- **Date:** 2026-07-28
+- **Status:** Active correction ledger; global run is diagnostic-only
+- **Date:** 2026-07-29
 - **Benchmark:** ResearchQA `rq-2`，20 篇、254 问、380 个 evidence groups
 - **Scope:** 记录 `rq-2` 的失败模式、实现缺陷和可验证优化假设
 - **Non-goal:** 本文件不修改冻结问题、冻结笔记、当前候选或自动进入 `rq-5`
@@ -69,6 +69,79 @@ ADR-003 的 R3 和 sweep design 都明确写了 `paper-scoped`，但
 产品若要在未知论文的全库检索中工作，不能使用 benchmark gold `paper_id`。该问题应另建
 `document-router -> top-N paper-scoped retrieval` 候选，并把 gold paper_id 结果只作为
 oracle 上界；它不属于当前 `rq-2` 修复。
+
+### 1.2 全 35 候选的假通过复盘
+
+旧 run `rq2-20260728-v12` 已完成 35 个唯一候选中的 34 个，`pdf-structure-aware`
+明确失败。旧实现把 `guardrails_passed` 定义成“配置中的指标存在且为有限数”，没有进行
+任何相对 baseline 的 slice、hard-failure 或成本检查。因此这个字段不能支持晋级。
+
+按 2026-07-29 固化的修复门重新审计旧 payload：
+
+- 十领域中最多允许一个领域的 primary 退化超过 2 个百分点；
+- `multi_hop`、有 reference 的 `adversarial` primary 不得退化超过 2 个百分点；
+- 总体 Recall@10 和 all-required-groups success@10 不得退化超过 0.5 个百分点；
+- 不允许新增 Recall@10 从非零降为零的 hard failure；
+- p95 latency 或 index size 超过 baseline 1.5 倍记为 operational review，不自动伪装成
+  生产可用。
+
+复盘结果是：34 个旧“通过”记录中，只有 11 个满足上述质量门，23 个是假通过；13 个还
+触发至少一项 1.5 倍成本复核。分阶段结果如下：
+
+| 阶段 | 完成 | 实际通过 | 假通过 | 明确失败 | 成本复核 |
+|---|---:|---:|---:|---:|---:|
+| PDF chunker | 6 | 1 | 5 | 1 | 3 |
+| note chunker | 4 | 1 | 3 | 0 | 0 |
+| retriever | 3 | 1 | 2 | 0 | 0 |
+| source composition | 5 | 1 | 4 | 0 | 1 |
+| reranker | 4 | 1 | 3 | 0 | 3 |
+| Top-2 confirmation | 12 | 6 | 6 | 0 | 6 |
+| **合计** | **34** | **11** | **23** | **1** | **13** |
+
+这 11 个“通过”包含每组相对比较的 baseline，不能解读成 11 个独立优胜策略。尤其：
+
+1. 旧 provisional winner `top2-confirmation-83a878a5daa76b1bb7ff` 相对对应
+   rerank-off baseline 在 biology、machine learning、psychology 三个领域退化超过
+   2 个百分点，`adversarial` 退化 `3.19` 个百分点，并新增 1 个 Recall@10 hard
+   failure；它不得晋级。
+2. 三个 reranker depth 都新增 1 个 hard failure，并在三个领域和 adversarial slice
+   退化；depth-20/50/100 的 p95 分别约为 off 的 `7.24x`、`15.04x`、`63.80x`。
+3. hybrid 相对 dense 虽提高 primary，但 all-required-groups success@10 退化约
+   `1.10` 个百分点并新增 3 个 hard failures，不能只看 nDCG 宣布胜出。
+4. fixed-1200 相对 fixed-800 新增 4 个 hard failures，并在三个领域及 adversarial
+   slice 越线；它的总体 Recall@5 优势是真实观测，但不是无条件晋级依据。
+5. 所有旧 note source 分数还受到 global-corpus 污染；这些数值只能帮助定位失败机制，
+   不能作为 paper-scoped 正式分数。
+
+这次盘点也区分了“假分数”和“真实但很差的策略”：
+
+| 项目 | 结论 | 处理 |
+|---|---|---|
+| global shared index | 违反 benchmark retrieval scope，正式榜无效 | 已改为 paper-scoped；旧 run 隔离为 diagnostic |
+| finite-only `guardrails_passed` | 假通过的直接来源 | 已改为相对 baseline 的可审计门 |
+| reviewer-concern 稀疏高分 | 只覆盖极少内容，不能竞争通用路线 | 已设 `rankable: false` |
+| structure-aware 9/20 失败 | 真实失败，不是零分或假分 | 保留 failed；后续只测显式 fallback 新 ID |
+| note/hierarchical 低分 | 实现语义下的真实低分，但旧 scope 无效 | paper-scoped 重跑后再判断 |
+| 15 个无 reference adversarial | 检索指标应为 null，不是成功或失败 | 新 run 保存 top-1 score 分布，并明确不等于拒答准确率 |
+| pre-rerank 覆盖 | 旧 artifact 缺失，无法区分候选缺失和重排破坏 | 新 run 保存 Recall@20/50/100 与 pre/post rows |
+| Pareto/public export | 旧 Pareto 缺 stage/status/rank，导出会失败 | 已补齐并要求 Pareto 全部为 eligible completion |
+| latency | 数值真实但受固定顺序、温度和 throttling 混杂 | 只作 observed cost；并列 finalist 需受控复测 |
+| 宏平均 | question→paper→domain→overall 实现正确 | 保留，不作为阻塞项 |
+
+为保证仍执行批准的完整矩阵，Top-2 维度由配置冻结；即使某个冻结实验臂在前序阶段未
+通过，它仍会完成 confirmation 以保留诊断可比性，但上游失败状态会传递到 Top-2，不能
+因在 confirmation 中成为 rerank-off 自身 baseline 而“洗白”。最终 winner、Pareto 和
+公开报告只允许使用通过全部上游与本阶段门的候选。
+
+修复 scope 前后需要成对比较，所以 Top-2 不再根据 paper-scoped 新分数临时换臂。配置
+已冻结为 PDF `fixed-800/fixed-1200`、retriever `dense/hybrid-rrf`、source
+`pdf-only/hierarchical-pdf`、reranker `off/depth-50`；16 个笛卡尔组合按 hierarchical
+兼容规则去重为 12 个，整个 sweep 始终是 35 个唯一候选。
+
+同理，正交阶段的串联 anchor 也冻结为旧 global diagnostic 实际使用的
+`fixed-1200 + note-reviewer-concern + hybrid-rrf + pdf-only`。这里保留
+`note-reviewer-concern` 只是为了让 scope 修复前后 35 个 config ID 可成对比较；它本身
+仍为 `rankable: false`，后续 `N0/N3` 才会用通用笔记 eligibility 修复替代它。
 
 ## 2. 总体判断
 
@@ -340,13 +413,22 @@ evidence groups”的目标不完全一致，这是 adversarial 退化和多样�
 
 ### P0：先恢复实验有效性
 
-1. `F2 pdf-structure-aware-fallback`
-2. `N0 note-route-eligibility-gate`
-3. `N3 note-concern-parser-contract`
-4. 增加 pre-rerank Recall@20/50/100、evidence-group pre/post rank 和无 reference
-   adversarial 分数分布诊断
-5. stale candidate 隔离和 final-plan membership 审计；旧 FP16 confirmation
-   `018ed...`、`5bb78...`、`ca8...` 只能作为内部迁移审计，不得进入 BF16 排名
+| 项目 | 当前状态 | 下一验证 |
+|---|---|---|
+| paper-scoped 独立索引 | 代码已修复 | 同 35 候选正式重跑 |
+| 相对 baseline guardrail | 代码、配置和回归测试已修复 | 新 run 检查每个 payload 的 diagnostics |
+| 上游 eligibility 传递 | 代码已修复 | confirmation 不得洗白失败 component |
+| Top-2 维度冻结 | 配置与 schema 已修复 | scope 修复前后均为相同 12/35 矩阵 |
+| 正交阶段 anchor 冻结 | 配置、schema 和公开 manifest 已修复 | 新旧 35 个 config ID 成对一致 |
+| reviewer-concern rankability | 已设为 diagnostic-only | 新 run 不得进入排名 |
+| pre-rerank Recall@20/50/100 和 pre/post rows | 已实现 | 新 reranker artifact 必须非空 |
+| 无 reference adversarial 分数分布 | 已实现 | 15/15 保持 null retrieval metric，并输出 score diagnostic |
+| stale FP16 candidate 隔离 | 已移动到 `stale-candidates` | final-plan membership 必须仍为 35 |
+| Pareto/public exporter 完整性 | 已修复 | 公开导出必须原子通过 |
+| `F2 pdf-structure-aware-fallback` | 待单变量实现 | 使用新 config ID，不覆盖明确失败 |
+| `N0 note-route-eligibility-gate` | 待单变量实现 | paper-scoped 基线后执行 |
+| `N3 note-concern-parser-contract` | 待单变量实现 | diagnostic coverage 验证 |
+| controlled finalist latency | 待执行 | 随机/交错顺序复测并列候选 |
 
 P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、失败可以局部降级、恢复不会混入
 旧 selection 结果。

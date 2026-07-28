@@ -18,6 +18,9 @@ paths:
   source_dir: pdfs/rq-2
   suite_dir: suites/rq-2
 
+retrieval:
+  scope: paper-scoped
+
 budget:
   wall_clock_seconds: 36000
   retry_delays_seconds: [5, 20, 60]
@@ -30,6 +33,12 @@ gates:
   require_same_evaluable_set: true
   require_all_papers: true
   require_all_applicable_questions: true
+  relative_guardrails:
+    max_domain_regression: 0.02
+    max_regressed_domains: 1
+    max_question_type_regression: 0.02
+    max_overall_guardrail_regression: 0.005
+    max_new_recall_at_10_hard_failures: 0
 
 models:
   embedding:
@@ -72,6 +81,11 @@ performance:
   sample_rule: min_sha256_row_id_per_domain_question_type
 
 stages:
+  stage_anchors:
+    pdf_chunker: pdf-fixed-1200
+    note_chunker: note-reviewer-concern
+    retriever: hybrid-rrf
+    source_composition: pdf-only
   pdf_chunkers:
     - id: pdf-fixed-400
       size: 400
@@ -107,7 +121,7 @@ stages:
     - id: note-claim-evidence
       rankable: true
     - id: note-reviewer-concern
-      rankable: true
+      rankable: false
   retrievers:
     - id: dense
       top_k: 100
@@ -145,6 +159,10 @@ stages:
     source_compositions: 2
     reranker_modes: 2
     maximum_combinations: 16
+    selected_pdf_chunkers: [pdf-fixed-800, pdf-fixed-1200]
+    selected_retrievers: [dense, hybrid-rrf]
+    selected_source_compositions: [pdf-only, hierarchical-pdf]
+    selected_reranker_modes: [rerank-off, rerank-50-to-10]
 
 decision:
   primary_tie_threshold: 0.005

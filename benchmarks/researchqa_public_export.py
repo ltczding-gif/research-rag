@@ -156,6 +156,14 @@ def _load_config(path: Path) -> Mapping[str, Any]:
         or benchmark.get("question_count") != 254
     ):
         raise RQ2PublicExportError("pinned rq-2 config has unexpected scope")
+    retrieval = value.get("retrieval")
+    if (
+        not isinstance(retrieval, Mapping)
+        or retrieval.get("scope") != "paper-scoped"
+    ):
+        raise RQ2PublicExportError(
+            "pinned rq-2 config must use paper-scoped retrieval"
+        )
     return value
 
 
@@ -239,7 +247,8 @@ def _candidate_envelopes(
                 or len(questions) != 254
                 or len(set(map(str, papers))) != 20
                 or len(set(map(str, questions))) != 254
-                or payload.get("guardrails_passed") is not True
+                or not isinstance(payload.get("guardrails_passed"), bool)
+                or payload.get("retrieval_scope") != "paper-scoped"
             ):
                 raise RQ2PublicExportError(
                     f"candidate completion gates failed: {config_id}"
@@ -265,7 +274,9 @@ def _candidate_envelopes(
                     "status": status,
                     "rankable": bool(candidate.get("rankable")),
                     "mapping_passed": bool(coverage.get("passed")),
-                    "guardrails_passed": True,
+                    "guardrails_passed": bool(
+                        payload.get("guardrails_passed")
+                    ),
                 }
             )
         else:
@@ -359,7 +370,7 @@ def _public_pareto(source: Path) -> dict[str, object]:
     if not isinstance(rows, list) or not rows:
         raise RQ2PublicExportError("Pareto frontier is empty")
     public_rows = []
-    for row in rows:
+    for expected_rank, row in enumerate(rows, 1):
         if not isinstance(row, Mapping):
             raise RQ2PublicExportError("Pareto row is invalid")
         public = {field: row.get(field) for field in PARETO_FIELDS}
@@ -367,6 +378,14 @@ def _public_pareto(source: Path) -> dict[str, object]:
         _safe_id(public["stage_id"], "Pareto stage_id")
         _finite(public["primary"], "Pareto primary")
         _finite(public["p95_latency_ms"], "Pareto latency")
+        if (
+            public["rank"] != expected_rank
+            or public["status"] != "completed"
+            or public["guardrails_passed"] is not True
+        ):
+            raise RQ2PublicExportError(
+                "Pareto row is not an ordered eligible completion"
+            )
         public_rows.append(public)
     return {"schema_version": 1, "rows": public_rows}
 
@@ -535,9 +554,9 @@ def _morning_report(
             "generation, so note-based arms can contain SI-derived content; "
             "this run does not measure direct SI/native-source retrieval.",
             "",
-            "The winner is provisional. The finite-metric guardrail used here is "
-            "not the later production-migration regression gate, so this report "
-            "does not approve a production default.",
+            "The winner is provisional and passed the rq-2 relative regression "
+            "guardrails. Operational ratios above 1.5x still require an explicit "
+            "quality justification and rollback switch before production use.",
             "",
             "This run stops after rq-2 and does not start rq-5 automatically.",
             "",
@@ -618,6 +637,25 @@ def export_rq2_public_report(
     provisional_winner = _safe_id(
         decision.get("provisional_winner"), "provisional winner"
     )
+    winner_record = next(
+        (
+            row
+            for row in candidates
+            if row.get("config_id") == provisional_winner
+        ),
+        None,
+    )
+    if (
+        not isinstance(winner_record, Mapping)
+        or winner_record.get("status") != "completed"
+        or winner_record.get("stage_id") != "top2-confirmation"
+        or winner_record.get("rankable") is not True
+        or winner_record.get("mapping_passed") is not True
+        or winner_record.get("guardrails_passed") is not True
+    ):
+        raise RQ2PublicExportError(
+            "provisional winner did not pass completion and guardrail gates"
+        )
 
     output.parent.mkdir(parents=True, exist_ok=True)
     staged = Path(
@@ -692,6 +730,8 @@ def export_rq2_public_report(
             },
             "hardware_fingerprints": _hardware_fingerprints(),
             "task_counts": task_counts,
+            "retrieval_scope": config["retrieval"]["scope"],
+            "stage_anchors": dict(config["stages"]["stage_anchors"]),
             "mapping_coverage": dict(mapping),
             "candidates": candidates,
             "confirmation_plan": {
@@ -700,6 +740,26 @@ def export_rq2_public_report(
                 "deduplicated_aliases": 4,
                 "compatibility_rule": (
                     "hierarchical-pdf-requires-pdf-parent-child"
+                ),
+                "pdf_chunkers": list(
+                    config["stages"]["top2_confirmation"][
+                        "selected_pdf_chunkers"
+                    ]
+                ),
+                "retrievers": list(
+                    config["stages"]["top2_confirmation"][
+                        "selected_retrievers"
+                    ]
+                ),
+                "source_compositions": list(
+                    config["stages"]["top2_confirmation"][
+                        "selected_source_compositions"
+                    ]
+                ),
+                "reranker_modes": list(
+                    config["stages"]["top2_confirmation"][
+                        "selected_reranker_modes"
+                    ]
                 ),
             },
             "bootstrap": bootstrap,

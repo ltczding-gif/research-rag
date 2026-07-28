@@ -217,6 +217,10 @@ def _validate_rq2_confirmation(value: object) -> None:
         "unique_candidates": 12,
         "deduplicated_aliases": 4,
         "compatibility_rule": "hierarchical-pdf-requires-pdf-parent-child",
+        "pdf_chunkers": ["pdf-fixed-800", "pdf-fixed-1200"],
+        "retrievers": ["dense", "hybrid-rrf"],
+        "source_compositions": ["pdf-only", "hierarchical-pdf"],
+        "reranker_modes": ["rerank-off", "rerank-50-to-10"],
     }
     if dict(confirmation) != expected:
         raise PublicReportError("confirmation plan is inconsistent")
@@ -280,6 +284,15 @@ def validate_rq2_public_manifest(manifest: Mapping[str, object]) -> None:
 
     if manifest.get("status") != "completed":
         raise PublicReportError("status must be completed")
+    if manifest.get("retrieval_scope") != "paper-scoped":
+        raise PublicReportError("retrieval scope must be paper-scoped")
+    if dict(_required_mapping(manifest.get("stage_anchors"), "stage anchors")) != {
+        "pdf_chunker": "pdf-fixed-1200",
+        "note_chunker": "note-reviewer-concern",
+        "retriever": "hybrid-rrf",
+        "source_composition": "pdf-only",
+    }:
+        raise PublicReportError("stage anchors are inconsistent")
 
     fingerprints = _required_mapping(
         manifest.get("fingerprints"), "fingerprints"
@@ -334,8 +347,13 @@ def validate_rq2_public_manifest(manifest: Mapping[str, object]) -> None:
         winner not in pareto_ids
         or candidates[winner].get("status") != "completed"
         or candidates[winner].get("stage_id") != "top2-confirmation"
+        or candidates[winner].get("rankable") is not True
+        or candidates[winner].get("mapping_passed") is not True
+        or candidates[winner].get("guardrails_passed") is not True
     ):
-        raise PublicReportError("winner is not a completed Pareto confirmation")
+        raise PublicReportError(
+            "winner is not an eligible Pareto confirmation"
+        )
     if bootstrap.get("candidate_config_id") != winner:
         raise PublicReportError("bootstrap winner differs from provisional winner")
 

@@ -21,9 +21,12 @@ from benchmarks.researchqa_strategy import (
     CandidateRunResult,
     EvidenceMappingBundle,
     QuestionStrategyResult,
+    generate_orthogonal_candidates,
 )
 from benchmarks.researchqa_sweep import (
+    SweepCandidateRecord,
     SweepContractError,
+    _relative_guardrail_diagnostics,
     run_strategy_sweep,
 )
 from service.pdf_ir import (
@@ -261,6 +264,34 @@ class _FakeExecutor:
         )
 
 
+class _RegressingRerankerExecutor(_FakeExecutor):
+    def __call__(self, candidate, *args, **kwargs):
+        result = super().__call__(candidate, *args, **kwargs)
+        if candidate.reranker == "rerank-off":
+            return result
+        metrics = {
+            **result.aggregate.overall,
+            "recall_at_10": 0.0,
+            "all_required_groups_success_at_10": 0.0,
+        }
+        aggregate = replace(
+            result.aggregate,
+            overall=metrics,
+            by_domain={"domain-a": metrics},
+            by_paper={"W1": metrics},
+            by_question_type={"lookup": metrics},
+        )
+        question_result = replace(
+            result.question_results[0],
+            metrics=metrics,
+        )
+        return replace(
+            result,
+            aggregate=aggregate,
+            question_results=(question_result,),
+        )
+
+
 def _run(
     tmp_path,
     executor,
@@ -282,7 +313,138 @@ def _run(
     )
 
 
-def test_interrupted_sweep_resumes_39_unique_candidates_and_orders_callbacks(
+def test_sweep_rejects_non_paper_scoped_retrieval(tmp_path):
+    config = _config()
+    config["retrieval"]["scope"] = "global-corpus"
+
+    with pytest.raises(
+        SweepContractError,
+        match="retrieval.scope must be exactly 'paper-scoped'",
+    ):
+        run_strategy_sweep(
+            config,
+            tmp_path,
+            _documents(),
+            QUESTIONS,
+            {"W1": "# Frozen note\n\nAlpha evidence. [Main p.1]"},
+            _FakeEmbedder([]),
+            _FakeReranker([]),
+            before_rerank_stage=lambda: None,
+            assert_embedding_cache_only=lambda _candidate: None,
+            candidate_executor=_FakeExecutor(),
+        )
+
+
+def test_relative_guardrails_reject_slice_regressions_and_new_hard_failure():
+    plan = generate_orthogonal_candidates(_config())
+    baseline_candidate = next(
+        candidate
+        for candidate in plan.stages["reranker"]
+        if candidate.reranker == "rerank-off"
+    )
+    candidate = next(
+        candidate
+        for candidate in plan.stages["reranker"]
+        if candidate.reranker == "rerank-50-to-10"
+    )
+    baseline_payload = _candidate_result(baseline_candidate).to_dict()
+    candidate_payload = _candidate_result(candidate).to_dict()
+    baseline_payload["metric_bundle_complete"] = True
+    candidate_payload["metric_bundle_complete"] = True
+    for domain in ("domain-a", "domain-b"):
+        baseline_payload["score_summary"]["by_domain"][domain] = {
+            **baseline_payload["score_summary"]["overall"],
+            "coverage_ndcg_at_10": 0.90,
+        }
+        candidate_payload["score_summary"]["by_domain"][domain] = {
+            **candidate_payload["score_summary"]["overall"],
+            "coverage_ndcg_at_10": 0.85,
+        }
+    for question_type in ("multi_hop", "adversarial"):
+        baseline_payload["score_summary"]["by_question_type"][
+            question_type
+        ] = {
+            **baseline_payload["score_summary"]["overall"],
+            "coverage_ndcg_at_10": 0.90,
+        }
+        candidate_payload["score_summary"]["by_question_type"][
+            question_type
+        ] = {
+            **candidate_payload["score_summary"]["overall"],
+            "coverage_ndcg_at_10": 0.85,
+        }
+    candidate_payload["score_summary"]["overall"]["recall_at_10"] = 0.98
+    candidate_payload["score_summary"]["overall"][
+        "all_required_groups_success_at_10"
+    ] = 0.98
+    candidate_payload["question_results"][0]["metrics"][
+        "recall_at_10"
+    ] = 0.0
+    baseline_record = SweepCandidateRecord(
+        candidate=baseline_candidate,
+        status="completed",
+        input_fingerprint="baseline",
+        payload=baseline_payload,
+        result_path="baseline.json",
+    )
+    record = SweepCandidateRecord(
+        candidate=candidate,
+        status="completed",
+        input_fingerprint="candidate",
+        payload=candidate_payload,
+        result_path="candidate.json",
+    )
+
+    diagnostics = _relative_guardrail_diagnostics(
+        record,
+        baseline_record,
+        candidate_payload,
+        baseline_payload,
+        max_domain_regression=0.02,
+        max_regressed_domains=1,
+        max_question_type_regression=0.02,
+        max_overall_guardrail_regression=0.005,
+        max_new_recall_at_10_hard_failures=0,
+    )
+
+    assert diagnostics["passed"] is False
+    assert set(diagnostics["failures"]) == {
+        "too-many-domain-regressions",
+        "multi_hop-regression",
+        "adversarial-regression",
+        "recall_at_10-regression",
+        "all_required_groups_success_at_10-regression",
+        "new-recall-at-10-hard-failures",
+    }
+    assert diagnostics["new_recall_at_10_hard_failure_ids"] == ["q1"]
+
+
+def test_failed_enabled_rerankers_are_confirmed_but_cannot_win(tmp_path):
+    result = _run(tmp_path, _RegressingRerankerExecutor(), [])
+
+    reranker_ranking = result.stage_rankings["reranker"]
+    assert {
+        record.candidate.reranker
+        for record in reranker_ranking.ranked
+    } == {"rerank-off"}
+    assert len(result.records) == 35
+    winner = next(
+        record
+        for record in result.records
+        if record.candidate.config_id == result.provisional_winner
+    )
+    assert winner.candidate.reranker == "rerank-off"
+    decision = json.loads(
+        (
+            tmp_path / "sweep" / "final" / "decision-summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert decision["confirmation_diagnostic_fallbacks"][
+        "reranker_modes"
+    ] == ["rerank-50-to-10"]
+
+
+def test_interrupted_sweep_resumes_35_unique_candidates_and_orders_callbacks(
     tmp_path,
 ):
     first_events = []
@@ -298,11 +460,11 @@ def test_interrupted_sweep_resumes_39_unique_candidates_and_orders_callbacks(
     executor = _FakeExecutor(incomplete_pdf=True)
     result = _run(tmp_path, executor, events)
 
-    assert len(result.records) == 39
-    assert len({record.candidate.config_id for record in result.records}) == 39
+    assert len(result.records) == 35
+    assert len({record.candidate.config_id for record in result.records}) == 35
     assert sum(record.resumed for record in result.records) == 4
-    assert len(executor.calls) == 35
-    assert len(list((tmp_path / "sweep" / "candidates").rglob("*.json"))) == 39
+    assert len(executor.calls) == 31
+    assert len(list((tmp_path / "sweep" / "candidates").rglob("*.json"))) == 35
     assert not list((tmp_path / "sweep").rglob("*.tmp"))
 
     assert events.count("before-rerank") == 1
@@ -312,7 +474,7 @@ def test_interrupted_sweep_resumes_39_unique_candidates_and_orders_callbacks(
         for index, event in enumerate(events)
         if event.startswith("cache-only:")
     ]
-    assert len(cache_events) == 20
+    assert len(cache_events) == 16
     assert all(index > before for index, _event in cache_events)
     assert all(
         any(
@@ -334,14 +496,25 @@ def test_interrupted_sweep_resumes_39_unique_candidates_and_orders_callbacks(
         record.candidate.config_id for record in pdf_ranking.ranked
     }
     assert result.provisional_winner
-    assert len(result.leaderboard) == 16
+    assert len(result.leaderboard) == 8
     assert result.pareto_frontier
+    assert set(result.pareto_frontier[0]) == {
+        "config_id",
+        "stage_id",
+        "primary",
+        "p95_latency_ms",
+        "index_bytes",
+        "chunk_count",
+        "status",
+        "guardrails_passed",
+        "rank",
+    }
     report_root = tmp_path / "report"
     assert len(
         (report_root / "leaderboard.csv").read_text(
             encoding="utf-8"
         ).splitlines()
-    ) == 40
+    ) == 36
     assert (
         report_root / "paper-domain-breakdown.csv"
     ).is_file()
@@ -371,6 +544,7 @@ def test_interrupted_sweep_resumes_39_unique_candidates_and_orders_callbacks(
         assert (stage_root / "ranking.json").is_file()
         assert (stage_root / "unmapped.json").is_file()
         assert (stage_root / "completeness.json").is_file()
+        assert (stage_root / "guardrails.json").is_file()
 
 
 def test_transient_model_failure_propagates_without_failed_checkpoint(tmp_path):
@@ -395,7 +569,7 @@ def test_bad_payload_sha_reexecutes_only_the_corrupt_candidate(tmp_path):
     resumed = _run(tmp_path, executor, [])
 
     assert len(executor.calls) == 1
-    assert sum(record.resumed for record in resumed.records) == 38
+    assert sum(record.resumed for record in resumed.records) == 34
     repaired = json.loads(path.read_text(encoding="utf-8"))
     assert repaired["payload"]["primary_score"] > 0
 

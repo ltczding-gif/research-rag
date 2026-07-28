@@ -217,6 +217,13 @@ def _valid_rq2_public_manifest():
             "failed": 0,
             "blocked": 0,
         },
+        "retrieval_scope": "paper-scoped",
+        "stage_anchors": {
+            "pdf_chunker": "pdf-fixed-1200",
+            "note_chunker": "note-reviewer-concern",
+            "retriever": "hybrid-rrf",
+            "source_composition": "pdf-only",
+        },
         "mapping_coverage": {
             "passed": True,
             "overall": 1.0,
@@ -235,6 +242,10 @@ def _valid_rq2_public_manifest():
             "compatibility_rule": (
                 "hierarchical-pdf-requires-pdf-parent-child"
             ),
+            "pdf_chunkers": ["pdf-fixed-800", "pdf-fixed-1200"],
+            "retrievers": ["dense", "hybrid-rrf"],
+            "source_compositions": ["pdf-only", "hierarchical-pdf"],
+            "reranker_modes": ["rerank-off", "rerank-50-to-10"],
         },
         "bootstrap": {
             "samples": 10_000,
@@ -273,6 +284,31 @@ def _valid_rq2_public_manifest():
 
 def test_rq2_public_manifest_requires_every_final_completion_gate():
     validate_rq2_public_manifest(_valid_rq2_public_manifest())
+
+
+def test_rq2_public_manifest_requires_paper_scoped_retrieval():
+    payload = _valid_rq2_public_manifest()
+    payload["retrieval_scope"] = "global-corpus"
+
+    with pytest.raises(PublicReportError, match="retrieval scope"):
+        validate_rq2_public_manifest(payload)
+
+
+def test_rq2_public_manifest_rejects_guardrail_failed_winner():
+    payload = _valid_rq2_public_manifest()
+    winner = payload["provisional_winner"]
+    next(
+        candidate
+        for candidate in payload["candidates"]
+        if candidate["config_id"] == winner
+    )["guardrails_passed"] = False
+
+    with pytest.raises(PublicReportError, match="eligible Pareto"):
+        validate_rq2_public_manifest(payload)
+
+
+def test_rq2_public_manifest_rejects_other_completion_gaps():
+    """Non-winner failures remain reportable; completion gaps do not."""
 
     invalid_cases = {
         "status": ("status", "running"),

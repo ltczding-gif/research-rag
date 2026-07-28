@@ -457,11 +457,27 @@ def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path)
     )
     assert len(result.question_results) == 3
     by_id = {item.row_id: item for item in result.question_results}
+    chunks_by_paper = {
+        paper_id: {
+            chunk.chunk_id
+            for chunk in chunk_pdf(
+                document,
+                base.pdf_chunker,
+                is_main=True,
+            ).chunks
+        }
+        for paper_id, document in documents.items()
+    }
+    assert set(by_id["q-alpha"].ranked_item_ids) <= chunks_by_paper["W1"]
+    assert set(by_id["q-beta"].ranked_item_ids) <= chunks_by_paper["W2"]
+    assert set(by_id["q-diagnostic"].ranked_item_ids) <= chunks_by_paper["W1"]
     assert by_id["q-alpha"].metrics["recall_at_5"] == 1.0
     assert by_id["q-beta"].metrics["recall_at_5"] == 1.0
     assert by_id["q-diagnostic"].metrics["recall_at_5"] is None
     assert result.primary_metric == "recall_at_5"
     assert result.primary_score == pytest.approx(1.0)
+    assert result.retrieval_scope == "paper-scoped"
+    assert all(item.ranked_scores for item in result.question_results)
     assert result.chunk_count == 2
     assert result.index_bytes > 0
     assert result.latency_metrics["measurement_revision"] == (
@@ -479,8 +495,29 @@ def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path)
     assert reranked.primary_metric == "coverage_ndcg_at_10"
     assert reranked.latency_metrics["rerank_p95_ms"] >= 0
     assert reranked.latency_metrics["reranker_batch_size"] == 1
+    assert all(
+        item.pre_rerank_item_ids
+        and len(item.pre_rerank_item_ids) == len(item.pre_rerank_scores)
+        and {
+            "recall_at_20",
+            "recall_at_50",
+            "recall_at_100",
+        } <= set(item.pre_rerank_metrics)
+        for item in reranked.question_results
+    )
     assert len(evidence_mapping_cache) == 1
     assert reranked.mapping is result.mapping
+
+
+def test_reviewer_concern_note_chunker_is_diagnostic_not_rankable():
+    candidates = generate_orthogonal_candidates(_config()).stages["note-chunker"]
+    reviewer = next(
+        candidate
+        for candidate in candidates
+        if candidate.note_chunker == "note-reviewer-concern"
+    )
+
+    assert reviewer.rankable is False
 
 
 def test_note_strategy_fails_closed_without_frozen_notes(tmp_path):

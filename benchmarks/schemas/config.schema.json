@@ -92,6 +92,7 @@
         "config_id",
         "description",
         "benchmark",
+        "retrieval",
         "paths",
         "budget",
         "gates",
@@ -127,6 +128,14 @@
             "domain_count": {"const": 10},
             "adversarial_question_count": {"const": 50},
             "referenced_adversarial_count": {"const": 35}
+          }
+        },
+        "retrieval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope"],
+          "properties": {
+            "scope": {"const": "paper-scoped"}
           }
         },
         "paths": {
@@ -174,7 +183,8 @@
             "mapping_per_paper_minimum",
             "require_same_evaluable_set",
             "require_all_papers",
-            "require_all_applicable_questions"
+            "require_all_applicable_questions",
+            "relative_guardrails"
           ],
           "properties": {
             "mapping_overall_minimum": {
@@ -189,7 +199,25 @@
             },
             "require_same_evaluable_set": {"const": true},
             "require_all_papers": {"const": true},
-            "require_all_applicable_questions": {"const": true}
+            "require_all_applicable_questions": {"const": true},
+            "relative_guardrails": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "max_domain_regression",
+                "max_regressed_domains",
+                "max_question_type_regression",
+                "max_overall_guardrail_regression",
+                "max_new_recall_at_10_hard_failures"
+              ],
+              "properties": {
+                "max_domain_regression": {"const": 0.02},
+                "max_regressed_domains": {"const": 1},
+                "max_question_type_regression": {"const": 0.02},
+                "max_overall_guardrail_regression": {"const": 0.005},
+                "max_new_recall_at_10_hard_failures": {"const": 0}
+              }
+            }
           }
         },
         "models": {
@@ -300,6 +328,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
+            "stage_anchors",
             "pdf_chunkers",
             "note_chunkers",
             "retrievers",
@@ -308,6 +337,22 @@
             "top2_confirmation"
           ],
           "properties": {
+            "stage_anchors": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "pdf_chunker",
+                "note_chunker",
+                "retriever",
+                "source_composition"
+              ],
+              "properties": {
+                "pdf_chunker": {"const": "pdf-fixed-1200"},
+                "note_chunker": {"const": "note-reviewer-concern"},
+                "retriever": {"const": "hybrid-rrf"},
+                "source_composition": {"const": "pdf-only"}
+              }
+            },
             "pdf_chunkers": {
               "type": "array",
               "items": {"$ref": "#/$defs/stage-option"},
@@ -346,14 +391,30 @@
                 "retrievers",
                 "source_compositions",
                 "reranker_modes",
-                "maximum_combinations"
+                "maximum_combinations",
+                "selected_pdf_chunkers",
+                "selected_retrievers",
+                "selected_source_compositions",
+                "selected_reranker_modes"
               ],
               "properties": {
                 "pdf_chunkers": {"const": 2},
                 "retrievers": {"const": 2},
                 "source_compositions": {"const": 2},
                 "reranker_modes": {"const": 2},
-                "maximum_combinations": {"const": 16}
+                "maximum_combinations": {"const": 16},
+                "selected_pdf_chunkers": {
+                  "const": ["pdf-fixed-800", "pdf-fixed-1200"]
+                },
+                "selected_retrievers": {
+                  "const": ["dense", "hybrid-rrf"]
+                },
+                "selected_source_compositions": {
+                  "const": ["pdf-only", "hierarchical-pdf"]
+                },
+                "selected_reranker_modes": {
+                  "const": ["rerank-off", "rerank-50-to-10"]
+                }
               }
             }
           }

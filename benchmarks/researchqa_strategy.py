@@ -57,6 +57,7 @@ from benchmarks.researchqa_scoring import (
     MappingCoverage,
     QuestionScore,
     canonical_fingerprint,
+    evidence_group_recall_at_k,
     evaluate_mapping_coverage,
     macro_aggregate,
     map_reference_groups,
@@ -71,6 +72,7 @@ REFERENCE_EXACT_METHOD = "nfkc-alnum-page-span-exact-v2"
 REFERENCE_PAGE_HINT_METHOD = "researchqa-page-hint-best-chunk-v2"
 REFERENCE_SECTION_HINT_METHOD = "researchqa-section-hint-best-chunk-v2"
 DEFAULT_FUZZY_THRESHOLD = 0.86
+PAPER_SCOPED_RETRIEVAL = "paper-scoped"
 RETRIEVER_IDS = ("dense", "bm25", "hybrid-rrf")
 RERANKER_IDS = (
     "rerank-off",
@@ -848,7 +850,13 @@ def generate_orthogonal_candidates(
     if not isinstance(stages, Mapping):
         raise StrategyContractError("config.stages must be a mapping")
     pdf_ids = _option_ids(stages, "pdf_chunkers", expected=PDF_CHUNKER_IDS)
-    note_ids = _option_ids(stages, "note_chunkers", expected=NOTE_CHUNKER_IDS)
+    note_rows = _option_rows(stages, "note_chunkers")
+    note_ids = tuple(str(row["id"]) for row in note_rows)
+    if set(note_ids) != set(NOTE_CHUNKER_IDS):
+        raise StrategyContractError(
+            f"config.stages.note_chunkers must be exactly {list(NOTE_CHUNKER_IDS)}"
+        )
+    note_options = {str(row["id"]): row for row in note_rows}
     retriever_ids = _option_ids(
         stages, "retrievers", expected=RETRIEVER_IDS
     )
@@ -897,7 +905,7 @@ def generate_orthogonal_candidates(
             source_composition="pdf-note-rrf",
             reranker=off,
             reranker_options=reranker_options,
-            rankable=note_id != "note-whole",
+            rankable=bool(note_options[note_id].get("rankable", True)),
         )
         for note_id in note_ids
     )
@@ -1057,6 +1065,12 @@ class QuestionStrategyResult:
     question_type: str
     ranked_item_ids: tuple[str, ...]
     metrics: Mapping[str, float | None]
+    ranked_scores: tuple[float, ...] = ()
+    pre_rerank_item_ids: tuple[str, ...] = ()
+    pre_rerank_scores: tuple[float, ...] = ()
+    pre_rerank_metrics: Mapping[str, float | None] = field(
+        default_factory=dict
+    )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -1065,6 +1079,10 @@ class QuestionStrategyResult:
             "domain": self.domain,
             "question_type": self.question_type,
             "ranked_item_ids": list(self.ranked_item_ids),
+            "ranked_scores": list(self.ranked_scores),
+            "pre_rerank_item_ids": list(self.pre_rerank_item_ids),
+            "pre_rerank_scores": list(self.pre_rerank_scores),
+            "pre_rerank_metrics": dict(self.pre_rerank_metrics),
             "metrics": dict(self.metrics),
         }
 
@@ -1081,6 +1099,7 @@ class CandidateRunResult:
     index_bytes: int
     chunk_count: int
     guardrails_passed: bool
+    retrieval_scope: str = PAPER_SCOPED_RETRIEVAL
     latency_metrics: Mapping[str, object] = field(default_factory=dict)
 
     @property
@@ -1153,6 +1172,7 @@ class CandidateRunResult:
             "index_bytes": self.index_bytes,
             "chunk_count": self.chunk_count,
             "guardrails_passed": self.guardrails_passed,
+            "retrieval_scope": self.retrieval_scope,
             "latency_metrics": dict(self.latency_metrics),
         }
 
@@ -1541,24 +1561,45 @@ def run_complete_candidate(
     parent_passages = {
         chunk.chunk_id: chunk.text for chunk in corpus.pdf_parents
     }
-    pdf_index = _make_search_index(
-        pdf_passages,
-        retriever=candidate.retriever,
-        embedder=embedder,
-        embedding_batch_size=embedding_batch_size,
-    )
-    note_index = _make_search_index(
-        note_passages,
-        retriever=candidate.retriever,
-        embedder=embedder,
-        embedding_batch_size=embedding_batch_size,
-    )
-    parent_index = _make_search_index(
-        parent_passages if candidate.requires_parents else {},
-        retriever=candidate.retriever,
-        embedder=embedder,
-        embedding_batch_size=embedding_batch_size,
-    )
+
+    def passages_by_paper(
+        chunks: Sequence[ResearchQAChunk | NoteChunk],
+    ) -> dict[str, dict[str, str]]:
+        grouped = {paper_id: {} for paper_id in sorted(documents)}
+        for chunk in chunks:
+            grouped[chunk.paper_id][chunk.chunk_id] = chunk.text
+        return grouped
+
+    pdf_passages_by_paper = passages_by_paper(corpus.pdf_chunks)
+    note_passages_by_paper = passages_by_paper(corpus.note_chunks)
+    parent_passages_by_paper = passages_by_paper(corpus.pdf_parents)
+    pdf_indexes = {
+        paper_id: _make_search_index(
+            passages,
+            retriever=candidate.retriever,
+            embedder=embedder,
+            embedding_batch_size=embedding_batch_size,
+        )
+        for paper_id, passages in pdf_passages_by_paper.items()
+    }
+    note_indexes = {
+        paper_id: _make_search_index(
+            passages,
+            retriever=candidate.retriever,
+            embedder=embedder,
+            embedding_batch_size=embedding_batch_size,
+        )
+        for paper_id, passages in note_passages_by_paper.items()
+    }
+    parent_indexes = {
+        paper_id: _make_search_index(
+            passages if candidate.requires_parents else {},
+            retriever=candidate.retriever,
+            embedder=embedder,
+            embedding_batch_size=embedding_batch_size,
+        )
+        for paper_id, passages in parent_passages_by_paper.items()
+    }
 
     needs_query_embeddings = candidate.retriever in {"dense", "hybrid-rrf"}
     query_vectors: Mapping[str, tuple[float, ...]] = {}
@@ -1595,25 +1636,31 @@ def run_complete_candidate(
         question: Mapping[str, Any],
         *,
         measure: bool = False,
-    ) -> tuple[tuple[RetrievalHit, ...], float, float]:
+    ) -> tuple[
+        tuple[RetrievalHit, ...],
+        float,
+        float,
+        tuple[RetrievalHit, ...],
+    ]:
         row_id = str(question["row_id"])
+        paper_id = normalize_paper_id(question.get("paper_id"))
         query = _required_text(question, "question")
         query_vector = query_vectors.get(row_id)
         query_started_ns = time.perf_counter_ns() if measure else 0
         pdf_hits = _search(
-            pdf_index,
+            pdf_indexes[paper_id],
             retriever=candidate.retriever,
             query=query,
             query_embedding=query_vector,
         )
         note_hits = _search(
-            note_index,
+            note_indexes[paper_id],
             retriever=candidate.retriever,
             query=query,
             query_embedding=query_vector,
         )
         parent_hits = _search(
-            parent_index,
+            parent_indexes[paper_id],
             retriever=candidate.retriever,
             query=query,
             query_embedding=query_vector,
@@ -1627,6 +1674,7 @@ def run_complete_candidate(
             pdf_chunks=pdf_chunk_by_id,
             top_k=100,
         )
+        pre_rerank_hits = tuple(hits)
         query_elapsed_ms = (
             (time.perf_counter_ns() - query_started_ns) / 1_000_000.0
             if measure
@@ -1649,18 +1697,43 @@ def run_complete_candidate(
                 rerank_elapsed_ms = (
                     time.perf_counter_ns() - rerank_started_ns
                 ) / 1_000_000.0
-        return tuple(hits), query_elapsed_ms, rerank_elapsed_ms
+        return (
+            tuple(hits),
+            query_elapsed_ms,
+            rerank_elapsed_ms,
+            pre_rerank_hits,
+        )
 
     sorted_questions = sorted(questions, key=lambda item: str(item["row_id"]))
     question_results: list[QuestionStrategyResult] = []
     for question in sorted_questions:
         row_id = str(question["row_id"])
-        hits, _, _ = retrieve(question)
+        hits, _, _, pre_rerank_hits = retrieve(question)
         evidence = mapping_by_row[row_id]
         metrics = score_ranking(
             [hit.item_id for hit in hits],
             evidence.evaluable_groups,
         )
+        if candidate.reranker != "rerank-off":
+            pre_rerank_ids = [
+                hit.item_id for hit in pre_rerank_hits
+            ]
+            pre_rerank_metrics = {
+                **score_ranking(
+                    pre_rerank_ids,
+                    evidence.evaluable_groups,
+                ).metrics,
+                **{
+                    f"recall_at_{cutoff}": evidence_group_recall_at_k(
+                        pre_rerank_ids,
+                        evidence.evaluable_groups,
+                        cutoff,
+                    )
+                    for cutoff in (20, 50, 100)
+                },
+            }
+        else:
+            pre_rerank_metrics = {}
         question_results.append(
             QuestionStrategyResult(
                 row_id=row_id,
@@ -1668,6 +1741,18 @@ def run_complete_candidate(
                 domain=evidence.domain,
                 question_type=evidence.question_type,
                 ranked_item_ids=tuple(hit.item_id for hit in hits),
+                ranked_scores=tuple(float(hit.score) for hit in hits),
+                pre_rerank_item_ids=(
+                    tuple(hit.item_id for hit in pre_rerank_hits)
+                    if candidate.reranker != "rerank-off"
+                    else ()
+                ),
+                pre_rerank_scores=(
+                    tuple(float(hit.score) for hit in pre_rerank_hits)
+                    if candidate.reranker != "rerank-off"
+                    else ()
+                ),
+                pre_rerank_metrics=pre_rerank_metrics,
                 metrics=metrics.metrics,
             )
         )
@@ -1715,7 +1800,10 @@ def run_complete_candidate(
         latency_samples_ms: list[float] = []
         for _ in range(performance_timed_passes):
             for question in performance_questions:
-                _, query_ms, rerank_ms = retrieve(question, measure=True)
+                _, query_ms, rerank_ms, _ = retrieve(
+                    question,
+                    measure=True,
+                )
                 query_latency_samples_ms.append(query_ms)
                 rerank_latency_samples_ms.append(rerank_ms)
                 latency_samples_ms.append(query_ms + rerank_ms)
@@ -1782,9 +1870,21 @@ def run_complete_candidate(
         ),
     }
     indexed_vectors = {
-        **pdf_index.embeddings,
-        **note_index.embeddings,
-        **parent_index.embeddings,
+        **{
+            item_id: vector
+            for index in pdf_indexes.values()
+            for item_id, vector in index.embeddings.items()
+        },
+        **{
+            item_id: vector
+            for index in note_indexes.values()
+            for item_id, vector in index.embeddings.items()
+        },
+        **{
+            item_id: vector
+            for index in parent_indexes.values()
+            for item_id, vector in index.embeddings.items()
+        },
     }
     index_bytes = sum(
         len(text.encode("utf-8")) for text in indexed_passages.values()
@@ -1896,6 +1996,7 @@ __all__ = [
     "DEFAULT_FUZZY_THRESHOLD",
     "EmbedderAdapter",
     "EvidenceMappingBundle",
+    "PAPER_SCOPED_RETRIEVAL",
     "QuestionStrategyResult",
     "REFERENCE_MATCH_REVISION",
     "StageRanking",

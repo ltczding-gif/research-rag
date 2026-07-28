@@ -32,6 +32,15 @@ deduplicated before execution. Every unique candidate must have a terminal
 status; an explicitly failed strategy is retained as a failed candidate and
 must not be described as completed or silently dropped.
 
+The confirmation dimensions are pinned, not re-selected after the retrieval
+scope correction: PDF fixed-800/fixed-1200, dense/hybrid-rrf,
+pdf-only/hierarchical-pdf, and rerank-off/rerank-50-to-10. This keeps the
+global diagnostic and paper-scoped correction on the same 35-candidate matrix.
+The chained stage anchors are likewise pinned to fixed-1200,
+note-reviewer-concern, hybrid-rrf, and pdf-only. The sparse reviewer-concern
+note candidate remains diagnostic-only; retaining it as the correction-run
+anchor preserves exact config-ID comparability and does not make it eligible.
+
 The manifest must expose this reduction as `confirmation_plan`: 16 Cartesian
 rows, 12 unique candidates, 4 deduplicated compatibility aliases, and the
 stable rule `hierarchical-pdf-requires-pdf-parent-child`. This makes the
@@ -62,12 +71,21 @@ strategy record as completed. It must disclose that the winner remains
 provisional and that sustained latency measurements may reflect the recorded
 thermal steady state.
 
-The rq-2 sweep is a provisional strategy-selection run. Its current
-`guardrails_passed` field verifies that the registered metrics exist and are
-finite; it does not apply the ADR's later production-migration thresholds for
-two-percentage-point slice regressions or 1.5x latency/index growth. The public
-report must state this limitation and must not claim that the provisional
-winner is approved as a production default.
+The rq-2 sweep is a provisional strategy-selection run. `guardrails_passed`
+means that the registered metric bundle is finite and that the candidate
+passed the pinned relative baseline policy: no more than one domain may
+regress by over two percentage points, multi-hop and referenced-adversarial
+slices may not regress by over two percentage points, overall Recall@10 and
+all-required-groups success@10 may not regress by over 0.5 percentage points,
+and no new Recall@10 hard failure is allowed. A completed candidate may fail
+these guardrails and must remain reportable, but it is ineligible for ranking,
+Pareto membership, or provisional-winner selection.
+
+Latency or index growth over 1.5x is recorded as an operational-review warning
+rather than silently treated as production-ready. The public report must state
+that such a candidate still needs an explicit quality justification and
+rollback switch. It must not claim that the provisional rq-2 winner is already
+approved as a production default.
 
 The PDF chunking arm evaluates each ResearchQA paper's `Main` benchmark PDF.
 All acquired SI and auxiliary files are parsed and are mandatory inputs to

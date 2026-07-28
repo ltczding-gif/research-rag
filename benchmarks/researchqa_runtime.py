@@ -279,6 +279,14 @@ def load_frozen_notes(
 
 
 def _validate_model_config(config: Mapping[str, Any]) -> None:
+    retrieval = config.get("retrieval")
+    if (
+        not isinstance(retrieval, Mapping)
+        or retrieval.get("scope") != "paper-scoped"
+    ):
+        raise ResearchQARuntimeError(
+            "config retrieval.scope must be exactly paper-scoped"
+        )
     models = config.get("models")
     if not isinstance(models, Mapping):
         raise ResearchQARuntimeError("config models must be a mapping")
@@ -433,6 +441,7 @@ def run_researchqa_runtime(
         input_summary = {
             "questions_path": str(question_path),
             "frozen_notes_manifest_path": str(manifest_path),
+            "retrieval_scope": config["retrieval"]["scope"],
             "paper_count": len(documents),
             "question_count": len(questions),
             "paper_ids": list(paper_ids),

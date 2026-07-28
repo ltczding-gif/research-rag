@@ -121,6 +121,7 @@ def _runtime_fixture(tmp_path: Path) -> tuple[dict[str, object], Path]:
             "paper_count": 20,
             "question_count": 254,
         },
+        "retrieval": {"scope": "paper-scoped"},
         "paths": {
             "cache_root": str(cache_root),
             "suite_dir": "suites/rq-2",

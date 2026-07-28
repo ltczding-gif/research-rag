@@ -40,7 +40,7 @@ from service.pdf_ir import CanonicalDocument
 
 
 SWEEP_SCHEMA_VERSION = 1
-SWEEP_ENGINE_REVISION = "researchqa-sweep-v7"
+SWEEP_ENGINE_REVISION = "researchqa-sweep-v9"
 
 
 class SweepContractError(ValueError):
@@ -288,12 +288,15 @@ _COMPACT_PAYLOAD_KEYS = (
     "completed_question_ids",
     "error",
     "error_type",
+    "guardrail_diagnostics",
     "guardrails_passed",
     "index_bytes",
     "latency_metrics",
+    "metric_bundle_complete",
     "p95_latency_ms",
     "primary_metric",
     "primary_score",
+    "retrieval_scope",
     "score_summary",
 )
 
@@ -490,6 +493,445 @@ def _load_candidate_record(
     )
 
 
+def _read_full_candidate_payload(
+    record: SweepCandidateRecord,
+) -> dict[str, Any]:
+    path = Path(record.result_path)
+    try:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SweepContractError(
+            f"candidate checkpoint is unreadable: {record.candidate.config_id}"
+        ) from exc
+    payload = envelope.get("payload") if isinstance(envelope, Mapping) else None
+    if (
+        not isinstance(payload, Mapping)
+        or envelope.get("payload_sha256") != fingerprint_payload(payload)
+    ):
+        raise SweepContractError(
+            f"candidate checkpoint hash mismatch: {record.candidate.config_id}"
+        )
+    return dict(payload)
+
+
+def _matching_baseline(
+    stage_id: str,
+    record: SweepCandidateRecord,
+    records: Sequence[SweepCandidateRecord],
+) -> SweepCandidateRecord:
+    candidate = record.candidate
+    if stage_id in {"reranker", "top2-confirmation"}:
+        matches = [
+            item
+            for item in records
+            if item.status == "completed"
+            and item.candidate.reranker == "rerank-off"
+            and item.candidate.pdf_chunker == candidate.pdf_chunker
+            and item.candidate.note_chunker == candidate.note_chunker
+            and item.candidate.retriever == candidate.retriever
+            and item.candidate.source_composition
+            == candidate.source_composition
+        ]
+    else:
+        baseline_component = {
+            "pdf-chunker": ("pdf_chunker", "pdf-fixed-800"),
+            "note-chunker": ("note_chunker", "note-section"),
+            "retriever": ("retriever", "dense"),
+            "source-composition": (
+                "source_composition",
+                "pdf-only",
+            ),
+        }.get(stage_id)
+        if baseline_component is None:
+            raise SweepContractError(
+                f"{stage_id}: no relative guardrail baseline contract"
+            )
+        attribute, expected = baseline_component
+        matches = [
+            item
+            for item in records
+            if item.status == "completed"
+            and getattr(item.candidate, attribute) == expected
+        ]
+    if len(matches) != 1:
+        raise SweepContractError(
+            f"{record.candidate.config_id}: expected exactly one relative "
+            f"guardrail baseline, found {len(matches)}"
+        )
+    return matches[0]
+
+
+def _required_score_summary(
+    payload: Mapping[str, Any],
+    config_id: str,
+) -> Mapping[str, Any]:
+    value = payload.get("score_summary")
+    if not isinstance(value, Mapping):
+        raise SweepContractError(
+            f"{config_id}: score_summary is missing"
+        )
+    return value
+
+
+def _metric_value(
+    metrics: object,
+    metric: str,
+) -> float | None:
+    if not isinstance(metrics, Mapping):
+        return None
+    value = metrics.get(metric)
+    if value is None:
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _metric_delta(
+    candidate_metrics: object,
+    baseline_metrics: object,
+    metric: str,
+) -> float | None:
+    candidate_value = _metric_value(candidate_metrics, metric)
+    baseline_value = _metric_value(baseline_metrics, metric)
+    if candidate_value is None or baseline_value is None:
+        return None
+    return candidate_value - baseline_value
+
+
+def _new_recall_hard_failures(
+    candidate_payload: Mapping[str, Any],
+    baseline_payload: Mapping[str, Any],
+) -> tuple[str, ...]:
+    def recalls(payload: Mapping[str, Any]) -> dict[str, float]:
+        rows = payload.get("question_results")
+        if not isinstance(rows, list):
+            raise SweepContractError(
+                "completed candidate is missing question_results"
+            )
+        values: dict[str, float] = {}
+        for row in rows:
+            if not isinstance(row, Mapping):
+                raise SweepContractError("invalid question result")
+            row_id = str(row.get("row_id") or "")
+            value = _metric_value(row.get("metrics"), "recall_at_10")
+            if row_id and value is not None:
+                values[row_id] = value
+        return values
+
+    candidate = recalls(candidate_payload)
+    baseline = recalls(baseline_payload)
+    return tuple(
+        sorted(
+            row_id
+            for row_id, baseline_value in baseline.items()
+            if baseline_value > 0.0
+            and candidate.get(row_id) is not None
+            and math.isclose(candidate[row_id], 0.0, abs_tol=1e-12)
+        )
+    )
+
+
+def _percentile(
+    values: Sequence[float],
+    probability: float,
+) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * probability
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    fraction = position - lower
+    return ordered[lower] + (
+        ordered[upper] - ordered[lower]
+    ) * fraction
+
+
+def _unevaluable_adversarial_diagnostics(
+    payload: Mapping[str, Any],
+) -> Mapping[str, object]:
+    rows = payload.get("question_results")
+    if not isinstance(rows, list):
+        return {
+            "count": 0,
+            "row_ids": [],
+            "top1_score_distribution": None,
+        }
+    row_ids: list[str] = []
+    top1_scores: list[float] = []
+    for row in rows:
+        if (
+            not isinstance(row, Mapping)
+            or row.get("question_type") != "adversarial"
+            or _metric_value(row.get("metrics"), "recall_at_10") is not None
+        ):
+            continue
+        row_ids.append(str(row.get("row_id") or ""))
+        scores = row.get("ranked_scores")
+        if isinstance(scores, list) and scores:
+            score = float(scores[0])
+            if math.isfinite(score):
+                top1_scores.append(score)
+    distribution = (
+        {
+            "minimum": min(top1_scores),
+            "median": _percentile(top1_scores, 0.50),
+            "p95": _percentile(top1_scores, 0.95),
+            "maximum": max(top1_scores),
+        }
+        if top1_scores
+        else None
+    )
+    return {
+        "count": len(row_ids),
+        "row_ids": sorted(row_ids),
+        "top1_score_distribution": distribution,
+        "interpretation": (
+            "Retrieval-score diagnostic only; this is not refusal accuracy."
+        ),
+    }
+
+
+def _relative_guardrail_diagnostics(
+    record: SweepCandidateRecord,
+    baseline: SweepCandidateRecord,
+    payload: Mapping[str, Any],
+    baseline_payload: Mapping[str, Any],
+    *,
+    max_domain_regression: float,
+    max_regressed_domains: int,
+    max_question_type_regression: float,
+    max_overall_guardrail_regression: float,
+    max_new_recall_at_10_hard_failures: int,
+) -> dict[str, object]:
+    candidate_summary = _required_score_summary(
+        payload,
+        record.candidate.config_id,
+    )
+    baseline_summary = _required_score_summary(
+        baseline_payload,
+        baseline.candidate.config_id,
+    )
+    primary_metric = str(payload.get("primary_metric") or "")
+    baseline_primary = str(baseline_payload.get("primary_metric") or "")
+    if not primary_metric or primary_metric != baseline_primary:
+        raise SweepContractError(
+            f"{record.candidate.config_id}: primary metric differs from baseline"
+        )
+    failures: list[str] = []
+    metric_bundle_complete = bool(
+        payload.get("metric_bundle_complete")
+    )
+    if not metric_bundle_complete:
+        failures.append("metric-bundle-incomplete")
+
+    candidate_domains = candidate_summary.get("by_domain")
+    baseline_domains = baseline_summary.get("by_domain")
+    if not isinstance(candidate_domains, Mapping) or not isinstance(
+        baseline_domains,
+        Mapping,
+    ):
+        raise SweepContractError(
+            f"{record.candidate.config_id}: domain scores are missing"
+        )
+    domain_deltas = {
+        str(domain): delta
+        for domain in sorted(set(candidate_domains) & set(baseline_domains))
+        if (
+            delta := _metric_delta(
+                candidate_domains[domain],
+                baseline_domains[domain],
+                primary_metric,
+            )
+        )
+        is not None
+    }
+    regressed_domains = {
+        domain: delta
+        for domain, delta in domain_deltas.items()
+        if delta < -max_domain_regression
+    }
+    if len(regressed_domains) > max_regressed_domains:
+        failures.append("too-many-domain-regressions")
+
+    candidate_types = candidate_summary.get("by_question_type")
+    baseline_types = baseline_summary.get("by_question_type")
+    if not isinstance(candidate_types, Mapping) or not isinstance(
+        baseline_types,
+        Mapping,
+    ):
+        raise SweepContractError(
+            f"{record.candidate.config_id}: question-type scores are missing"
+        )
+    question_type_deltas = {
+        question_type: _metric_delta(
+            candidate_types.get(question_type),
+            baseline_types.get(question_type),
+            primary_metric,
+        )
+        for question_type in ("multi_hop", "adversarial")
+    }
+    for question_type, delta in question_type_deltas.items():
+        if delta is not None and delta < -max_question_type_regression:
+            failures.append(f"{question_type}-regression")
+
+    candidate_overall = candidate_summary.get("overall")
+    baseline_overall = baseline_summary.get("overall")
+    overall_deltas = {
+        metric: _metric_delta(
+            candidate_overall,
+            baseline_overall,
+            metric,
+        )
+        for metric in (
+            "recall_at_10",
+            "all_required_groups_success_at_10",
+        )
+    }
+    for metric, delta in overall_deltas.items():
+        if (
+            delta is not None
+            and delta < -max_overall_guardrail_regression
+        ):
+            failures.append(f"{metric}-regression")
+
+    new_hard_failures = _new_recall_hard_failures(
+        payload,
+        baseline_payload,
+    )
+    if len(new_hard_failures) > max_new_recall_at_10_hard_failures:
+        failures.append("new-recall-at-10-hard-failures")
+
+    latency_ratio = (
+        float(payload.get("p95_latency_ms", math.inf))
+        / max(float(baseline_payload.get("p95_latency_ms", math.inf)), 1e-12)
+    )
+    index_ratio = (
+        int(payload.get("index_bytes", 0))
+        / max(int(baseline_payload.get("index_bytes", 0)), 1)
+    )
+    return {
+        "revision": "rq2-relative-regression-v1",
+        "comparison_role": (
+            "baseline"
+            if record.candidate.config_id == baseline.candidate.config_id
+            else "candidate"
+        ),
+        "baseline_config_id": baseline.candidate.config_id,
+        "primary_metric": primary_metric,
+        "primary_delta": _metric_delta(
+            candidate_overall,
+            baseline_overall,
+            primary_metric,
+        ),
+        "domain_deltas": domain_deltas,
+        "regressed_domains": regressed_domains,
+        "question_type_deltas": question_type_deltas,
+        "overall_guardrail_deltas": overall_deltas,
+        "new_recall_at_10_hard_failure_ids": list(new_hard_failures),
+        "p95_latency_ratio": latency_ratio,
+        "index_size_ratio": index_ratio,
+        "operational_review_required": (
+            latency_ratio > 1.5 or index_ratio > 1.5
+        ),
+        "unevaluable_adversarial": (
+            _unevaluable_adversarial_diagnostics(payload)
+        ),
+        "thresholds": {
+            "max_domain_regression": max_domain_regression,
+            "max_regressed_domains": max_regressed_domains,
+            "max_question_type_regression": (
+                max_question_type_regression
+            ),
+            "max_overall_guardrail_regression": (
+                max_overall_guardrail_regression
+            ),
+            "max_new_recall_at_10_hard_failures": (
+                max_new_recall_at_10_hard_failures
+            ),
+        },
+        "failures": failures,
+        "passed": not failures,
+    }
+
+
+def _apply_relative_guardrails(
+    stage_id: str,
+    records: Sequence[SweepCandidateRecord],
+    gates: Mapping[str, Any],
+    *,
+    upstream_eligible_components: Mapping[str, frozenset[str]] | None = None,
+) -> tuple[SweepCandidateRecord, ...]:
+    policy = gates.get("relative_guardrails")
+    if not isinstance(policy, Mapping):
+        raise SweepContractError(
+            "config.gates.relative_guardrails must be a mapping"
+        )
+    thresholds = {
+        "max_domain_regression": float(
+            policy.get("max_domain_regression", 0.02)
+        ),
+        "max_regressed_domains": int(
+            policy.get("max_regressed_domains", 1)
+        ),
+        "max_question_type_regression": float(
+            policy.get("max_question_type_regression", 0.02)
+        ),
+        "max_overall_guardrail_regression": float(
+            policy.get("max_overall_guardrail_regression", 0.005)
+        ),
+        "max_new_recall_at_10_hard_failures": int(
+            policy.get("max_new_recall_at_10_hard_failures", 0)
+        ),
+    }
+    completed = [record for record in records if record.status == "completed"]
+    full_payloads = {
+        record.candidate.config_id: _read_full_candidate_payload(record)
+        for record in completed
+    }
+    updated: list[SweepCandidateRecord] = []
+    for record in records:
+        if record.status != "completed":
+            updated.append(record)
+            continue
+        baseline = _matching_baseline(stage_id, record, records)
+        payload = full_payloads[record.candidate.config_id]
+        baseline_payload = full_payloads[baseline.candidate.config_id]
+        diagnostics = _relative_guardrail_diagnostics(
+            record,
+            baseline,
+            payload,
+            baseline_payload,
+            **thresholds,
+        )
+        if upstream_eligible_components is not None:
+            upstream_status = {
+                attribute: getattr(record.candidate, attribute) in allowed
+                for attribute, allowed in upstream_eligible_components.items()
+            }
+            diagnostics["upstream_component_eligibility"] = upstream_status
+            upstream_failures = [
+                f"upstream-{attribute}-guardrail-failed"
+                for attribute, passed in upstream_status.items()
+                if not passed
+            ]
+            diagnostics["failures"].extend(upstream_failures)
+            diagnostics["passed"] = not diagnostics["failures"]
+        payload["guardrail_diagnostics"] = diagnostics
+        payload["guardrails_passed"] = bool(diagnostics["passed"])
+        rewritten = _write_candidate_record(
+            Path(record.result_path),
+            candidate=record.candidate,
+            input_fingerprint=record.input_fingerprint,
+            status=record.status,
+            payload=payload,
+        )
+        updated.append(replace(rewritten, resumed=record.resumed))
+    return tuple(updated)
+
+
 def _validate_inputs(
     config: Mapping[str, Any],
     documents: Mapping[str, CanonicalDocument],
@@ -499,6 +941,14 @@ def _validate_inputs(
     benchmark = config.get("benchmark")
     if not isinstance(benchmark, Mapping):
         raise SweepContractError("config.benchmark must be a mapping")
+    retrieval = config.get("retrieval")
+    if (
+        not isinstance(retrieval, Mapping)
+        or retrieval.get("scope") != "paper-scoped"
+    ):
+        raise SweepContractError(
+            "config.retrieval.scope must be exactly 'paper-scoped'"
+        )
     paper_ids = tuple(sorted(documents))
     question_ids = tuple(sorted(str(row.get("row_id")) for row in questions))
     if len(paper_ids) != int(benchmark.get("paper_count", -1)):
@@ -530,6 +980,79 @@ def _validate_inputs(
             f"missing={missing_notes}, blank={blank_notes}"
         )
     return paper_ids, question_ids
+
+
+def _frozen_confirmation_selection(
+    config: Mapping[str, Any],
+) -> ConfirmationSelection:
+    stages = config.get("stages")
+    top2 = (
+        stages.get("top2_confirmation")
+        if isinstance(stages, Mapping)
+        else None
+    )
+    if not isinstance(top2, Mapping):
+        raise SweepContractError(
+            "config.stages.top2_confirmation must be a mapping"
+        )
+
+    def selected(key: str) -> tuple[str, ...]:
+        raw = top2.get(key)
+        if (
+            not isinstance(raw, list)
+            or len(raw) != 2
+            or len(set(raw)) != 2
+            or any(not isinstance(value, str) or not value for value in raw)
+        ):
+            raise SweepContractError(
+                f"config.stages.top2_confirmation.{key} "
+                "must contain two unique IDs"
+            )
+        return tuple(raw)
+
+    selection = ConfirmationSelection(
+        pdf_chunkers=selected("selected_pdf_chunkers"),
+        retrievers=selected("selected_retrievers"),
+        source_compositions=selected(
+            "selected_source_compositions"
+        ),
+        reranker_modes=selected("selected_reranker_modes"),
+    )
+    if "rerank-off" not in selection.reranker_modes:
+        raise SweepContractError(
+            "frozen confirmation must include rerank-off"
+        )
+    return selection
+
+
+def _frozen_stage_anchors(
+    config: Mapping[str, Any],
+) -> Mapping[str, str]:
+    stages = config.get("stages")
+    anchors = (
+        stages.get("stage_anchors")
+        if isinstance(stages, Mapping)
+        else None
+    )
+    required = (
+        "pdf_chunker",
+        "note_chunker",
+        "retriever",
+        "source_composition",
+    )
+    if (
+        not isinstance(anchors, Mapping)
+        or set(anchors) != set(required)
+        or any(
+            not isinstance(anchors.get(key), str)
+            or not anchors[key]
+            for key in required
+        )
+    ):
+        raise SweepContractError(
+            "config.stages.stage_anchors is incomplete"
+        )
+    return {key: str(anchors[key]) for key in required}
 
 
 def _rank_stage(
@@ -631,7 +1154,7 @@ def _write_stage_artifacts(
     *,
     expected_paper_ids: Sequence[str],
     expected_question_ids: Sequence[str],
-) -> tuple[Path, Path, Path]:
+) -> tuple[Path, ...]:
     stage_root = run_root / "sweep" / "stages" / ranking.stage_id
     ranking_path = _atomic_write_json(
         stage_root / "ranking.json",
@@ -680,25 +1203,30 @@ def _write_stage_artifacts(
             ],
         },
     )
-    return ranking_path, unmapped_path, completeness_path
-
-
-def _top_components(
-    ranking: SweepStageRanking,
-    attribute: str,
-) -> tuple[str, ...]:
-    values: list[str] = []
-    for record in ranking.ranked:
-        value = str(getattr(record.candidate, attribute))
-        if value not in values:
-            values.append(value)
-        if len(values) == 2:
-            break
-    if not values:
-        raise SweepContractError(
-            f"{ranking.stage_id}: no complete eligible candidates"
-        )
-    return tuple(values)
+    guardrails_path = _atomic_write_json(
+        stage_root / "guardrails.json",
+        {
+            "schema_version": SWEEP_SCHEMA_VERSION,
+            "stage_id": ranking.stage_id,
+            "candidates": [
+                {
+                    "config_id": record.candidate.config_id,
+                    "status": record.status,
+                    "guardrails_passed": record.guardrails_passed,
+                    "diagnostics": record.payload.get(
+                        "guardrail_diagnostics"
+                    ),
+                }
+                for record in records
+            ],
+        },
+    )
+    return (
+        ranking_path,
+        unmapped_path,
+        completeness_path,
+        guardrails_path,
+    )
 
 
 def _pareto_frontier(
@@ -707,10 +1235,13 @@ def _pareto_frontier(
     points = [
         {
             "config_id": record.candidate.config_id,
+            "stage_id": record.candidate.stage_id,
             "primary": float(record.primary),
             "p95_latency_ms": record.p95_latency_ms,
             "index_bytes": record.index_bytes,
             "chunk_count": record.chunk_count,
+            "status": record.status,
+            "guardrails_passed": record.guardrails_passed,
         }
         for record in records
         if record.primary is not None
@@ -731,16 +1262,18 @@ def _pareto_frontier(
         )
         if not dominated:
             frontier.append(point)
+    ordered = sorted(
+        frontier,
+        key=lambda point: (
+            -float(point["primary"]),
+            float(point["p95_latency_ms"]),
+            int(point["index_bytes"]),
+            str(point["config_id"]),
+        ),
+    )
     return tuple(
-        sorted(
-            frontier,
-            key=lambda point: (
-                -float(point["primary"]),
-                float(point["p95_latency_ms"]),
-                int(point["index_bytes"]),
-                str(point["config_id"]),
-            ),
-        )
+        {"rank": rank, **point}
+        for rank, point in enumerate(ordered, 1)
     )
 
 
@@ -1044,6 +1577,7 @@ def _write_final_report_artifacts(
         (
             "# ResearchQA rq-2 morning report",
             "",
+            f"- Retrieval scope: `{config['retrieval']['scope']}`",
             f"- Candidates: {len(records)} total strategy records",
             f"- Completed candidates: "
             f"{sum(record.status == 'completed' for record in records)}",
@@ -1154,6 +1688,7 @@ def run_strategy_sweep(
             "config.metrics.guardrails must be a non-empty string array"
         )
     config_fingerprint = fingerprint_payload(config)
+    stage_anchors = _frozen_stage_anchors(config)
 
     all_records: list[SweepCandidateRecord] = []
     rankings: dict[str, SweepStageRanking] = {}
@@ -1214,24 +1749,34 @@ def run_strategy_sweep(
                         ),
                         evidence_mapping_cache=evidence_mapping_cache,
                     )
-                    if guardrail_check is None:
-                        guardrails_passed = all(
-                            (
-                                value := result.aggregate.overall.get(metric)
-                            )
-                            is not None
-                            and math.isfinite(float(value))
-                            for metric in configured_guardrails
+                    metric_bundle_complete = all(
+                        (
+                            value := result.aggregate.overall.get(metric)
                         )
-                    else:
-                        guardrails_passed = bool(guardrail_check(result))
+                        is not None
+                        and math.isfinite(float(value))
+                        for metric in configured_guardrails
+                    )
+                    custom_guardrail_passed = (
+                        True
+                        if guardrail_check is None
+                        else bool(guardrail_check(result))
+                    )
                     result = replace(
                         result,
                         guardrails_passed=(
-                            result.guardrails_passed and guardrails_passed
+                            result.guardrails_passed
+                            and metric_bundle_complete
+                            and custom_guardrail_passed
                         ),
                     )
                     full_payload = result.to_dict()
+                    full_payload["metric_bundle_complete"] = (
+                        metric_bundle_complete
+                    )
+                    full_payload["custom_guardrail_passed"] = (
+                        custom_guardrail_passed
+                    )
                     complete = result.is_complete(
                         expected_paper_ids=paper_ids,
                         expected_question_ids=question_ids,
@@ -1264,9 +1809,35 @@ def run_strategy_sweep(
                     )
             gc.collect()
             stage_records.append(record)
-            all_records.append(record)
             artifact_paths.append(Path(record.result_path))
 
+        upstream_eligible_components = None
+        if stage_id == "top2-confirmation":
+            upstream_eligible_components = {
+                "pdf_chunker": frozenset(
+                    record.candidate.pdf_chunker
+                    for record in rankings["pdf-chunker"].ranked
+                ),
+                "retriever": frozenset(
+                    record.candidate.retriever
+                    for record in rankings["retriever"].ranked
+                ),
+                "source_composition": frozenset(
+                    record.candidate.source_composition
+                    for record in rankings["source-composition"].ranked
+                ),
+            }
+        stage_records = list(
+            _apply_relative_guardrails(
+                stage_id,
+                stage_records,
+                gates,
+                upstream_eligible_components=(
+                    upstream_eligible_components
+                ),
+            )
+        )
+        all_records.extend(stage_records)
         ranking = _rank_stage(
             stage_id,
             stage_records,
@@ -1297,7 +1868,7 @@ def run_strategy_sweep(
         initial.stages["pdf-chunker"],
         rerank_phase=False,
     )
-    best_pdf = _top_components(pdf_ranking, "pdf_chunker")[0]
+    best_pdf = stage_anchors["pdf_chunker"]
 
     note_plan = generate_orthogonal_candidates(
         config,
@@ -1308,7 +1879,7 @@ def run_strategy_sweep(
         note_plan.stages["note-chunker"],
         rerank_phase=False,
     )
-    best_note = _top_components(note_ranking, "note_chunker")[0]
+    best_note = stage_anchors["note_chunker"]
 
     retrieval_plan = generate_orthogonal_candidates(
         config,
@@ -1320,7 +1891,7 @@ def run_strategy_sweep(
         retrieval_plan.stages["retriever"],
         rerank_phase=False,
     )
-    best_retriever = _top_components(retrieval_ranking, "retriever")[0]
+    best_retriever = stage_anchors["retriever"]
 
     composition_plan = generate_orthogonal_candidates(
         config,
@@ -1333,10 +1904,7 @@ def run_strategy_sweep(
         composition_plan.stages["source-composition"],
         rerank_phase=False,
     )
-    best_composition = _top_components(
-        composition_ranking,
-        "source_composition",
-    )[0]
+    best_composition = stage_anchors["source_composition"]
 
     reranker_plan = generate_orthogonal_candidates(
         config,
@@ -1350,35 +1918,43 @@ def run_strategy_sweep(
         reranker_plan.stages["reranker"],
         rerank_phase=True,
     )
-    best_enabled_reranker = next(
-        (
-            record.candidate.reranker
-            for record in reranker_ranking.ranked
-            if record.candidate.reranker != "rerank-off"
-        ),
-        None,
-    )
-    if best_enabled_reranker is None:
-        raise SweepContractError(
-            "reranker stage has no complete enabled reranker"
+    confirmation = _frozen_confirmation_selection(config)
+    eligible_component_values = {
+        "pdf_chunkers": {
+            record.candidate.pdf_chunker for record in pdf_ranking.ranked
+        },
+        "retrievers": {
+            record.candidate.retriever
+            for record in retrieval_ranking.ranked
+        },
+        "source_compositions": {
+            record.candidate.source_composition
+            for record in composition_ranking.ranked
+        },
+        "reranker_modes": {
+            record.candidate.reranker for record in reranker_ranking.ranked
+        },
+    }
+    confirmation_diagnostic_fallbacks = {
+        field: [
+            value
+            for value in getattr(confirmation, field)
+            if value not in eligible_component_values[field]
+        ]
+        for field in (
+            "pdf_chunkers",
+            "retrievers",
+            "source_compositions",
+            "reranker_modes",
         )
-
-    confirmation = ConfirmationSelection(
-        pdf_chunkers=_top_components(pdf_ranking, "pdf_chunker"),
-        retrievers=_top_components(retrieval_ranking, "retriever"),
-        source_compositions=_top_components(
-            composition_ranking,
-            "source_composition",
-        ),
-        reranker_modes=("rerank-off", best_enabled_reranker),
-    )
+    }
     confirmation_plan = generate_orthogonal_candidates(
         config,
         anchor_pdf_chunker=best_pdf,
         anchor_note_chunker=best_note,
         anchor_retriever=best_retriever,
         anchor_source_composition=best_composition,
-        best_reranker=best_enabled_reranker,
+        best_reranker=confirmation.reranker_modes[1],
         confirmation=confirmation,
     )
     confirmation_ranking = execute_stage(
@@ -1448,6 +2024,10 @@ def run_strategy_sweep(
                     if record.candidate.stage_id == "top2-confirmation"
                 ]
             ),
+            "confirmation_diagnostic_fallbacks": (
+                confirmation_diagnostic_fallbacks
+            ),
+            "stage_anchors": dict(stage_anchors),
             "stage_top2": {
                 stage_id: [
                     record.candidate.config_id for record in ranking.top2
