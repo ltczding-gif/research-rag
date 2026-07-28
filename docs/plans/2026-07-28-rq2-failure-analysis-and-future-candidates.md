@@ -335,6 +335,36 @@ fingerprint 已随 adapter 修复改变：
 6. `guardrail_finalized=false` 表示 confirmation stage 仍 pending，不能依据 provisional
    `guardrails_passed=true` 宣称通过。
 
+第六个 fresh confirmation `top2-confirmation-83a878a5daa76b1bb7ff` 已于
+2026-07-29 07:21（Asia/Shanghai）写出。它对应
+`pdf-fixed-1200 + hybrid-rrf + pdf-only + rerank-50-to-10`，配对的 rerank-off baseline
+是 `top2-confirmation-4a54989ab9420c780d49`。旧隔离 envelope 同样是
+`AcceleratorError` + CUDA illegal-memory-access；三份 payload SHA 均有效，fresh input
+fingerprint 已随 adapter 修复改变：
+
+1. fresh 结果覆盖 20/20 papers、254/254 questions、239 evaluable questions 和
+   380/380 mapped groups，`execution_complete=true`；
+2. 254/254 fresh pre-rerank item ID lists 与 off baseline 完全相同，所有重叠的
+   pre-rerank metric 值也完全相同；额外的 `Recall@20/50/100` 只是字段扩展；
+3. post-rerank 的 254 条排序全部变化，91 条题目指标变化；primary 从
+   `0.8345257020` 提升到 `0.8368531607`，差值只有 `+0.0023274587`；
+4. rerank 恢复 3 个旧 Recall@10 hard failures，但新增
+   `W3096486083_adversarial0`；
+5. observed p95 为 `3237.80 ms`；同一串行 run 持续处于 software thermal slowdown，
+   只能记录为 observed-only；
+6. stage finalization 后 `guardrail_finalized=true`、`guardrails_passed=false`，明确失败
+   `too-many-domain-regressions`、`new-recall-at-10-hard-failures`、
+   `upstream-pdf_chunker-guardrail-failed` 和
+   `upstream-retriever-guardrail-failed`。
+
+定向 rerank repair 于 2026-07-29 07:21 正常退出，stdout 记录
+`candidate_count=35` 和 complete event。最终 9/9 目标均满足：fresh 与旧隔离 payload SHA
+有效、input fingerprint 已变化、`execution_complete=true`、
+`guardrail_finalized=true`、20 papers、254 questions、239 evaluable questions、
+380/380 mapped groups；没有 infrastructure 或 unknown failure。三个 depth 和六个
+confirmation 全部 `guardrails_passed=false`，因此这轮关闭的是 adapter 假分数和
+基础设施失败，不产生可晋级 rerank-50 策略；后续只执行已冻结的 RR1，不再扩大 depth。
+
 同一提交还把 `execution_complete` 与 `guardrail_finalized` 分开：没有
 `guardrail_diagnostics` 的 completed envelope 只能是 `pending`，不能称 pass；
 incomplete、pending、基础设施或未知失败会阻止 stage/final/public export。失败 envelope
