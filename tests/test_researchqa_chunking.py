@@ -127,6 +127,24 @@ def test_section_aware_detects_paths_and_fails_closed_without_headings():
     assert failed.chunks == ()
 
 
+def test_section_aware_drops_punctuation_only_extraction_fragments():
+    document = _document(
+        "1 Methods\n\n"
+        + "a" * 1200
+        + "."
+    )
+
+    result = chunk_pdf(document, "pdf-section-aware", is_main=True)
+
+    assert result.status == "completed"
+    assert result.chunks
+    assert all(
+        any(character.isalnum() for character in chunk.text)
+        for chunk in result.chunks
+    )
+    assert all(chunk.text.strip() != "." for chunk in result.chunks)
+
+
 def test_structure_aware_preserves_detected_atomic_neighborhood():
     document = _document(
         "Introduction\n\n"

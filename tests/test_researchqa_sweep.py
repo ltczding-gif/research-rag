@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from benchmarks.researchqa_models import ModelTransportError
 from benchmarks.researchqa_retrieval import (
     RERANKER_MODEL_ID,
     RERANKER_REVISION,
@@ -370,6 +371,16 @@ def test_interrupted_sweep_resumes_39_unique_candidates_and_orders_callbacks(
         assert (stage_root / "ranking.json").is_file()
         assert (stage_root / "unmapped.json").is_file()
         assert (stage_root / "completeness.json").is_file()
+
+
+def test_transient_model_failure_propagates_without_failed_checkpoint(tmp_path):
+    def executor(*_args, **_kwargs):
+        raise ModelTransportError("temporary Ollama failure")
+
+    with pytest.raises(ModelTransportError, match="temporary Ollama failure"):
+        _run(tmp_path, executor, [])
+
+    assert not list((tmp_path / "sweep" / "candidates").rglob("*.json"))
 
 
 def test_bad_payload_sha_reexecutes_only_the_corrupt_candidate(tmp_path):

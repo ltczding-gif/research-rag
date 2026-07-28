@@ -38,7 +38,7 @@ _FIXED_CONFIGS = {
     "pdf-fixed-800": (800, 700, 100),
     "pdf-fixed-1200": (1200, 1000, 120),
 }
-_CHUNKING_REVISION = "researchqa-chunking-v1"
+_CHUNKING_REVISION = "researchqa-chunking-v2"
 _HEADING_RE = re.compile(r"(?m)^(?P<line>[^\n]+)$")
 _MARKDOWN_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _NUMBERED_HEADING_RE = re.compile(
@@ -417,6 +417,19 @@ def _paragraph_ranges(text: str, start: int, end: int) -> tuple[tuple[int, int],
     return tuple(ranges)
 
 
+def _indexable_ranges(
+    text: str,
+    ranges: Sequence[tuple[int, int]],
+) -> tuple[tuple[int, int], ...]:
+    """Drop punctuation-only extraction fragments before indexing."""
+
+    return tuple(
+        (start, end)
+        for start, end in ranges
+        if any(character.isalnum() for character in text[start:end])
+    )
+
+
 def _split_hard(
     ranges: Sequence[tuple[int, int]],
     *,
@@ -595,12 +608,20 @@ def _aware_chunks(
             )
     chunks = []
     for start, end, section_path in sections:
-        paragraphs = _paragraph_ranges(joined, start, end)
+        paragraphs = _indexable_ranges(
+            joined,
+            _paragraph_ranges(joined, start, end),
+        )
         for chunk_start, chunk_end in _aggregate_ranges(
             paragraphs,
             target=800,
             hard_max=1200,
         ):
+            if not any(
+                character.isalnum()
+                for character in joined[chunk_start:chunk_end]
+            ):
+                continue
             chunks.append(
                 _make_pdf_chunk(
                     document=document,
@@ -659,7 +680,12 @@ def _structure_chunks(
     chunks = []
     detected = False
     for section_start, section_end, section_path in sections:
-        paragraphs = list(_paragraph_ranges(joined, section_start, section_end))
+        paragraphs = list(
+            _indexable_ranges(
+                joined,
+                _paragraph_ranges(joined, section_start, section_end),
+            )
+        )
         marker_indexes = [
             index
             for index, (start, end) in enumerate(paragraphs)
@@ -697,6 +723,11 @@ def _structure_chunks(
             target=800,
             hard_max=1200,
         ):
+            if not any(
+                character.isalnum()
+                for character in joined[chunk_start:chunk_end]
+            ):
+                continue
             chunks.append(
                 _make_pdf_chunk(
                     document=document,

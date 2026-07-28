@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from benchmarks.overnight import canonical_json_bytes, fingerprint_payload
+from benchmarks.researchqa_models import ModelTransportError
 from benchmarks.researchqa_scoring import (
     CandidateSummary,
     paired_bootstrap,
@@ -38,7 +39,7 @@ from service.pdf_ir import CanonicalDocument
 
 
 SWEEP_SCHEMA_VERSION = 1
-SWEEP_ENGINE_REVISION = "researchqa-sweep-v3"
+SWEEP_ENGINE_REVISION = "researchqa-sweep-v4"
 
 
 class SweepContractError(ValueError):
@@ -1137,6 +1138,12 @@ def run_strategy_sweep(
                         status="completed" if complete else "incomplete",
                         payload=payload,
                     )
+                except ModelTransportError:
+                    # The outer overnight runner owns the bounded 5/20/60
+                    # retry policy.  Persisting a failed candidate here would
+                    # incorrectly turn a transient Ollama outage into a
+                    # deterministic, permanently resumed checkpoint.
+                    raise
                 except Exception as exc:
                     record = _write_candidate_record(
                         path,
