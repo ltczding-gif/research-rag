@@ -223,8 +223,9 @@ incomplete、pending、基础设施或未知失败会阻止 stage/final/public e
    尚未落盘”的运行状态一致；
 3. 两个 fresh reranker envelope 已显式包含 `execution_complete=true`；其余 **25 个**
    legacy completed envelope 没有该字段。它们有完整的 20 paper IDs、254 question IDs、
-   254 rows 和 metric bundle，因此旧质量结果不是凭空生成，但仍不足以证明新 envelope
-   合同已满足；
+   254 唯一 rows、239 evaluable questions、380/380 mapped reference groups、
+   paper-scoped scope、完整 metric bundle 和 pre-rerank 字段；逐 envelope 对账没有发现
+   质量行集合错误。因此旧质量结果不是凭空生成，但仍不足以证明新 envelope 合同已满足；
 4. legacy structure-aware 失败 envelope 只有 `error/error_type`，缺少显式
    `execution_complete=false`、`failure_kind=strategy` 和 `failure_context`；
 5. 根因是 `48d4d01` 改变了 checkpoint/发布状态语义，但
