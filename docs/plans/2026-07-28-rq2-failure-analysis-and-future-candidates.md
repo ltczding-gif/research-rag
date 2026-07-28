@@ -197,9 +197,22 @@ reranker 基础设施失败的直接根因已经由代码和 live 资源共同�
    mapping 全部一致。4 个 raw reranker scores 发生 BF16 量化差异，最大绝对差 `0.125`，
    未改变任何排序或指标。observed p95 从 `6751.62 ms` 降到 `3667.80 ms`（约
    `45.7%`），但同样处于 software thermal slowdown，不能用于正式决胜。
-9. 截至 2026-07-29 04:44（Asia/Shanghai），定向进程已写出 depth-20/depth-50 两个候选，
-   depth-100 在途，stderr 仍只有 tokenizer 性能提示。两个候选的
-   `guardrail_finalized=false` 是 reranker stage 尚未整体完成的 pending 状态，不是 pass。
+9. depth-100 的旧隔离 envelope 是
+   `SystemError: error return without exception set`，没有 quality rows，因此不存在可做
+   rank/metric parity 的旧有效结果。2026-07-29 05:15（Asia/Shanghai）写出的新 envelope
+   是首个有效 depth-100：payload SHA 正确，input fingerprint 按新 adapter 改变，
+   20/20 papers、254/254 questions、239 evaluable、380/380 mapped groups、
+   pre-rerank 字段和 metric bundle 全部完整，`execution_complete=true`；
+10. depth-100 primary 为 `0.8380262321`，observed p95 为 `6860.10 ms`。preflight 明确记录
+    `qwen3-reranker-last-token-logits-v1`、`logits_to_keep=1`、resolved commit
+    `e61197ed45024b0ed8a2d74b80b4d909f1255473`。运行期间有 software thermal
+    slowdown，故该延迟仍不能用于正式决胜；
+11. reranker stage 完成 guardrail finalization 后，depth-20/50/100 三者均为
+    `execution_complete=true`、`guardrail_finalized=true`，但
+    `guardrails_passed=false`。三者都在 biology 和 machine_learning 两个领域超过回归门，
+    且都新增同一 Recall@10 hard failure `W3096486083_adversarial0`。这证明三项是
+    **有效但不合格的策略结果**，不是基础设施失败；它也直接支持后续只测已冻结的 RR1，
+    而不是继续加深 rerank depth。
 
 代码提交 `48d4d01` 同时关闭了三个复用漏洞：last-token-only logits、显式
 `adapter_revision`、以及 rerank-enabled candidate fingerprint。`rerank-off` fingerprint
