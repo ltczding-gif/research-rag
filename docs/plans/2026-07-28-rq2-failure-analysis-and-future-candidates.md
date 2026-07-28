@@ -320,10 +320,10 @@ fixed-800 的 p95/max 从 `2.095x/2.167x` 降到 `1.481x/1.678x`。这些统计�
 
 ### 4.1 聚合结果与 coverage 偏差
 
-| note chunker | 笔记块 | 覆盖论文 | 有引用块 | primary score |
+| note chunker | 笔记块 | 覆盖论文 | 可回链块（fixed-1200） | primary score |
 |---|---:|---:|---:|---:|
 | `note-whole` | 20 | 20/20 | 20 | 0.2456 |
-| `note-section` | 323 | 20/20 | 271 | 0.4172 |
+| `note-section` | 323 | 20/20 | 270 | 0.4172 |
 | `note-claim-evidence` | 103 | 20/20 | 103 | 0.3678 |
 | `note-reviewer-concern` | 4 | 2/20 | 4 | 0.6770 |
 
@@ -347,7 +347,59 @@ PDF；因此可能出现“由 SI 语义命中、却给 Main 页加权”的 pro
 non-SI 论文之间的分数差不能作因果判断，后续必须用同一论文的 Main-only 与 SI-informed
 note 做受控消融。
 
-### 4.2 后续候选
+### 4.2 N0/N3 生产输入审计与冻结合同
+
+2026-07-29 对冻结的 20 篇笔记、对应 Main native IR 和 `pdf-fixed-1200` chunks 做了只读
+重算。N0 所需的逐论文 coverage 不是全局平均值：
+
+| note chunker | 非空论文 | 至少一块可回链论文 | 非空块 | 可回链块 | 可回链率 |
+|---|---:|---:|---:|---:|---:|
+| `note-whole` | 20/20 | 20/20 | 20 | 20 | 100% |
+| `note-section` | 20/20 | 20/20 | 323 | 270 | 83.59% |
+| `note-claim-evidence` | 20/20 | 20/20 | 103 | 103 | 100% |
+| `note-reviewer-concern` | 2/20 | 2/20 | 4 | 4 | 100% |
+
+据此冻结 `N0 note-route-eligibility-gate`：
+
+1. 在每篇论文自己的 PDF chunks 上计算 eligibility；至少存在一个 `text.strip()` 非空且
+   backlink 集合非空的 note chunk 才算该论文 eligible。不得用全局块数或平均回链率替代
+   逐论文判定。
+2. note 增强路线对不 eligible 的论文必须确定性退化为该候选的 direct PDF-only 路线，
+   并报告 eligible/fallback paper IDs、块数、可回链块数和 fallback rate。它不是策略失败，
+   但在 diagnostics finalized 前不得排名。
+3. `note-reviewer-concern` 当前有 18/20 篇触发 fallback，因此继续保持
+   `diagnostic-only`/`rankable: false`；不能因为补了 PDF fallback 或表面分数较高就晋级。
+4. backlink fanout 只作为报告字段，不能暗中变成 N0 调参门。span cap 属于独立的 N4，
+   不在观察本轮质量分数后反向写入 N0。
+
+当前 `_VERDICT_ROW_RE` 不是完整的模板解析器。它只接受首单元格以一个 `C<数字>` 开头的
+行，因此只解析 58 条真实 verdict rows 中的 51 条：4 `major`、47 `minor`；漏掉 7 条
+`C1/C2`、`C2–C5` 等多 claim/range 行，其中包括 `W3094793347` 的全部 3 行。按
+“Adaptive Red-Team Verdict”节内、末列 severity 的表格边界重新审计后，生产输入为：
+
+- 58 条结构化 verdict rows，且没有未识别 severity；
+- 0 `fatal`、4 `major`、54 `minor`、0 显式 `zero`；
+- 2/20 篇至少有一个 `fatal`/`major`，18/20 篇只有 `minor`；
+- 当前 4 个 reviewer chunks 正好对应 4 条 `major`，均可回链；高覆盖的 54 条
+  `minor` 不能伪装成 54 个 surviving major concerns。
+
+据此冻结 `N3 note-concern-parser-contract`：
+
+1. 只在明确的 `## 审稿人视角（Adaptive Red-Team Verdict）` 节内解析 verdict 表；
+   缺节、坏表头、未知/缺失 severity 必须 fail closed，不能当成 `zero`。
+2. severity 规范化为 `fatal|major|minor|zero` 的结构化字段；显式 `zero` 与“没有
+   fatal/major”是两件事，不得自动补造 verdict row。
+3. claim 单元格支持单 ID、斜线列表和同前缀数字范围；例如 `C1/C2` 解析为
+   `C1,C2`，`C2–C5` 确定性展开为 `C2,C3,C4,C5`。所有 ID 必须存在于 claim blocks，
+   重复项去重，逆序或无效范围 fail closed。
+4. `fatal`/`major` 才能进入 optional reviewer-concern 检索支路；`minor`/`zero`
+   保留为结构化诊断或 claim metadata，不生成 surviving concern。没有 fatal/major 的
+   论文在 N1 中自然使用全覆盖的 `note-claim-evidence` 底座，不虚构科学质疑。
+5. reviewer-only 候选始终只作 parser/coverage diagnostic。N3 单测必须覆盖四种 severity、
+   多 claim、范围、无 major/fatal、未知 severity 和缺失 reviewer 节；本修复不以质量分
+   提升为验收条件。
+
+### 4.3 后续候选
 
 | ID | 单变量候选 | 目的 | 验证要求 |
 |---|---|---|---|
@@ -527,8 +579,8 @@ depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50
 | execution/guardrail/failure 状态分离 | 代码和回归测试已通过 | 新 stage/final 必须 fail closed |
 | 旧 adapter 与假 final 隔离 | 9 个候选、17 个 artifact 已移入 run-owned quarantine | 新旧 SHA ledger 对账 |
 | `F2 pdf-structure-aware-fallback` | 生产输入结构门已冻结，代码待实现 | 使用新 config ID，不按质量分数调阈值 |
-| `N0 note-route-eligibility-gate` | 已冻结每篇非空且至少一条 backlinkable | paper-scoped 基线后执行 |
-| `N3 note-concern-parser-contract` | 已确认需支持 fatal/major/minor/zero | 结构化 severity coverage 验证 |
+| `N0 note-route-eligibility-gate` | 已冻结逐论文同一非空块须 backlinkable；失败逐论文 PDF-only fallback | paper-scoped 基线后实现并报告 fallback IDs/rate |
+| `N3 note-concern-parser-contract` | 已冻结 58 行生产分布、多 claim/range、四级 severity 与 fail-closed 边界 | 实现结构化 parser；reviewer-only 仍 diagnostic-only |
 | controlled finalist latency | 待执行 | 随机/交错顺序复测并列候选 |
 
 P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、失败可以局部降级、恢复不会混入
