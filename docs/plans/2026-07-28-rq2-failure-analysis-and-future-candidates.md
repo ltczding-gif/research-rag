@@ -275,6 +275,22 @@ p95 为 `2.095x`、最大 `2.167x`：`W3040245690` 从 126 块增至 273 块；
 覆盖 detection failure 和“检测成功但病态碎片化”，并在查看质量分数前冻结逐论文
 expansion、短块率、重复文本数和全局成本门。
 
+2026-07-29 已在不读取任何质量分数的前提下冻结 F2 结构门：
+
+1. `structure-detection-failed`：该论文回退 fixed-1200；
+2. structure chunk count / fixed-1200 chunk count `> 2.5`：该论文回退；
+3. 长度 `<100` 字符的 chunk 占比 `> 0.40`：该论文回退；
+4. exact duplicate text 至少 5 个且占比 `>= 0.04`：该论文回退；
+5. 完成逐论文回退后，全局 chunk count / fixed-1200 chunk count 必须 `<= 1.25`；
+   超过则候选合同失败，不查看质量分数后继续补调阈值。
+
+`2.5` 相对 800/1200 的目标粒度仍保留了充足结构开销；`40%` 短块意味着近半索引单位
+已经与 800 字符目标相悖；重复门同时要求绝对数量和比例，避免短论文因单个重复误触发。
+在当前 20 篇生产输入上，该门使 9 篇 detection failure 和 4 篇病态碎片化论文回退；
+总块数为 2,520，即 fixed-1200 的 `1.170x`、fixed-800 的 `0.820x`，逐论文相对
+fixed-800 的 p95/max 从 `2.095x/2.167x` 降到 `1.481x/1.678x`。这些统计只证明结构与
+成本合同，不构成 F2 的质量结论。
+
 `pdf-parent-child` 的 Recall@5 为 `0.8156`，低于固定切分；它的层级组合还存在二次召回
 瓶颈，见第 6 节。
 
@@ -510,7 +526,7 @@ depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50
 | reranker last-token-only + adapter identity | 代码、parity 和回归测试已通过 | 精确 9 个候选 fresh-CUDA 定向重跑 |
 | execution/guardrail/failure 状态分离 | 代码和回归测试已通过 | 新 stage/final 必须 fail closed |
 | 旧 adapter 与假 final 隔离 | 9 个候选、17 个 artifact 已移入 run-owned quarantine | 新旧 SHA ledger 对账 |
-| `F2 pdf-structure-aware-fallback` | 已发现 detection failure 与病态碎片化两类失败 | 冻结生产输入结构门后使用新 config ID |
+| `F2 pdf-structure-aware-fallback` | 生产输入结构门已冻结，代码待实现 | 使用新 config ID，不按质量分数调阈值 |
 | `N0 note-route-eligibility-gate` | 已冻结每篇非空且至少一条 backlinkable | paper-scoped 基线后执行 |
 | `N3 note-concern-parser-contract` | 已确认需支持 fatal/major/minor/zero | 结构化 severity coverage 验证 |
 | controlled finalist latency | 待执行 | 随机/交错顺序复测并列候选 |
