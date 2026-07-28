@@ -321,6 +321,13 @@ incomplete、pending、基础设施或未知失败会阻止 stage/final/public e
    fail-closed 回归：completed 仅接受 execution complete 且 guardrail finalized 的状态；
    failed 仅接受身份一致、合同完整的确定性 strategy failure。不能把 outer task 的
    completed 状态当作候选合同的替代证据。
+9. 状态属性本身还有 truthy fail-open：`mapping_passed` 和 `guardrails_passed` 当前用
+   `bool(value)`，会把 `"false"` 等非空字符串解释成通过；`failure_kind` 在缺少显式字段时
+   仍会依据旧 `error_type/error` 推断。阶段 C 应把两个通过门改成严格 `is True`，让缺失
+   failure kind 保持 `None` 并进入 blocking，而不是推断成 strategy；loader 同时要在恢复
+   completed checkpoint 前核对当次预期 paper/question ID 集合，不能恢复
+   `execution_complete=true` 但集合不完整的自相矛盾 envelope。public exporter 也必须要求
+   mapping coverage 的 `passed` 为真实布尔值。
 
 这只关闭了 fail-open 发布，还没有实现候选内部恢复。`run_complete_candidate` 当前先执行
 全部 254 条 quality rows，再执行 warmup/timed latency passes，最后才返回完整结果；
