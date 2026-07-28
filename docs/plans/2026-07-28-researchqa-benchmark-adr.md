@@ -244,6 +244,10 @@ group，重复返回同一 group 不重复得分。
 且评分时一次只比较一个变量族。benchmark source、问题和期望答案不能在算法实现中修改。
 详细合同见 `docs/plans/2026-07-28-rq2-overnight-strategy-sweep-design.md`。
 
+扫描过程中发现的逐类失败模式、实验有效性缺陷和后续单变量候选，统一记录在
+`docs/plans/2026-07-28-rq2-failure-analysis-and-future-candidates.md`。该文件是诊断
+backlog，不改变本 ADR 已批准的 `rq-2` 候选，也不授权自动进入 `rq-5`。
+
 ## 9. 明确不做
 
 当前 ResearchQA 周期不做：
