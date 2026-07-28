@@ -205,14 +205,34 @@ reranker 基础设施失败的直接根因已经由代码和 live 资源共同�
 `adapter_revision`、以及 rerank-enabled candidate fingerprint。`rerank-off` fingerprint
 保持不变。冻结配置重新生成 candidate plan 后，受旧 adapter 影响的精确集合是 **9 个**：
 reranker depth 20/50/100 三个，加 6 个 rerank-50 confirmation；不是先前估计的 10 个。
-其余 26 个 checkpoint 可以复用。旧 9 个 envelope 和 17 个旧 final/stage/report 文件已
-移动到 run-owned quarantine，并逐文件验证 SHA-256。
+其余 26 个 checkpoint 的质量 payload 未受 adapter 影响，但不能直接视为满足新状态合同。
+旧 9 个 envelope 和 17 个旧 final/stage/report 文件已移动到 run-owned quarantine，并
+逐文件验证 SHA-256。
 
 同一提交还把 `execution_complete` 与 `guardrail_finalized` 分开：没有
 `guardrail_diagnostics` 的 completed envelope 只能是 `pending`，不能称 pass；
 incomplete、pending、基础设施或未知失败会阻止 stage/final/public export。失败 envelope
 现在预留 candidate、failure kind、phase/row/pass/progress 和 traceback 字段。当前回归证据为
 `416 passed, 2 skipped`，benchmark validator 在仓库 Wave 0A 合同下通过。
+
+2026-07-29 对当前 paper-scoped candidate 目录的逐 envelope 审计进一步确认：
+
+1. 当前 28 个正式 envelope 的 payload SHA 全部与 canonical payload 一致，没有哈希损坏；
+2. 其中 27 个 completed，1 个为 structure-aware 的确定性
+   `StrategyContractError`；当前候选数量与“depth-100 和 6 个 reranked confirmation
+   尚未落盘”的运行状态一致；
+3. 两个 fresh reranker envelope 已显式包含 `execution_complete=true`；其余 **25 个**
+   legacy completed envelope 没有该字段。它们有完整的 20 paper IDs、254 question IDs、
+   254 rows 和 metric bundle，因此旧质量结果不是凭空生成，但仍不足以证明新 envelope
+   合同已满足；
+4. legacy structure-aware 失败 envelope 只有 `error/error_type`，缺少显式
+   `execution_complete=false`、`failure_kind=strategy` 和 `failure_context`；
+5. 根因是 `48d4d01` 改变了 checkpoint/发布状态语义，但
+   `SWEEP_ENGINE_REVISION` 仍为 `researchqa-sweep-v9`，当前 loader 也没有拒绝缺少新
+   必填字段的旧 envelope。最终修复必须让 loader 对 completed/incomplete/failed 分别
+   验证新必填字段并 fail closed；定向 rerank 退出后只重执行这 26 个 legacy 集合，
+   不能静默把旧 `status=completed` 翻译成新 `execution_complete=true`。这样既保留
+   fresh 9 个 adapter 修复结果，又不以迁移字段伪装重新验证。
 
 这只关闭了 fail-open 发布，还没有实现候选内部恢复。`run_complete_candidate` 当前先执行
 全部 254 条 quality rows，再执行 warmup/timed latency passes，最后才返回完整结果；
