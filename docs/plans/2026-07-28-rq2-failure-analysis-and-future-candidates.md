@@ -202,8 +202,33 @@ reranker depth 20/50/100 三个，加 6 个 rerank-50 confirmation；不是先�
 同一提交还把 `execution_complete` 与 `guardrail_finalized` 分开：没有
 `guardrail_diagnostics` 的 completed envelope 只能是 `pending`，不能称 pass；
 incomplete、pending、基础设施或未知失败会阻止 stage/final/public export。失败 envelope
-现在保留 candidate、failure kind、phase/row/pass/progress 和 traceback。当前回归证据为
+现在预留 candidate、failure kind、phase/row/pass/progress 和 traceback 字段。当前回归证据为
 `416 passed, 2 skipped`，benchmark validator 在仓库 Wave 0A 合同下通过。
+
+这只关闭了 fail-open 发布，还没有实现候选内部恢复。`run_complete_candidate` 当前先执行
+全部 254 条 quality rows，再执行 warmup/timed latency passes，最后才返回完整结果；
+`execute_stage` 看不到内部进度。若中途抛异常，新失败 envelope 仍只能写
+`phase=candidate-execution`、`row_id=null`、`pass_index=null` 和空的已完成论文/问题列表。
+旧隔离区中的 depth-100 `SystemError` payload 甚至只有 `error/error_type`，6 个 CUDA
+失败也无法证明发生在 quality 还是 latency。因此，“字段存在”不能当作“原子 resume
+已经实现”。
+
+在后续实现前冻结恢复合同：
+
+1. 使用独立且绑定 input fingerprint 的 progress artifact，至少包含 candidate ID、
+   engine/progress schema revision、已完成 quality rows、当前 phase 和 payload SHA-256；
+   partial artifact 永不参与排名，也不被 stage ranking 当作 candidate envelope。
+2. quality phase 在完整论文边界原子 checkpoint，失败时记录精确 `paper_id/row_id`；
+   resume 必须验证 row ID 唯一且属于预期集合，并验证已存 question results 的哈希，只执行
+   缺失 rows。
+3. latency 只在完整 pass 边界 checkpoint。warmup/timed pass 内失败时丢弃该不完整 pass，
+   只从下一完整 pass 恢复，保证候选 sample count 一致；artifact 记录 phase、pass
+   kind/index、当前 row、固定 performance row IDs 和已完成 samples。
+4. `ModelTransportError` 仍可交给外层有界重试，但最新已验证 progress artifact 必须保留；
+   infrastructure/unknown failure 引用其路径与 SHA，不得再用空 progress 覆盖。
+5. 只有 quality 完整、latency 完整、聚合完成且 final envelope 原子写入并验 hash 后，
+   progress 才能 finalized。source/note/model/adapter/config/code 任一 fingerprint 不同都使
+   resume 失效并 fail closed。
 
 Paper-scoped 结果还更新了三个后续判断：
 
@@ -577,6 +602,7 @@ depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50
 | Pareto/public exporter 完整性 | fail-closed 代码已修复，旧假 final 已隔离 | 公开导出必须在零基础设施失败后原子通过 |
 | reranker last-token-only + adapter identity | 代码、parity 和回归测试已通过 | 精确 9 个候选 fresh-CUDA 定向重跑 |
 | execution/guardrail/failure 状态分离 | 代码和回归测试已通过 | 新 stage/final 必须 fail closed |
+| 候选内部原子 progress | 合同已冻结；当前 executor 仍只在整项结束后返回 | 定向 rerank 退出后实现逐论文 quality 与完整 pass latency resume |
 | 旧 adapter 与假 final 隔离 | 9 个候选、17 个 artifact 已移入 run-owned quarantine | 新旧 SHA ledger 对账 |
 | `F2 pdf-structure-aware-fallback` | 生产输入结构门已冻结，代码待实现 | 使用新 config ID，不按质量分数调阈值 |
 | `N0 note-route-eligibility-gate` | 已冻结逐论文同一非空块须 backlinkable；失败逐论文 PDF-only fallback | paper-scoped 基线后实现并报告 fallback IDs/rate |
