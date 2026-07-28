@@ -234,6 +234,24 @@ reranker depth 20/50/100 三个，加 6 个 rerank-50 confirmation；不是先�
 | `top2-confirmation-f8a0b35f82e5b973d89f` | `top2-confirmation-b9f5e20ef5468f52dd25` | `pdf-parent-child` | `dense` | `hierarchical-pdf` |
 | `top2-confirmation-61e18c1d40a13e571292` | `top2-confirmation-c5b661c074b674db2ad5` | `pdf-parent-child` | `hybrid-rrf` | `hierarchical-pdf` |
 
+首个 fresh confirmation `top2-confirmation-2d5a2ea0484f0cf3f1fc` 已于
+2026-07-29 05:36（Asia/Shanghai）写出。其旧隔离 envelope 是
+`ModelInferenceError` + CUDA illegal-memory-access，没有可比较的旧质量行；旧失败、
+rerank-off baseline 和 fresh envelope 的 payload SHA 均有效，fresh input fingerprint
+按新 adapter 改变。该候选为 `pdf-fixed-800 + dense + pdf-only + rerank-50-to-10`：
+
+1. 20/20 papers、254/254 questions、239 evaluable、380/380 mapped groups 完整，
+   `execution_complete=true`；
+2. 254/254 pre-rerank item ID lists 与配对的 rerank-off baseline 完全相同。所有重叠的
+   pre-rerank metric 值也完全相同；直接比较整张 metric dict 时的 254 个差异只来自 fresh
+   payload 额外保存 `Recall@20/50/100`，不是基础检索不一致；
+3. post-rerank 的 254 条排序均变化，100 条题目指标变化；primary 从
+   `0.7978727842` 提升到 `0.8313412420`，差值 `+0.0334684577`，但新增 Recall@10
+   hard failure `W3096486083_multihop0`；
+4. observed p95 为 `3398.99 ms`，运行时仍有 software thermal slowdown，只作观察值；
+5. 当前 `guardrail_finalized=false` 是六个 confirmation 尚未全部完成的 pending 状态。
+   即使整体分数提升，也不能在阶段门关闭前称为 pass。
+
 同一提交还把 `execution_complete` 与 `guardrail_finalized` 分开：没有
 `guardrail_diagnostics` 的 completed envelope 只能是 `pending`，不能称 pass；
 incomplete、pending、基础设施或未知失败会阻止 stage/final/public export。失败 envelope
