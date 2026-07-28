@@ -311,6 +311,16 @@ incomplete、pending、基础设施或未知失败会阻止 stage/final/public e
    envelope 缺少完整失败合同。这个数字来自 envelope/hash/state 盘点；最终 payload
    candidate 精确身份仍必须由修复后的 loader 对当次实际候选逐项验证，不能使用另一份
    默认配置推断。
+8. 同日对独立 public-export 路径的只读审计发现第二个 fail-open：
+   `researchqa_public_export._candidate_envelopes()` 当前只要求 completed envelope 有
+   20 个 paper IDs、254 个 question IDs、paper-scoped 标记和布尔
+   `guardrails_passed`，没有要求 `execution_complete=true` 或
+   `guardrail_finalized=true`；对 failed envelope 则完全不验证 candidate、
+   `failure_kind/failure_context`、traceback 和显式 false 状态。因此，即使 sweep loader
+   修严，直接调用 exporter 仍可能把旧 envelope 发布出去。阶段 C 必须同时增加 exporter
+   fail-closed 回归：completed 仅接受 execution complete 且 guardrail finalized 的状态；
+   failed 仅接受身份一致、合同完整的确定性 strategy failure。不能把 outer task 的
+   completed 状态当作候选合同的替代证据。
 
 这只关闭了 fail-open 发布，还没有实现候选内部恢复。`run_complete_candidate` 当前先执行
 全部 254 条 quality rows，再执行 warmup/timed latency passes，最后才返回完整结果；
