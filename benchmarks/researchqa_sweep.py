@@ -9,6 +9,7 @@ never enter a leaderboard.
 from __future__ import annotations
 
 import csv
+import gc
 import io
 import json
 import math
@@ -39,7 +40,7 @@ from service.pdf_ir import CanonicalDocument
 
 
 SWEEP_SCHEMA_VERSION = 1
-SWEEP_ENGINE_REVISION = "researchqa-sweep-v4"
+SWEEP_ENGINE_REVISION = "researchqa-sweep-v5"
 
 
 class SweepContractError(ValueError):
@@ -111,6 +112,13 @@ class SweepCandidateRecord:
         mapping = self.payload.get("mapping")
         if not isinstance(mapping, Mapping):
             return frozenset()
+        compact_rows = mapping.get("evaluable_set")
+        if isinstance(compact_rows, list):
+            return frozenset(
+                (str(row[0]), str(row[1]))
+                for row in compact_rows
+                if isinstance(row, list) and len(row) == 2
+            )
         rows = mapping.get("mappings")
         if not isinstance(rows, list):
             return frozenset()
@@ -272,6 +280,82 @@ def _result_path(run_root: Path, candidate: StrategyCandidate) -> Path:
     )
 
 
+_COMPACT_PAYLOAD_KEYS = (
+    "schema_version",
+    "candidate",
+    "chunk_count",
+    "completed_paper_ids",
+    "completed_question_ids",
+    "error",
+    "error_type",
+    "guardrails_passed",
+    "index_bytes",
+    "latency_metrics",
+    "p95_latency_ms",
+    "primary_metric",
+    "primary_score",
+    "score_summary",
+)
+
+
+def _compact_candidate_payload(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep ranking/report facts in memory; leave verbose rows on disk."""
+
+    compact = {
+        key: payload[key]
+        for key in _COMPACT_PAYLOAD_KEYS
+        if key in payload
+    }
+    mapping = payload.get("mapping")
+    if isinstance(mapping, Mapping):
+        raw_rows = mapping.get("mappings")
+        evaluable_set = sorted(
+            {
+                (str(row.get("row_id")), str(group.get("group_id")))
+                for row in raw_rows
+                if isinstance(row, Mapping)
+                for group in row.get("groups", ())
+                if isinstance(group, Mapping) and bool(group.get("mapped"))
+            }
+        ) if isinstance(raw_rows, list) else []
+        compact["mapping"] = {
+            key: mapping[key]
+            for key in (
+                "schema_version",
+                "revision",
+                "fuzzy_threshold",
+                "coverage",
+                "unmapped",
+            )
+            if key in mapping
+        }
+        compact["mapping"]["evaluable_set"] = [
+            list(item) for item in evaluable_set
+        ]
+
+    question_rows = payload.get("question_results")
+    if isinstance(question_rows, list):
+        paper_domains: dict[str, str] = {}
+        for row in question_rows:
+            if not isinstance(row, Mapping):
+                raise SweepContractError("invalid question result payload")
+            paper_id = str(row.get("paper_id") or "")
+            domain = str(row.get("domain") or "")
+            if not paper_id or not domain:
+                raise SweepContractError(
+                    "question result has a blank paper/domain"
+                )
+            previous = paper_domains.setdefault(paper_id, domain)
+            if previous != domain:
+                raise SweepContractError(
+                    f"paper {paper_id} spans multiple domains"
+                )
+        compact["paper_domains"] = dict(sorted(paper_domains.items()))
+    return compact
+
+
 def _candidate_input_fingerprint(
     candidate: StrategyCandidate,
     *,
@@ -366,7 +450,7 @@ def _write_candidate_record(
         candidate=candidate,
         status=status,
         input_fingerprint=input_fingerprint,
-        payload=dict(payload),
+        payload=_compact_candidate_payload(payload),
         result_path=str(path.resolve()),
     )
 
@@ -400,7 +484,7 @@ def _load_candidate_record(
         candidate=candidate,
         status=str(status),
         input_fingerprint=input_fingerprint,
-        payload=dict(payload),
+        payload=_compact_candidate_payload(payload),
         result_path=str(path.resolve()),
         resumed=True,
     )
@@ -693,6 +777,19 @@ def _metric_rows(
 def _paper_domains(
     record: SweepCandidateRecord,
 ) -> Mapping[str, str]:
+    compact = record.payload.get("paper_domains")
+    if isinstance(compact, Mapping):
+        domains = {
+            str(paper_id): str(domain)
+            for paper_id, domain in compact.items()
+            if str(paper_id) and str(domain)
+        }
+        if len(domains) != len(compact):
+            raise SweepContractError(
+                f"{record.candidate.config_id}: blank paper/domain"
+            )
+        return domains
+
     domains: dict[str, str] = {}
     rows = record.payload.get("question_results")
     if not isinstance(rows, list):
@@ -1126,7 +1223,7 @@ def run_strategy_sweep(
                             result.guardrails_passed and guardrails_passed
                         ),
                     )
-                    payload = result.to_dict()
+                    full_payload = result.to_dict()
                     complete = result.is_complete(
                         expected_paper_ids=paper_ids,
                         expected_question_ids=question_ids,
@@ -1136,8 +1233,10 @@ def run_strategy_sweep(
                         candidate=candidate,
                         input_fingerprint=input_fingerprint,
                         status="completed" if complete else "incomplete",
-                        payload=payload,
+                        payload=full_payload,
                     )
+                    del full_payload
+                    del result
                 except ModelTransportError:
                     # The outer overnight runner owns the bounded 5/20/60
                     # retry policy.  Persisting a failed candidate here would
@@ -1155,6 +1254,7 @@ def run_strategy_sweep(
                             "error": str(exc),
                         },
                     )
+            gc.collect()
             stage_records.append(record)
             all_records.append(record)
             artifact_paths.append(Path(record.result_path))

@@ -1214,10 +1214,17 @@ def _prepare_candidate_corpus(
                 candidate.note_chunker,
                 paper_id=paper_id,
             )
-            if result.status != "completed" or not result.chunks:
+            if result.status != "completed":
                 raise StrategyContractError(
                     f"{paper_id}/{candidate.note_chunker}: "
                     f"{result.failure_reason or 'no note chunks'}"
+                )
+            if (
+                not result.chunks
+                and candidate.note_chunker != "note-reviewer-concern"
+            ):
+                raise StrategyContractError(
+                    f"{paper_id}/{candidate.note_chunker}: no note chunks"
                 )
             note_chunks.extend(result.chunks)
 

@@ -346,6 +346,51 @@ def test_claim_evidence_and_reviewer_chunks_include_linked_records():
     assert "Run the discriminating experiment" in concern.text
 
 
+def test_reviewer_chunker_accepts_claim_text_after_claim_id():
+    note = """# Frozen note
+
+## Findings
+### C3：Bounded claim
+The evidence chain uses E3. [Main p.3]
+
+## 审稿人视角（Adaptive Red-Team Verdict）
+| Claim | 裁决 | 证据充分度 | 最强替代解释 | 决定性缺失证据 | 严重性 |
+|---|---|---|---|---|---|
+| C3：完整的主张文本 | 未解决 | E3 [Main p.3] | alternative | experiment | major |
+"""
+
+    result = chunk_note(
+        note,
+        "note-reviewer-concern",
+        paper_id="paper-1",
+    )
+
+    assert result.status == "completed"
+    assert len(result.chunks) == 1
+    assert result.chunks[0].claim_ids == ("C3",)
+    assert result.chunks[0].evidence_ids == ("E3",)
+    assert "完整的主张文本" in result.chunks[0].text
+
+
+def test_reviewer_chunker_allows_no_surviving_major_concern():
+    note = """# Frozen note
+
+## 审稿人视角（Adaptive Red-Team Verdict）
+| Claim | 裁决 | 证据充分度 | 最强替代解释 | 决定性缺失证据 | 严重性 |
+|---|---|---|---|---|---|
+| C1：Bounded claim | 支持 | E1 [Main p.1] | boundary | none | minor |
+"""
+
+    result = chunk_note(
+        note,
+        "note-reviewer-concern",
+        paper_id="paper-1",
+    )
+
+    assert result.status == "completed"
+    assert result.chunks == ()
+
+
 def test_note_main_citations_backlink_to_pdf_chunks_only():
     document = _document("a" * 900, "b" * 900, "c" * 900, "d" * 900)
     pdf_chunks = chunk_pdf(document, "pdf-page-aware", is_main=True).chunks

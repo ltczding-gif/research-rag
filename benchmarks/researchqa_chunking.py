@@ -63,7 +63,8 @@ _EVIDENCE_ROW_RE = re.compile(
     r"(?mi)^\|\s*(?P<id>E\d+)\s*\|[^\n]*$"
 )
 _VERDICT_ROW_RE = re.compile(
-    r"(?mi)^\|\s*(?P<claim>C\d+)\s*\|(?P<body>[^\n]*)$"
+    r"(?mi)^\|\s*(?P<claim>C\d+)"
+    r"(?:\s*[：:][^|\n]*)?\s*\|(?P<body>[^\n]*)$"
 )
 _BRACKET_CITATION_RE = re.compile(r"\[(?P<body>[^\[\]\n]+)\]")
 _SOURCE_LABEL_RE = re.compile(r"^(Main|SI(?:-\d+)?)\s+(.+)$", re.IGNORECASE)

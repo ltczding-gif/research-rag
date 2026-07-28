@@ -400,6 +400,21 @@ def test_bad_payload_sha_reexecutes_only_the_corrupt_candidate(tmp_path):
     assert repaired["payload"]["primary_score"] > 0
 
 
+def test_records_keep_verbose_candidate_rows_on_disk_only(tmp_path):
+    result = _run(tmp_path, _FakeExecutor(), [])
+    record = result.records[0]
+
+    assert "question_results" not in record.payload
+    assert "mappings" not in record.payload["mapping"]
+    assert record.payload["paper_domains"] == {"W1": "domain-a"}
+
+    envelope = json.loads(
+        Path(record.result_path).read_text(encoding="utf-8")
+    )
+    assert envelope["payload"]["question_results"]
+    assert envelope["payload"]["mapping"]["mappings"]
+
+
 def test_stage_ranking_rejects_different_evaluable_sets(tmp_path):
     with pytest.raises(SweepContractError, match="same evaluable set"):
         _run(
