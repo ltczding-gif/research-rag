@@ -113,6 +113,19 @@ oracle 上界；它不属于当前 `rq-2` 修复。
 5. 所有旧 note source 分数还受到 global-corpus 污染；这些数值只能帮助定位失败机制，
    不能作为 paper-scoped 正式分数。
 
+这里还必须再区分一层：表中的 11 个是 **stage-local gate pass**。把 `rankable` 和上游
+component eligibility 继续传到 12 个最终确认组合后，只有
+`fixed800 + dense + pdf-only + rerank-off`
+（`top2-confirmation-0d3b98ed0b9c6f728106`）在旧 global diagnostic 中同时满足本组合
+局部门和全部上游门。其余 5 个 rerank-off 自基线虽然通过本组合的局部门，仍因 fixed1200、
+hybrid、parent-child 或 hierarchical 上游失败而不能成为最终可用组合。6 个 rerank-50
+组合则全部至少新增 1 个 hard failure。
+
+35/35 的逐项状态、失败门、hard-failure 数量、成本复核和对应修复候选已固化到
+[`2026-07-29-rq2-global-35-strategy-audit.csv`](2026-07-29-rq2-global-35-strategy-audit.csv)。
+以后提到“通过”必须显式写成 `stage-local pass`、`component pass` 或 `final pass`，禁止再用
+一个无层级的布尔标签混写三种含义。
+
 这次盘点也区分了“假分数”和“真实但很差的策略”：
 
 | 项目 | 结论 | 处理 |
