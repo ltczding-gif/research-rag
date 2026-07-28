@@ -113,6 +113,18 @@ Retrieval and answer generation are evaluated separately. Reports must include
 per-domain and per-question-type results, especially multi-hop and
 adversarial performance; one global average is insufficient.
 
+The current `rq-2` strategy sweep also generates one audited
+`generic-research-note` per paper from the Main PDF plus every acquired
+official SI/auxiliary file. Note chunkers and note-based source compositions
+are evaluated by how well they recover ResearchQA's Main-PDF evidence groups.
+ResearchQA does not provide separate SI or generated-note gold annotations,
+and the PDF chunking arm loads only the `Main` benchmark PDF. Therefore this
+cycle evaluates SI-informed notes, not direct SI/native-source retrieval.
+
+The Qwen3 reranker is loaded with its declared `bfloat16` inference dtype.
+That dtype is part of the candidate cache identity, so results from a
+different numeric precision cannot be mixed into the same comparison.
+
 `benchmarks.runtime.create_run_layout()` gives every run isolated home, notes,
 Chroma, collection, ledger, query-log, artifact, and report paths.
 `benchmarks.runtime.run_isolated()` removes inherited `LOCALRAG_*`, Zotero,
@@ -152,8 +164,9 @@ provenance and possible later revival. They are currently shelved:
 - they do not block ResearchQA work;
 - their empty gold/qrel ledgers are not filled during this cycle;
 - their scores are not mixed with ResearchQA;
-- no claim is made that ResearchQA covers SI, notes, cross-language retrieval,
-  chemistry/materials, physics, or engineering.
+- no claim is made that ResearchQA annotations directly cover SI,
+  generated-note evidence, cross-language retrieval, chemistry/materials,
+  physics, or engineering.
 
 The legacy contract remains checkable while it is frozen:
 

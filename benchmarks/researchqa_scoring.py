@@ -790,7 +790,15 @@ def rank_candidates(
     tied = [
         candidate
         for candidate in eligible
-        if best_primary - candidate.primary <= tie_threshold
+        if (
+            best_primary - candidate.primary < tie_threshold
+            or math.isclose(
+                best_primary - candidate.primary,
+                tie_threshold,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+        )
     ]
     tied_ids = {candidate.config_id for candidate in tied}
     tied.sort(

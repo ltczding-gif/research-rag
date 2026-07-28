@@ -30,6 +30,7 @@ from benchmarks.overnight import (
     TaskOutput,
     TaskSpec,
     TransientTaskError,
+    build_report_payload,
     fingerprint_payload,
     sha256_path,
 )
@@ -1017,6 +1018,8 @@ def _artifact_media_type(path: str | Path) -> str:
         return "application/json"
     if suffix == ".md":
         return "text/markdown"
+    if suffix == ".csv":
+        return "text/csv"
     return "application/octet-stream"
 
 
@@ -1246,17 +1249,30 @@ class ResearchQALiveAdapter:
         state: RunState,
         store: RunStore,
     ) -> tuple[ArtifactRecord, ...]:
-        del state
         summary_path = self.run_root / "runtime" / "runtime-summary.json"
         if not summary_path.is_file():
             return ()
         summary = _read_run_json(summary_path, label="runtime summary")
         if summary.get("status") != "completed":
             return ()
+        manifest_path = self.run_root / "report" / "run-manifest.json"
+        manifest_artifact = store.write_json_artifact(
+            "report/run-manifest.json",
+            build_report_payload(state),
+            schema_id="researchqa-report-v1",
+        )
+        for task in state.tasks.values():
+            task.artifacts = [
+                manifest_artifact
+                if artifact.path == manifest_artifact.path
+                else artifact
+                for artifact in task.artifacts
+            ]
         paths = (
             self.run_root / "sweep" / "final" / "leaderboard.json",
             self.run_root / "sweep" / "final" / "pareto-frontier.json",
             self.run_root / "sweep" / "final" / "decision-summary.json",
+            manifest_path,
             self.run_root / "report" / "leaderboard.csv",
             self.run_root / "report" / "paper-domain-breakdown.csv",
             self.run_root / "report" / "paired-bootstrap.json",
@@ -1267,7 +1283,7 @@ class ResearchQALiveAdapter:
         return tuple(
             store.artifact_record(
                 path,
-                media_type="application/json",
+                media_type=_artifact_media_type(path),
             )
             for path in paths
         )

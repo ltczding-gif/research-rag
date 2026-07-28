@@ -520,6 +520,7 @@ def test_reranker_is_lazy_and_preflight_binds_hf_home_revision_and_device(
     ]
     assert preflight.revision == models.RERANKER_REVISION
     assert preflight.source.endswith("@" + models.RERANKER_REVISION)
+    assert adapter.inference_dtype == "bfloat16"
     assert len(preflight.fingerprint) == 64
     assert tokenizer.padding_side == "left"
     assert tokenizer.pad_token == tokenizer.eos_token
@@ -697,7 +698,7 @@ def test_default_transformers_loader_pins_revision_cache_and_device(
 
     tokenizer = object()
     model = LoadedModel()
-    fake_torch = SimpleNamespace(float16="float16")
+    fake_torch = SimpleNamespace(bfloat16="bfloat16")
     fake_transformers = SimpleNamespace(
         AutoTokenizer=Factory(tokenizer),
         AutoModelForCausalLM=Factory(model),
@@ -737,7 +738,7 @@ def test_default_transformers_loader_pins_revision_cache_and_device(
             "local_files_only": True,
             "trust_remote_code": False,
             "use_safetensors": True,
-            "dtype": "float16",
+            "dtype": "bfloat16",
         },
     )
     assert model.to_calls == ["cuda:3"]

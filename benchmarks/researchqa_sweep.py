@@ -406,7 +406,7 @@ def _candidate_input_fingerprint(
             ),
             **{
                 key: getattr(reranker, key)
-                for key in ("model_id", "revision")
+                for key in ("model_id", "revision", "inference_dtype")
                 if getattr(reranker, key, None) is not None
             },
         }
@@ -1044,7 +1044,15 @@ def _write_final_report_artifacts(
         (
             "# ResearchQA rq-2 morning report",
             "",
-            f"- Candidates: {len(records)} complete strategy records",
+            f"- Candidates: {len(records)} total strategy records",
+            f"- Completed candidates: "
+            f"{sum(record.status == 'completed' for record in records)}",
+            f"- Failed candidates: "
+            f"{sum(record.status == 'failed' for record in records)}",
+            f"- Incomplete candidates: "
+            f"{sum(record.status == 'incomplete' for record in records)}",
+            f"- Rankable candidates: "
+            f"{sum(record.candidate.rankable for record in records)}",
             f"- Provisional winner: `{winner.candidate.config_id}`",
             f"- C0 baseline: `{baseline.candidate.config_id}`",
             f"- Winner {bootstrap_metric}: "

@@ -955,6 +955,7 @@ def generate_orthogonal_candidates(
     )
 
     confirmations: list[StrategyCandidate] = []
+    confirmation_ids: set[str] = set()
     if confirmation is not None:
         dimensions = (
             ("pdf_chunkers", confirmation.pdf_chunkers, pdf_ids),
@@ -981,25 +982,26 @@ def generate_orthogonal_candidates(
             for retriever_id in confirmation.retrievers:
                 for composition_id in confirmation.source_compositions:
                     for reranker_id in confirmation.reranker_modes:
-                        confirmations.append(
-                            _candidate(
-                                "top2-confirmation",
-                                pdf_chunker=(
-                                    "pdf-parent-child"
-                                    if composition_id == "hierarchical-pdf"
-                                    else pdf_id
-                                ),
-                                note_chunker=(
-                                    anchor_note_chunker
-                                    if composition_id in NOTE_COMPOSITIONS
-                                    else None
-                                ),
-                                retriever=retriever_id,
-                                source_composition=composition_id,
-                                reranker=reranker_id,
-                                reranker_options=reranker_options,
-                            )
+                        candidate = _candidate(
+                            "top2-confirmation",
+                            pdf_chunker=(
+                                "pdf-parent-child"
+                                if composition_id == "hierarchical-pdf"
+                                else pdf_id
+                            ),
+                            note_chunker=(
+                                anchor_note_chunker
+                                if composition_id in NOTE_COMPOSITIONS
+                                else None
+                            ),
+                            retriever=retriever_id,
+                            source_composition=composition_id,
+                            reranker=reranker_id,
+                            reranker_options=reranker_options,
                         )
+                        if candidate.config_id not in confirmation_ids:
+                            confirmation_ids.add(candidate.config_id)
+                            confirmations.append(candidate)
         maximum = int(
             stages.get("top2_confirmation", {}).get(
                 "maximum_combinations", 16

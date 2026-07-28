@@ -387,6 +387,31 @@ def test_candidate_plan_is_orthogonal_and_confirmation_is_capped_at_16():
     assert not note_whole.rankable
 
 
+def test_confirmation_deduplicates_hierarchical_pdf_compatibility_aliases():
+    selection = ConfirmationSelection(
+        pdf_chunkers=("pdf-fixed-400", "pdf-fixed-800"),
+        retrievers=("dense", "bm25"),
+        source_compositions=("pdf-only", "hierarchical-pdf"),
+        reranker_modes=("rerank-off", "rerank-50-to-10"),
+    )
+
+    plan = generate_orthogonal_candidates(_config(), confirmation=selection)
+    candidates = plan.stages["top2-confirmation"]
+
+    assert len(candidates) == 12
+    assert len({candidate.config_id for candidate in candidates}) == 12
+    hierarchical = [
+        candidate
+        for candidate in candidates
+        if candidate.source_composition == "hierarchical-pdf"
+    ]
+    assert len(hierarchical) == 4
+    assert {
+        candidate.pdf_chunker for candidate in hierarchical
+    } == {"pdf-parent-child"}
+    assert len(plan.candidates) == 35
+
+
 def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path):
     documents, questions = _fixture_corpus(tmp_path)
     plan = generate_orthogonal_candidates(_config())

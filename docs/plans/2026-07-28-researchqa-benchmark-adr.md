@@ -235,7 +235,9 @@ group，重复返回同一 group 不重复得分。
    note-guided PDF 和 hierarchical PDF。
 7. **R6 Reranking**：扫描 off、Top-20→10、Top-50→10、Top-100→10；质量 reranker 固定。
 8. **R7 Interaction confirmation**：只运行 Top-2 chunker × Top-2 retriever × Top-2
-   source composition × rerank off/on，共最多 16 个组合。
+   source composition × rerank off/on，共最多 16 行；按有效 config ID 去重后只执行唯一且
+   兼容的组合。`hierarchical-pdf` 强制使用 `pdf-parent-child`，不得把由此折叠的重复行
+   伪装为不同实验。
 9. **R8 Stop gate**：生成晨报并停止，不自动进入 `rq-5`。
 
 正交扫描允许在同一设计 PR 中定义多个变量族，但每个候选配置必须独立、可复现、可关闭，

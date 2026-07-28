@@ -190,3 +190,28 @@ def test_practical_tie_uses_latency_then_size_chunk_count_and_id():
     )
 
     assert [item.config_id for item in ranked] == ["fast", "slow", "outside"]
+
+
+def test_practical_tie_includes_exact_boundary_and_full_tiebreak_chain():
+    ranked = rank_candidates(
+        [
+            CandidateSummary("z-quality", 0.805, 50, 100, 10),
+            CandidateSummary("e-latency", 0.800, 10, 500, 50),
+            CandidateSummary("d-size", 0.8005, 10, 400, 50),
+            CandidateSummary("c-chunks", 0.801, 10, 400, 40),
+            CandidateSummary("b-id", 0.803, 10, 400, 40),
+            CandidateSummary("a-id", 0.802, 10, 400, 40),
+            CandidateSummary("outside", 0.7999, 1, 1, 1),
+        ],
+        tie_threshold=0.005,
+    )
+
+    assert [item.config_id for item in ranked] == [
+        "a-id",
+        "b-id",
+        "c-chunks",
+        "d-size",
+        "e-latency",
+        "z-quality",
+        "outside",
+    ]

@@ -14,7 +14,7 @@
 2. 20 篇 field-neutral 通用模板笔记的子代理生成、独立审计与冻结；
 3. ResearchQA evidence 到 benchmark PDF page/span 的统一映射；
 4. 所有已批准切分、检索、语料组合和重排序候选的正交扫描；
-5. 各阶段前两名的最多 16 个交叉确认组合；
+5. 各阶段前两名的最多 16 行、去重后的兼容交叉确认组合；
 6. 可恢复 checkpoint 和无论成功、部分完成或失败都生成的晨报。
 
 本轮只评检索组件，不运行答案生成。所有结果只能产生 `provisional winner`，运行结束后
@@ -214,10 +214,14 @@ rerank-100-to-10
 4. 5 个 source composition；
 5. 4 个 rerank depth；
 6. Top-2 PDF chunker × Top-2 retriever × Top-2 source composition ×
-   rerank off/最佳 depth，最多 16 个组合。
+   rerank off/最佳 depth，最多 16 行，只执行唯一且兼容的组合。
 
 配置指纹相同的重复 baseline 直接复用。所有候选都有独立 score row，但不运行全部
 chunker × retriever × source × reranker 笛卡尔积。
+
+`hierarchical-pdf` 的有效实现必须使用 `pdf-parent-child`。当它进入 source composition
+Top-2 时，两个固定 PDF chunker 分支会归一为同一候选；runner 必须在执行前按 config ID
+稳定去重。本轮因此从 16 行得到 12 个唯一确认候选，不重复运行或重复计分。
 
 ## 10. Evidence mapping 和评分
 

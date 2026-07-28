@@ -40,6 +40,7 @@ OLLAMA_TAGS_ENDPOINT = "/api/tags"
 DEFAULT_NORMALIZATION_REVISION = "exact-text-utf8-v1"
 MODEL_ADAPTER_REVISION = "researchqa-model-adapters-v2"
 RERANKER_MAX_LENGTH = 8192
+RERANKER_INFERENCE_DTYPE = "bfloat16"
 RERANKER_INSTRUCTION = (
     "Given a web search query, retrieve relevant passages that answer the query"
 )
@@ -613,7 +614,7 @@ def _load_transformers_components(
         "use_safetensors": True,
     }
     if device.casefold().startswith("cuda"):
-        model_kwargs["dtype"] = torch.float16
+        model_kwargs["dtype"] = torch.bfloat16
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_id,
         **model_kwargs,
@@ -651,6 +652,7 @@ class Qwen3RerankerTransformersAdapter:
 
     model_id = RERANKER_MODEL_ID
     revision = RERANKER_REVISION
+    inference_dtype = RERANKER_INFERENCE_DTYPE
 
     def __init__(
         self,

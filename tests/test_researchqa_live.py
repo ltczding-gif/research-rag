@@ -336,6 +336,7 @@ def _fake_runtime_result(run_root: Path):
     decision_path = final_root / "decision-summary.json"
     raw_path = raw_root / "candidate.json"
     report_paths = (
+        report_root / "run-manifest.json",
         report_root / "leaderboard.csv",
         report_root / "paper-domain-breakdown.csv",
         report_root / "paired-bootstrap.json",
@@ -728,6 +729,7 @@ def test_adapter_fake_runtime_command_sequence_and_report(
         "sweep/final/leaderboard.json",
         "sweep/final/pareto-frontier.json",
         "sweep/final/decision-summary.json",
+        "report/run-manifest.json",
         "report/leaderboard.csv",
         "report/paper-domain-breakdown.csv",
         "report/paired-bootstrap.json",
@@ -745,6 +747,7 @@ def test_adapter_fake_runtime_command_sequence_and_report(
             "sweep/final/pareto-frontier.json",
             "sweep/final/decision-summary.json",
             "sweep/raw-results/candidate.json",
+            "report/run-manifest.json",
             "report/leaderboard.csv",
             "report/paper-domain-breakdown.csv",
             "report/paired-bootstrap.json",
@@ -752,6 +755,25 @@ def test_adapter_fake_runtime_command_sequence_and_report(
             "report/morning-report.md",
         }
     )
+    report_media_types = {
+        artifact.path: artifact.media_type for artifact in report_artifacts
+    }
+    assert report_media_types["report/run-manifest.json"] == "application/json"
+    assert report_media_types["report/leaderboard.csv"] == "text/csv"
+    assert (
+        report_media_types["report/paper-domain-breakdown.csv"] == "text/csv"
+    )
+    assert (
+        report_media_types["report/blocked-and-unmapped.jsonl"]
+        == "application/x-ndjson"
+    )
+    assert report_media_types["report/morning-report.md"] == "text/markdown"
+
+    runtime_media_types = {
+        artifact.path: artifact.media_type for artifact in run_task.artifacts
+    }
+    assert runtime_media_types["report/leaderboard.csv"] == "text/csv"
+    assert runtime_media_types["report/morning-report.md"] == "text/markdown"
     assert all(store.verify_artifact(artifact) for artifact in run_task.artifacts)
     assert calls == [(config, run_root.resolve())]
 

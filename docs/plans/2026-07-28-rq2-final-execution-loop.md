@@ -119,7 +119,7 @@ Markdown、draft JSON、source manifest 和 audit record 的 SHA-256；此后策
 实际 runner 的主循环固定为：
 
 ```python
-while within_wall_clock_budget():
+while not all_completion_criteria_verified():
     state = load_and_verify_state_and_artifact_hashes()
 
     if not state.sources_ready:
@@ -150,7 +150,10 @@ while within_wall_clock_budget():
         "reranker",
         "top2-confirmation",
     ):
-        for config in complete_candidates_that_fit_remaining_budget(stage):
+        for config in pending_complete_candidates(stage):
+            if not fits_current_unattended_window(config):
+                checkpoint_and_yield_to_next_15m_continuation()
+                break
             run_config_on_all_20_papers_and_254_questions(config)
             validate_same_evaluable_set_and_artifact_hashes(config)
             checkpoint_atomically(stage, config)
@@ -167,8 +170,12 @@ Top-2 PDF chunker
 × Top-2 retriever
 × Top-2 source composition
 × rerank off / best depth
-= 最多 16 个确认组合
+= 最多 16 行、仅执行唯一且兼容的确认组合
 ```
+
+`hierarchical-pdf` 必须使用 `pdf-parent-child`，因此若它进入 source
+composition Top-2，两个固定 PDF chunker 分支会归一为同一策略。该情形必须在执行前稳定
+去重（本轮为 12 个唯一确认组合），不得重复计分或用不同 ID 伪装成 16 个实验。
 
 `note-whole` 只做产品现状诊断，不参与 PDF span 主排名。相同 config fingerprint 直接复用
 已有 artifact，不重复 embedding 或评分。
@@ -201,8 +208,10 @@ benchmarks/.cache/researchqa/runs/<run_id>/
 - 网络、Ollama 短暂失败最多重试 3 次，退避 5/20/60 秒；
 - schema、citation、hash、mapping 等确定性错误不循环重试；
 - 单篇阻塞时继续处理其他独立论文，但包含缺失论文的候选标记 `incomplete`，不得排名；
-- 默认总预算 10 小时。剩余时间不足以按同阶段移动平均完成一个完整候选，就不启动该
-  候选；
+- 默认 10 小时只作为单次无人值守运行窗口和候选启动参考，不是完成时限，也不得据此
+  删除问题、缩减语料、跳过策略或降低审计粒度；
+- 当前窗口不足以按同阶段移动平均完成一个完整候选时，先原子落盘并交给下一次 15 分钟
+  continuation 续跑；完成条件仍是 20/20 笔记和全部批准策略有可审计终态；
 - 无论成功、预算到期、部分完成、进程中断或真实失败，都必须先落盘状态并生成报告。
 
 ## 6. 测试与自动 Gate
@@ -304,8 +313,8 @@ bytes、chunk count、config ID 决胜。所有 winner 只标记 `provisional`�
 6. 磁盘、内存、GPU 或权限不足，且不能在既定模型和指标不变的前提下继续；
 7. 测试发现会污染用户私人 ledger、仓库外运行状态或公开提交内容。
 
-其余情况，包括个别下载重试、子代理重派、batch size 降低、进程恢复和候选预算裁剪，
-全部由 loop 自动处理。
+其余情况，包括个别下载重试、子代理重派、batch size 降低、进程恢复和无人值守窗口
+续接，全部由 loop 自动处理。不得以预算为由裁掉候选。
 
 ## 9. 唯一启动指令
 
@@ -315,5 +324,5 @@ bytes、chunk count、config ID 决胜。所有 winner 只标记 `provisional`�
 开跑
 ```
 
-收到后，父代理从 Gate A 开始实现并持续执行至 Gate F、真实阻塞或 10 小时预算终点；
-不会再要求中间方案确认。
+收到后，父代理从 Gate A 开始实现并持续执行至 Gate F 或真实阻塞；单次运行窗口到点只
+触发原子 checkpoint 和后续 continuation，不构成停止条件，也不会再要求中间方案确认。
