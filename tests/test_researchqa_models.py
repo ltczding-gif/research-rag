@@ -459,10 +459,12 @@ class FakeModel:
         self.always_oom = always_oom
         self.dtype = dtype
         self.batch_sizes = []
+        self.logits_to_keep = []
 
-    def __call__(self, **batch):
+    def __call__(self, *, logits_to_keep, **batch):
         size = len(batch["input_ids"])
         self.batch_sizes.append(size)
+        self.logits_to_keep.append(logits_to_keep)
         if self.always_oom or (
             self.oom_above is not None and size > self.oom_above
         ):
@@ -520,6 +522,8 @@ def test_reranker_is_lazy_and_preflight_binds_hf_home_revision_and_device(
     ]
     assert preflight.revision == models.RERANKER_REVISION
     assert preflight.source.endswith("@" + models.RERANKER_REVISION)
+    assert preflight.adapter_revision == models.RERANKER_ADAPTER_REVISION
+    assert preflight.details["logits_to_keep"] == 1
     assert adapter.inference_dtype == "bfloat16"
     assert len(preflight.fingerprint) == 64
     assert tokenizer.padding_side == "left"
@@ -560,6 +564,7 @@ def test_reranker_formats_query_passage_and_returns_raw_stable_scores(tmp_path):
     ]
     assert scores == (1.0, 2.0)
     assert model.batch_sizes == [2]
+    assert model.logits_to_keep == [1]
     assert adapter.last_effective_batch_size == 2
 
 

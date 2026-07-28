@@ -39,6 +39,7 @@ OLLAMA_GENERATE_ENDPOINT = "/api/generate"
 OLLAMA_TAGS_ENDPOINT = "/api/tags"
 DEFAULT_NORMALIZATION_REVISION = "exact-text-utf8-v1"
 MODEL_ADAPTER_REVISION = "researchqa-model-adapters-v2"
+RERANKER_ADAPTER_REVISION = "qwen3-reranker-last-token-logits-v1"
 RERANKER_MAX_LENGTH = 8192
 RERANKER_INFERENCE_DTYPE = "bfloat16"
 RERANKER_INSTRUCTION = (
@@ -653,6 +654,7 @@ class Qwen3RerankerTransformersAdapter:
     model_id = RERANKER_MODEL_ID
     revision = RERANKER_REVISION
     inference_dtype = RERANKER_INFERENCE_DTYPE
+    adapter_revision = RERANKER_ADAPTER_REVISION
 
     def __init__(
         self,
@@ -784,9 +786,10 @@ class Qwen3RerankerTransformersAdapter:
             "instruction_sha256": text_sha256(RERANKER_INSTRUCTION),
             "score": "last-token-yes-minus-no-logit",
             "truncation": "formatted-input-tail",
+            "logits_to_keep": 1,
             "true_token_id": self._true_token_id,
             "false_token_id": self._false_token_id,
-            "adapter_revision": MODEL_ADAPTER_REVISION,
+            "adapter_revision": self.adapter_revision,
         }
         candidate = ModelPreflight(
             provider="huggingface-transformers",
@@ -794,7 +797,7 @@ class Qwen3RerankerTransformersAdapter:
             revision=self.revision,
             source=f"huggingface://{self.model_id}@{self.revision}",
             dimensions=None,
-            adapter_revision=MODEL_ADAPTER_REVISION,
+            adapter_revision=self.adapter_revision,
             fingerprint=_fingerprint(identity),
             details={
                 "device": self.device,
@@ -805,6 +808,7 @@ class Qwen3RerankerTransformersAdapter:
                 "resolved_commit": self.revision,
                 "tokenizer_class": type(self._tokenizer).__name__,
                 "model_class": type(self._model).__name__,
+                "logits_to_keep": 1,
                 "transformers_version": str(
                     getattr(
                         importlib.import_module("transformers")
@@ -930,7 +934,7 @@ class Qwen3RerankerTransformersAdapter:
                 "torch lacks inference_mode/no_grad"
             )
         with inference_mode():
-            outputs = self._model(**batch)
+            outputs = self._model(**batch, logits_to_keep=1)
         try:
             last_token_logits = outputs.logits[:, -1, :]
             scores_tensor = (
@@ -1030,6 +1034,7 @@ class Qwen3RerankerTransformersAdapter:
 __all__ = [
     "DEFAULT_NORMALIZATION_REVISION",
     "MODEL_ADAPTER_REVISION",
+    "RERANKER_ADAPTER_REVISION",
     "ModelAdapterError",
     "ModelCacheError",
     "ModelInferenceError",

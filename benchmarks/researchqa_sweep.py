@@ -15,12 +15,13 @@ import json
 import math
 import os
 import tempfile
+import traceback
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from benchmarks.overnight import canonical_json_bytes, fingerprint_payload
-from benchmarks.researchqa_models import ModelTransportError
+from benchmarks.researchqa_models import ModelAdapterError, ModelTransportError
 from benchmarks.researchqa_scoring import (
     CandidateSummary,
     paired_bootstrap,
@@ -32,6 +33,7 @@ from benchmarks.researchqa_strategy import (
     EmbedderAdapter,
     EvidenceMappingBundle,
     StrategyCandidate,
+    StrategyContractError,
     generate_orthogonal_candidates,
     normalize_paper_id,
     run_complete_candidate,
@@ -83,7 +85,48 @@ class SweepCandidateRecord:
 
     @property
     def guardrails_passed(self) -> bool:
-        return bool(self.payload.get("guardrails_passed"))
+        return self.guardrail_finalized and bool(
+            self.payload.get("guardrails_passed")
+        )
+
+    @property
+    def guardrail_finalized(self) -> bool:
+        explicit = self.payload.get("guardrail_finalized")
+        if explicit is not None:
+            return bool(explicit)
+        return isinstance(
+            self.payload.get("guardrail_diagnostics"),
+            Mapping,
+        )
+
+    @property
+    def failure_kind(self) -> str | None:
+        if self.status != "failed":
+            return None
+        explicit = self.payload.get("failure_kind")
+        if explicit in {"strategy", "infrastructure", "unknown"}:
+            return str(explicit)
+        error_type = str(self.payload.get("error_type", ""))
+        error = str(self.payload.get("error", "")).lower()
+        if error_type == "StrategyContractError":
+            return "strategy"
+        if error_type in {
+            "AcceleratorError",
+            "MemoryError",
+            "ModelInferenceError",
+            "ModelPreflightError",
+            "SystemError",
+        } or any(
+            marker in error
+            for marker in (
+                "cuda",
+                "out of memory",
+                "error return without exception set",
+                "illegal memory access",
+            )
+        ):
+            return "infrastructure"
+        return "unknown"
 
     @property
     def p95_latency_ms(self) -> float:
@@ -173,6 +216,7 @@ class SweepStageRanking:
     ranked: tuple[SweepCandidateRecord, ...]
     failed_config_ids: tuple[str, ...]
     incomplete_config_ids: tuple[str, ...]
+    pending_guardrail_config_ids: tuple[str, ...]
     ineligible_config_ids: tuple[str, ...]
     evaluable_set_fingerprint: str | None
     status: str = "completed"
@@ -194,6 +238,9 @@ class SweepStageRanking:
             ],
             "failed_config_ids": list(self.failed_config_ids),
             "incomplete_config_ids": list(self.incomplete_config_ids),
+            "pending_guardrail_config_ids": list(
+                self.pending_guardrail_config_ids
+            ),
             "ineligible_config_ids": list(self.ineligible_config_ids),
             "evaluable_set_fingerprint": self.evaluable_set_fingerprint,
             "status": self.status,
@@ -288,7 +335,11 @@ _COMPACT_PAYLOAD_KEYS = (
     "completed_question_ids",
     "error",
     "error_type",
+    "execution_complete",
+    "failure_context",
+    "failure_kind",
     "guardrail_diagnostics",
+    "guardrail_finalized",
     "guardrails_passed",
     "index_bytes",
     "latency_metrics",
@@ -409,7 +460,12 @@ def _candidate_input_fingerprint(
             ),
             **{
                 key: getattr(reranker, key)
-                for key in ("model_id", "revision", "inference_dtype")
+                for key in (
+                    "model_id",
+                    "revision",
+                    "inference_dtype",
+                    "adapter_revision",
+                )
                 if getattr(reranker, key, None) is not None
             },
         }
@@ -456,6 +512,23 @@ def _write_candidate_record(
         payload=_compact_candidate_payload(payload),
         result_path=str(path.resolve()),
     )
+
+
+def _failure_kind(exc: Exception) -> str:
+    if isinstance(exc, StrategyContractError):
+        return "strategy"
+    message = str(exc).lower()
+    if isinstance(exc, (ModelAdapterError, MemoryError, SystemError)) or any(
+        marker in message
+        for marker in (
+            "cuda",
+            "out of memory",
+            "error return without exception set",
+            "illegal memory access",
+        )
+    ):
+        return "infrastructure"
+    return "unknown"
 
 
 def _load_candidate_record(
@@ -921,6 +994,7 @@ def _apply_relative_guardrails(
             diagnostics["passed"] = not diagnostics["failures"]
         payload["guardrail_diagnostics"] = diagnostics
         payload["guardrails_passed"] = bool(diagnostics["passed"])
+        payload["guardrail_finalized"] = True
         rewritten = _write_candidate_record(
             Path(record.result_path),
             candidate=record.candidate,
@@ -1081,6 +1155,49 @@ def _rank_stage(
             )
         )
     )
+    pending_guardrails = tuple(
+        sorted(
+            record.candidate.config_id
+            for record in records
+            if record.status == "completed"
+            and not record.guardrail_finalized
+        )
+    )
+    blocking_failures = tuple(
+        sorted(
+            record.candidate.config_id
+            for record in records
+            if record.status == "failed"
+            and record.failure_kind != "strategy"
+        )
+    )
+    if blocking_failures or incomplete or pending_guardrails:
+        reasons = []
+        if blocking_failures:
+            reasons.append(
+                "infrastructure/unknown failures: "
+                + ", ".join(blocking_failures)
+            )
+        if incomplete:
+            reasons.append(
+                "incomplete required candidates: " + ", ".join(incomplete)
+            )
+        if pending_guardrails:
+            reasons.append(
+                "guardrail finalization pending: "
+                + ", ".join(pending_guardrails)
+            )
+        return SweepStageRanking(
+            stage_id=stage_id,
+            ranked=(),
+            failed_config_ids=failed,
+            incomplete_config_ids=incomplete,
+            pending_guardrail_config_ids=pending_guardrails,
+            ineligible_config_ids=(),
+            evaluable_set_fingerprint=None,
+            status="blocked",
+            error=f"{stage_id}: {'; '.join(reasons)}",
+        )
     eligible: list[SweepCandidateRecord] = []
     ineligible: list[str] = []
     for record in records:
@@ -1103,6 +1220,7 @@ def _rank_stage(
             ranked=(),
             failed_config_ids=failed,
             incomplete_config_ids=incomplete,
+            pending_guardrail_config_ids=pending_guardrails,
             ineligible_config_ids=tuple(
                 sorted(
                     set(ineligible)
@@ -1138,6 +1256,7 @@ def _rank_stage(
         ),
         failed_config_ids=failed,
         incomplete_config_ids=incomplete,
+        pending_guardrail_config_ids=pending_guardrails,
         ineligible_config_ids=tuple(sorted(ineligible)),
         evaluable_set_fingerprint=(
             fingerprint_payload(sorted(evaluable))
@@ -1197,6 +1316,7 @@ def _write_stage_artifacts(
                     "completed_question_count": len(
                         record.completed_question_ids
                     ),
+                    "failure_kind": record.failure_kind,
                     "error": record.error,
                 }
                 for record in records
@@ -1212,6 +1332,7 @@ def _write_stage_artifacts(
                 {
                     "config_id": record.candidate.config_id,
                     "status": record.status,
+                    "guardrail_finalized": record.guardrail_finalized,
                     "guardrails_passed": record.guardrails_passed,
                     "diagnostics": record.payload.get(
                         "guardrail_diagnostics"
@@ -1781,6 +1902,8 @@ def run_strategy_sweep(
                         expected_paper_ids=paper_ids,
                         expected_question_ids=question_ids,
                     )
+                    full_payload["execution_complete"] = complete
+                    full_payload["guardrail_finalized"] = False
                     record = _write_candidate_record(
                         path,
                         candidate=candidate,
@@ -1803,8 +1926,22 @@ def run_strategy_sweep(
                         input_fingerprint=input_fingerprint,
                         status="failed",
                         payload={
+                            "candidate": candidate.to_dict(),
+                            "execution_complete": False,
+                            "failure_kind": _failure_kind(exc),
                             "error_type": type(exc).__name__,
                             "error": str(exc),
+                            "failure_context": {
+                                "phase": "candidate-execution",
+                                "row_id": None,
+                                "pass_index": None,
+                                "progress": {
+                                    "completed_paper_ids": [],
+                                    "completed_question_ids": [],
+                                },
+                            },
+                            "traceback": traceback.format_exc(),
+                            "guardrail_finalized": False,
                         },
                     )
             gc.collect()

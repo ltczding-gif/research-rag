@@ -26,6 +26,7 @@ from benchmarks.researchqa_strategy import (
 from benchmarks.researchqa_sweep import (
     SweepCandidateRecord,
     SweepContractError,
+    _candidate_input_fingerprint,
     _relative_guardrail_diagnostics,
     run_strategy_sweep,
 )
@@ -97,6 +98,8 @@ class _FakeEmbedder:
 class _FakeReranker:
     model_id = RERANKER_MODEL_ID
     revision = RERANKER_REVISION
+    inference_dtype = "bfloat16"
+    adapter_revision = "fake-reranker-v1"
 
     def __init__(self, events):
         self.events = events
@@ -104,6 +107,10 @@ class _FakeReranker:
     def score_pairs(self, query, passages, *, batch_size):
         self.events.append("rerank")
         return [1.0 for _ in passages]
+
+
+class _RevisedFakeReranker(_FakeReranker):
+    adapter_revision = "fake-reranker-v2"
 
 
 def _primary(candidate) -> float:
@@ -335,6 +342,79 @@ def test_sweep_rejects_non_paper_scoped_retrieval(tmp_path):
         )
 
 
+def test_candidate_fingerprint_scopes_reranker_adapter_revision():
+    plan = generate_orthogonal_candidates(_config())
+    rerank_off = next(
+        candidate
+        for candidate in plan.stages["reranker"]
+        if candidate.reranker == "rerank-off"
+    )
+    rerank_enabled = next(
+        candidate
+        for candidate in plan.stages["reranker"]
+        if candidate.reranker == "rerank-20-to-10"
+    )
+    common = {
+        "config_fingerprint": "config-v1",
+        "documents": _documents(),
+        "questions": QUESTIONS,
+        "notes": {"W1": "# Frozen note\n\nAlpha evidence. [Main p.1]"},
+        "embedder": _FakeEmbedder([]),
+    }
+
+    off_v1 = _candidate_input_fingerprint(
+        rerank_off,
+        reranker=_FakeReranker([]),
+        **common,
+    )
+    off_v2 = _candidate_input_fingerprint(
+        rerank_off,
+        reranker=_RevisedFakeReranker([]),
+        **common,
+    )
+    enabled_v1 = _candidate_input_fingerprint(
+        rerank_enabled,
+        reranker=_FakeReranker([]),
+        **common,
+    )
+    enabled_v2 = _candidate_input_fingerprint(
+        rerank_enabled,
+        reranker=_RevisedFakeReranker([]),
+        **common,
+    )
+
+    assert off_v1 == off_v2
+    assert enabled_v1 != enabled_v2
+
+
+def test_guardrail_pass_is_pending_until_diagnostics_are_finalized():
+    candidate = generate_orthogonal_candidates(_config()).stages[
+        "pdf-chunker"
+    ][0]
+    provisional_payload = _candidate_result(candidate).to_dict()
+    record = SweepCandidateRecord(
+        candidate=candidate,
+        status="completed",
+        input_fingerprint="input",
+        payload=provisional_payload,
+        result_path="candidate.json",
+    )
+
+    assert record.guardrail_finalized is False
+    assert record.guardrails_passed is False
+
+    finalized = replace(
+        record,
+        payload={
+            **provisional_payload,
+            "guardrail_finalized": True,
+            "guardrail_diagnostics": {"passed": True, "failures": []},
+        },
+    )
+    assert finalized.guardrail_finalized is True
+    assert finalized.guardrails_passed is True
+
+
 def test_relative_guardrails_reject_slice_regressions_and_new_hard_failure():
     plan = generate_orthogonal_candidates(_config())
     baseline_candidate = next(
@@ -451,13 +531,13 @@ def test_interrupted_sweep_resumes_35_unique_candidates_and_orders_callbacks(
     with pytest.raises(KeyboardInterrupt, match="simulated"):
         _run(
             tmp_path,
-            _FakeExecutor(interrupt_at=5, incomplete_pdf=True),
+            _FakeExecutor(interrupt_at=5),
             first_events,
         )
     assert len(list((tmp_path / "sweep" / "candidates").rglob("*.json"))) == 4
 
     events = []
-    executor = _FakeExecutor(incomplete_pdf=True)
+    executor = _FakeExecutor()
     result = _run(tmp_path, executor, events)
 
     assert len(result.records) == 35
@@ -484,19 +564,8 @@ def test_interrupted_sweep_resumes_35_unique_candidates_and_orders_callbacks(
         for index, _event in cache_events
     )
 
-    pdf_ranking = result.stage_rankings["pdf-chunker"]
-    incomplete = next(
-        record
-        for record in result.records
-        if record.candidate.stage_id == "pdf-chunker"
-        and record.candidate.pdf_chunker == "pdf-fixed-1200"
-    )
-    assert incomplete.candidate.config_id in pdf_ranking.incomplete_config_ids
-    assert incomplete.candidate.config_id not in {
-        record.candidate.config_id for record in pdf_ranking.ranked
-    }
     assert result.provisional_winner
-    assert len(result.leaderboard) == 8
+    assert len(result.leaderboard) == 12
     assert result.pareto_frontier
     assert set(result.pareto_frontier[0]) == {
         "config_id",
@@ -555,6 +624,64 @@ def test_transient_model_failure_propagates_without_failed_checkpoint(tmp_path):
         _run(tmp_path, executor, [])
 
     assert not list((tmp_path / "sweep" / "candidates").rglob("*.json"))
+
+
+def test_incomplete_required_candidate_blocks_stage_and_final_export(tmp_path):
+    with pytest.raises(
+        SweepContractError,
+        match="incomplete required candidates",
+    ):
+        _run(tmp_path, _FakeExecutor(incomplete_pdf=True), [])
+
+    ranking = json.loads(
+        (
+            tmp_path
+            / "sweep"
+            / "stages"
+            / "pdf-chunker"
+            / "ranking.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert ranking["status"] == "blocked"
+    assert ranking["incomplete_config_ids"]
+    assert not (tmp_path / "sweep" / "final").exists()
+
+
+def test_infrastructure_failure_is_diagnostic_and_blocks_final_export(tmp_path):
+    class Executor(_FakeExecutor):
+        def __call__(self, candidate, *args, **kwargs):
+            if not self.calls:
+                self.calls.append(candidate.config_id)
+                raise SystemError("CUDA error return without exception set")
+            return super().__call__(candidate, *args, **kwargs)
+
+    with pytest.raises(
+        SweepContractError,
+        match="infrastructure/unknown failures",
+    ):
+        _run(tmp_path, Executor(), [])
+
+    failed = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (tmp_path / "sweep" / "candidates").rglob("*.json")
+        if json.loads(path.read_text(encoding="utf-8"))["status"] == "failed"
+    ]
+    assert len(failed) == 1
+    payload = failed[0]["payload"]
+    assert payload["failure_kind"] == "infrastructure"
+    assert payload["execution_complete"] is False
+    assert payload["guardrail_finalized"] is False
+    assert payload["failure_context"] == {
+        "phase": "candidate-execution",
+        "row_id": None,
+        "pass_index": None,
+        "progress": {
+            "completed_paper_ids": [],
+            "completed_question_ids": [],
+        },
+    }
+    assert "SystemError" in payload["traceback"]
+    assert not (tmp_path / "sweep" / "final").exists()
 
 
 def test_bad_payload_sha_reexecutes_only_the_corrupt_candidate(tmp_path):
