@@ -191,6 +191,14 @@ reranker 基础设施失败的直接根因已经由代码和 live 资源共同�
    software thermal slowdown 为 active，所以不能把这次差值当作最终受控 latency；
 7. 修复后的 fresh CUDA 进程运行时约占 2.1–2.4 GB，尚未观察到 CUDA/OOM；该项在
    9 个定向候选全部完成前只记作运行健康证据，不记作完成。
+8. 第二个完整 depth-50 候选也通过新旧 payload SHA 校验，input fingerprint 按新 adapter
+   发生变化；254/254 ranked item IDs、逐题 metrics、pre-rerank IDs/metrics、aggregate 和
+   mapping 全部一致。4 个 raw reranker scores 发生 BF16 量化差异，最大绝对差 `0.125`，
+   未改变任何排序或指标。observed p95 从 `6751.62 ms` 降到 `3667.80 ms`（约
+   `45.7%`），但同样处于 software thermal slowdown，不能用于正式决胜。
+9. 截至 2026-07-29 04:44（Asia/Shanghai），定向进程已写出 depth-20/depth-50 两个候选，
+   depth-100 在途，stderr 仍只有 tokenizer 性能提示。两个候选的
+   `guardrail_finalized=false` 是 reranker stage 尚未整体完成的 pending 状态，不是 pass。
 
 代码提交 `48d4d01` 同时关闭了三个复用漏洞：last-token-only logits、显式
 `adapter_revision`、以及 rerank-enabled candidate fingerprint。`rerank-off` fingerprint
