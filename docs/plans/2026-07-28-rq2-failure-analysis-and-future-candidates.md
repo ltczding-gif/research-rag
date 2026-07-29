@@ -1,6 +1,6 @@
 # `rq-2` 失败归因与后续候选策略
 
-- **Status:** Active correction ledger; paper-scoped validity repair in progress
+- **Status:** Active correction ledger; baseline validity closed, approved extensions in progress
 - **Date:** 2026-07-29
 - **Benchmark:** ResearchQA `rq-2`，20 篇、254 问、380 个 evidence groups
 - **Scope:** 记录 `rq-2` 的失败模式、实现缺陷和可验证优化假设
@@ -57,8 +57,8 @@ ADR-003 的 R3 和 sweep design 都明确写了 `paper-scoped`，但旧版
 4. 复用不受 retrieval scope 影响的 source、note、chunk 和 embedding 缓存；
 5. paper-scoped 的 35 个唯一候选全部完成后，才生成 ADR 最终榜单。
 
-前四步已完成；第五步已写出 35 个 envelope，但仍在修复 9 个旧 adapter 候选和无效 final，
-状态详见 1.3。`rq-2` 的合同修复要求是：
+前四步已完成；第五步第一次写出 35 个 envelope 时仍有 9 个旧 adapter 候选和无效
+final，此后已经按 1.3 的时间线完成修复与最小回放。`rq-2` 的合同修复要求是：
 
 1. 为每篇建立或选择独立的 PDF/note/parent 检索视图；
 2. query 只在其 benchmark paper 内排名；
@@ -445,9 +445,9 @@ incomplete、pending、基础设施或未知失败会阻止 stage/final/public e
       20/254/380 覆盖。
 
 因此 26 项 legacy 状态欠账已从 26 降为 0，P0 数据真实性门关闭。后续不得再次全量回放
-这 35 项；下一步先实现候选内部的原子 checkpoint/resume，再按 F2、N0/N3、RR1、R1、
-S1 的冻结依赖顺序做扩展评测。现有 leaderboard、Pareto 和 decision summary 仍只是
-基线诊断产物，不能替代扩展策略完成后的最终报告。
+这 35 项。该检查点之后先实现候选内部的原子 checkpoint/resume，再按 F2、N0/N3、RR1、
+R1、S1 的冻结依赖顺序做扩展评测；前者已经在下文所述提交中完成。现有 leaderboard、
+Pareto 和 decision summary 仍只是基线诊断产物，不能替代扩展策略完成后的最终报告。
 
 关闭 fail-open 发布时还没有实现候选内部恢复。旧 `run_complete_candidate` 会先执行
 全部 254 条 quality rows，再执行 warmup/timed latency passes，最后才返回完整结果；
@@ -536,6 +536,40 @@ Paper-scoped 结果还更新了三个后续判断：
   primary `0.831811`，相对 dense `+0.010229`，没有新增 hard failure。
 
 这些离线重放只用于冻结下一候选，不替代正式 runner、完整 guardrails 或最终报告。
+
+### 1.4 35 项 paper-scoped 唯一分类审计
+
+2026-07-29 在提交 `3462e0e` 的严格 loader、原子 progress 和 fail-closed 排序合同上，
+新增了独立只读审计器 `benchmarks.researchqa_validity_audit`。它不信任已有
+`status`、`guardrails_passed` 或文件名，而是重新生成冻结的 7/4/3/5/4/12 候选计划，
+逐项核对 candidate identity、engine/schema、input fingerprint 形状、payload SHA、
+paper-scoped scope、20/254/239/380 集合、显式 completion/finalization、mapping 和
+metric bundle，再给每个候选分配且只分配一个真实性类别。
+
+完整逐项结果固化在
+[`2026-07-29-rq2-paper-scoped-35-validity-audit.csv`](2026-07-29-rq2-paper-scoped-35-validity-audit.csv)：
+
+| 类别 | 数量 | 含义 |
+|---|---:|---|
+| `valid-and-rankable` | 6 | 各阶段通过相对门且允许参加该阶段排名的基线/候选 |
+| `valid-but-poor` | 26 | 分数和失败切片真实，但相对 guardrail 或上游 eligibility 不通过 |
+| `diagnostic-only/ineligible` | 2 | `note-whole` 与 `note-reviewer-concern`；不得被表面分数晋级 |
+| `deterministic-strategy-failure` | 1 | 原 `pdf-structure-aware` 的可复现候选失败 |
+| `infrastructure/unknown` | 0 | 没有遗留 CUDA、传输、未知或 pending 候选 |
+| `invalid-false-score` | 0 | 没有仍被当作正式分数的合同损坏候选 |
+
+逐阶段分解为：PDF `1/5/0/1`（rankable pass / valid poor / diagnostic /
+deterministic failure），note `1/1/2/0`，retriever `1/2/0/0`，source
+composition `1/4/0/0`，reranker `1/3/0/0`，confirmation `1/11/0/0`。
+因此“继续盘点未审计策略”的基线真实性总门已经关闭；后续不再重扫 35 项，也不把
+`valid-but-poor` 错称为假分数。
+
+审计同时把候选有效性与整个 run 的发布状态分开。35 项候选门已关闭，但
+`run-state.json` 仍保留最初 CUDA 崩溃的一个 outer runtime failed task；完整 public
+exporter 因而正确返回 `outer-task-completion-gate-open`。这不推翻当前候选分数，却是最终
+发布阻塞。不得手工把旧失败改成 completed；扩展 runner 收口时必须写出可验证的
+superseding completion/reconciliation，且只有 F2、N0/N3、RR1、R1、条件 S1 全部取得
+终态后才能打开最终 public export gate。
 
 ## 2. 总体判断
 
@@ -947,20 +981,16 @@ depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50
 
 | 项目 | 当前状态 | 下一验证 |
 |---|---|---|
-| paper-scoped 独立索引 | 35 个候选均已执行到可审计终态 | 定向补跑 9 个旧 adapter 候选 |
-| 相对 baseline guardrail | paper-scoped completed 候选已有 diagnostics | 新 rerank envelope 必须 finalized |
-| 上游 eligibility 传递 | paper-scoped artifacts 已验证 | 修复后 confirmation 不得洗白失败 component |
-| Top-2 维度冻结 | 配置与 schema 已修复 | scope 修复前后均为相同 12/35 矩阵 |
-| 正交阶段 anchor 冻结 | 配置、schema 和公开 manifest 已修复 | 新旧 35 个 config ID 成对一致 |
-| reviewer-concern rankability | 已设为 diagnostic-only | 新 run 不得进入排名 |
-| pre-rerank Recall@20/50/100 和 pre/post rows | 已实现 | 新 reranker artifact 必须非空 |
-| 无 reference adversarial 分数分布 | 已实现 | 15/15 保持 null retrieval metric，并输出 score diagnostic |
-| stale FP16 candidate 隔离 | 已移动到 `stale-candidates` | final-plan membership 必须仍为 35 |
-| Pareto/public exporter 完整性 | fail-closed 代码已修复，旧假 final 已隔离 | 公开导出必须在零基础设施失败后原子通过 |
-| reranker last-token-only + adapter identity | 代码、parity 和回归测试已通过 | 精确 9 个候选 fresh-CUDA 定向重跑 |
-| execution/guardrail/failure 状态分离 | 代码和回归测试已通过 | 新 stage/final 必须 fail closed |
-| 候选内部原子 progress | 合同已冻结；当前 executor 仍只在整项结束后返回 | 定向 rerank 退出后实现逐论文 quality 与完整 pass latency resume |
-| 旧 adapter 与假 final 隔离 | 9 个候选、17 个 artifact 已移入 run-owned quarantine | 新旧 SHA ledger 对账 |
+| paper-scoped 独立索引 | 35/35 candidate identity 与 20/254/239/380 集合已审计 | 已关闭；不得重跑基线 |
+| 相对 baseline guardrail | 34 个 completed 均已 finalized | 已关闭；`valid-but-poor` 不得晋级 |
+| 上游 eligibility 传递 | confirmation 逐项记录 upstream failures | 已关闭；只有 1/12 final combination eligible |
+| Top-2 维度与正交 anchor | 冻结计划严格为 7/4/3/5/4/12 | 已关闭；扩展使用独立 ID |
+| note rankability | `note-whole`、reviewer-only 均为 diagnostic-only | 已关闭；N0/N3 不得改写旧结果 |
+| pre-rerank、无 reference adversarial | 9 个 rerank repair 和 15 个 null-metric rows 已对账 | 已关闭 |
+| stale adapter 与假 final 隔离 | 9 个旧 adapter 候选、17 个 artifact 已 quarantine 并完成回放 | 已关闭 |
+| candidate envelope/public exporter | 严格状态、身份、SHA、coverage 门已通过独立审计 | 候选门关闭；outer task 门仍关闭 |
+| 候选内部原子 progress | 逐论文 quality、完整 pass latency resume 与源码 fingerprint 已实现 | 已关闭；扩展候选直接复用 |
+| outer task publication state | 旧 CUDA failed task 仍留存，完整 public export fail closed | 扩展全部终态后做可验证 superseding reconciliation，禁止手改 |
 | `F2 pdf-structure-aware-fallback` | 生产输入结构门已冻结，代码待实现 | 使用新 config ID，不按质量分数调阈值 |
 | `N0 note-route-eligibility-gate` | 已冻结逐论文同一非空块须 backlinkable；失败逐论文 PDF-only fallback | paper-scoped 基线后实现并报告 fallback IDs/rate |
 | `N3 note-concern-parser-contract` | 已冻结 58 行生产分布、多 claim/range、四级 severity 与 fail-closed 边界 | 实现结构化 parser；reviewer-only 仍 diagnostic-only |
@@ -1015,9 +1045,14 @@ P2 只有在 P1 无法解释剩余错误、且项目所有者另行批准后才�
 ## 10. 结论
 
 `rq-2` 已经足以排除三条粗糙路线：纯 note-to-PDF、无 fallback 的 note-guided hard
-filter、depth-100 默认重排。当前仍没有可发布 winner：必须先让 9 个 rerank-enabled
-候选在 fresh CUDA 进程中取得可审计终态，并证明基础设施失败、pending eligibility 和
-假 final 都为零。
+filter、depth-100 默认重排。35 项 paper-scoped 基线现为 34 个 completed 加 1 个确定性
+strategy failure；基础设施/unknown/pending/invalid-false-score 均为零。旧 9 个
+rerank-enabled 候选已经在 fresh CUDA 路径取得可审计终态，不再是待办项。
+
+当前仍没有可发布 winner：真实性审计只证明“这些分数是真的”，不证明 26 个
+`valid-but-poor` 可以晋级，也没有关闭 outer task publication gate。下一步按冻结依赖顺序
+执行 F2、N0/N3、RR1、R1 和条件 S1；全部扩展取得终态后再做 outer-state reconciliation
+与最终报告，期间不得回到旧 35 项反复重跑。
 
 基线关闭后，最值得进入后续单变量验证的不是再换一个更大的模型，而是：
 
