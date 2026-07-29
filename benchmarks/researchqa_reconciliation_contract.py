@@ -121,6 +121,7 @@ def reconciliation_code_fingerprint() -> str:
         root / "researchqa_retrieval.py",
         root / "researchqa_sweep.py",
         root / "researchqa_validity_audit.py",
+        root / "researchqa_detailed_report.py",
         root / "researchqa_public_export.py",
         root / "public_report.py",
     )

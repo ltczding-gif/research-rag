@@ -31,6 +31,7 @@ benchmarks/reports/*
 !benchmarks/reports/researchqa-rq2/
 benchmarks/reports/researchqa-rq2/*
 !benchmarks/reports/researchqa-rq2/morning-report.md
+!benchmarks/reports/researchqa-rq2/detailed-strategy-analysis.html
 !benchmarks/reports/researchqa-rq2/leaderboard.csv
 !benchmarks/reports/researchqa-rq2/paper-domain-breakdown.csv
 !benchmarks/reports/researchqa-rq2/paired-bootstrap.json

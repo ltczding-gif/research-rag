@@ -57,6 +57,7 @@ is [+0.008793, +0.018389]. Its 1.331 s p95 latency is observed-only, not a
 controlled production SLA or an automatic product-default decision.
 
 - [Human-readable result](reports/researchqa-rq2/morning-report.md)
+- [Detailed strategy, repair, and shared-failure analysis](reports/researchqa-rq2/detailed-strategy-analysis.html)
 - [Full public manifest and fingerprints](reports/researchqa-rq2/run-manifest.json)
 - [Per-candidate validity and score table](reports/researchqa-rq2/leaderboard.csv)
 - [Publication and privacy contract](reports/README.md)

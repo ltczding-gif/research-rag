@@ -481,6 +481,8 @@ CI 在支持的 Python 版本上覆盖 Windows、macOS 和 Linux。合成演示�
 - [`scanner/references/workflow-runbook.md`](scanner/references/workflow-runbook.md)
 - [`benchmarks/README.md`](benchmarks/README.md) —— 固定 ResearchQA 版本、每领域
   2/5/10/全部四层评测以及 Qwen 4B 质量基线
+- [`rq-2 详细策略审计`](benchmarks/reports/researchqa-rq2/detailed-strategy-analysis.html)
+  —— 39 个策略、完整修复过程、预期与实测对照，以及跨策略共性难题诊断
 - [`tests/README.md`](tests/README.md)
 
 `docs/audits/`、`docs/investigation/`、`docs/plans/` 以及更早的架构/状态快照属于历史证据，

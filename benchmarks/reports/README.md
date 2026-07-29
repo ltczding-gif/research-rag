@@ -7,6 +7,7 @@ The only currently admitted report family is `researchqa-rq2/`. A completed
 publication may contain:
 
 - `morning-report.md`
+- `detailed-strategy-analysis.html`
 - `leaderboard.csv`
 - `paper-domain-breakdown.csv`
 - `paired-bootstrap.json`
@@ -65,7 +66,7 @@ The public data fingerprint must bind the audited source manifests, the
 be non-empty, stable, and limited to hashed platform, CPU, and GPU
 descriptions; they must not expose hostnames, usernames, serial numbers, raw
 WMI output, or local paths. The manifest must also list the basename, byte
-count, and SHA-256 of the other six public report files. The manifest itself
+count, and SHA-256 of the other eight public report files. The manifest itself
 is not self-hashed.
 
 The public manifest must be rebuilt from allowlisted fields rather than
@@ -77,6 +78,13 @@ rankable candidates. It must not describe an explicit failed or ineligible
 strategy record as completed. It must disclose that the winner remains
 provisional and that sustained latency measurements may reflect the recorded
 thermal steady state.
+
+`detailed-strategy-analysis.html` must be generated from the same reconciled
+candidate envelopes and aggregate artifacts. It may publish stable question
+row IDs, cross-strategy miss counts, domains, and question types for shared
+failure analysis, but it must not publish question text, answers, evidence
+passages, mapped chunk IDs, ranked item IDs, or a per-strategy question-result
+matrix.
 
 The rq-2 sweep is a provisional strategy-selection run. `guardrails_passed`
 means that the registered metric bundle is finite and that the candidate
@@ -106,9 +114,10 @@ path-like error details, retaining only stable IDs, stage/config status, and
 gate outcomes.
 
 Do not publish ResearchQA JSONL rows or derived question subsets, PDFs or SI,
-extracted source text, chunks, embeddings, indexes, per-question results,
-model caches, raw traces, or generated benchmark notes. Those remain under the
-ignored local cache and retain their upstream licenses.
+extracted source text, chunks, embeddings, indexes, the full per-strategy
+question-result matrix, model caches, raw traces, or generated benchmark
+notes. Those remain under the ignored local cache and retain their upstream
+licenses.
 
 ## Export contract
 
@@ -120,7 +129,7 @@ The rq-2 public exporter is deliberately run-specific. It must:
    plus the common evaluable-set/mapping gates, before reading report values;
 3. parse and rewrite aggregate rows through explicit field allowlists instead
    of copying files or directories;
-4. build all eight files in a temporary directory, validate the manifest and
+4. build all nine files in a temporary directory, validate the manifest and
    sibling hashes, scan for forbidden path/text fields, and only then replace
    `researchqa-rq2/` atomically; and
 5. leave the existing public directory unchanged on any validation failure.

@@ -336,6 +336,7 @@ def _valid_rq2_public_manifest():
             for index, name in enumerate(
                 (
                     "morning-report.md",
+                    "detailed-strategy-analysis.html",
                     "leaderboard.csv",
                     "paper-domain-breakdown.csv",
                     "paired-bootstrap.json",

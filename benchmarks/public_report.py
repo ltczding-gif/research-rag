@@ -19,6 +19,7 @@ _RQ2_STAGE_COUNTS = {
 }
 _RQ2_ARTIFACT_NAMES = {
     "morning-report.md",
+    "detailed-strategy-analysis.html",
     "leaderboard.csv",
     "paper-domain-breakdown.csv",
     "paired-bootstrap.json",

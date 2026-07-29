@@ -22,6 +22,11 @@ from benchmarks.public_report import (
     sanitize_rq2_blocked_rows,
     validate_rq2_public_manifest,
 )
+from benchmarks.researchqa_detailed_report import (
+    DetailedReportError,
+    REPORT_FILENAME,
+    build_rq2_detailed_html,
+)
 from benchmarks.researchqa_reconciliation import (
     BREAKDOWN_FIELDS,
     LEADERBOARD_FIELDS,
@@ -873,9 +878,22 @@ def export_rq2_public_report(
                 run_root=run,
             ),
         )
+        try:
+            detailed_html = build_rq2_detailed_html(
+                run_root=run,
+                leaderboard_path=staged / "leaderboard.csv",
+                reconciliation=public_reconciliation,
+                extensions=extensions,
+                bootstrap=bootstrap,
+                mapping=mapping,
+            )
+        except DetailedReportError as exc:
+            raise RQ2PublicExportError(str(exc)) from exc
+        _write_bytes(staged / REPORT_FILENAME, detailed_html)
 
         sibling_names = {
             "morning-report.md",
+            REPORT_FILENAME,
             "leaderboard.csv",
             "paper-domain-breakdown.csv",
             "paired-bootstrap.json",

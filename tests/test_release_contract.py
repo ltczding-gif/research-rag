@@ -56,6 +56,7 @@ def test_rq2_public_report_allowlist_is_explicit():
     report_root = "benchmarks/reports/researchqa-rq2/"
     allowed = {
         "morning-report.md",
+        "detailed-strategy-analysis.html",
         "leaderboard.csv",
         "paper-domain-breakdown.csv",
         "paired-bootstrap.json",

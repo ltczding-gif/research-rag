@@ -507,6 +507,9 @@ Current contracts and guides:
 - [`scanner/references/workflow-runbook.md`](scanner/references/workflow-runbook.md)
 - [`benchmarks/README.md`](benchmarks/README.md) — pinned ResearchQA evaluation,
   deterministic 2/5/10/all papers per domain, and the Qwen 4B quality baseline
+- [`rq-2 detailed strategy audit`](benchmarks/reports/researchqa-rq2/detailed-strategy-analysis.html)
+  — all 39 strategies, repair history, expected-vs-actual results, and shared
+  hard-case diagnosis
 - [`tests/README.md`](tests/README.md)
 
 Files under `docs/audits/`, `docs/investigation/`, and `docs/plans/`, plus older

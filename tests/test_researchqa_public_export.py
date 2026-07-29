@@ -521,6 +521,7 @@ def test_rq2_public_export_is_allowlisted_valid_and_replaceable(
     assert result == output.resolve()
     assert {path.name for path in output.iterdir()} == {
         "morning-report.md",
+        "detailed-strategy-analysis.html",
         "leaderboard.csv",
         "paper-domain-breakdown.csv",
         "paired-bootstrap.json",
@@ -545,6 +546,12 @@ def test_rq2_public_export_is_allowlisted_valid_and_replaceable(
     )
     assert "F:\\private" not in serialized
     assert '"error"' not in serialized
+    detailed = (output / "detailed-strategy-analysis.html").read_text(
+        encoding="utf-8"
+    )
+    assert "<!doctype html>" in detailed
+    assert "39 个 RAG 策略" in detailed
+    assert "问题与修复" in detailed
 
 
 def test_public_export_rejects_tampered_reconciliation_artifact(tmp_path):
