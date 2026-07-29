@@ -886,7 +886,48 @@ paper-scoped hybrid 相对 dense 的 primary 为 `+0.01294`，逐题 nDCG 均值
 `-0.00608`，并新增 3 个 Recall@10 hard failures，因此不能被总体增益洗白。下一步应先测
 固定权重，不使用 benchmark 的 `question_type` 或 gold group count 做路由。
 
-### 5.2 后续候选
+### 5.2 R1 正式评测
+
+2026-07-29 已完成冻结候选 `repair-r1-d41a39940104d21913d9` 的正式
+paper-scoped 评测。候选固定保留 dense top-1，再以 dense:BM25=`2:1`、`k=60`
+做 rank-RRF；覆盖 20/20 papers、254/254 questions、239 evaluable questions 和
+380/380 mapped groups，`execution_complete=true`、`guardrail_finalized=true`、
+`guardrails_passed=true`。input fingerprint 为
+`1c1ea398e833a7759589a23c236ccf86a310edb50f950d6801add4fbeb55bdc9`，
+payload SHA-256 为
+`22966e3682212b89d2d3c6a82d88808cb9c09d64f40d2a06581aabf68d747be4`。
+
+独立路线与正式 R1 的同集结果为：
+
+| 指标 | dense | BM25 | 等权 hybrid | R1 | R1 - dense |
+|---|---:|---:|---:|---:|---:|
+| coverage-nDCG@10（primary） | 0.821583 | 0.784959 | 0.834526 | 0.831811 | +0.010229 |
+| MRR | 0.844742 | 0.814127 | 0.855759 | 0.850913 | +0.006171 |
+| Recall@5 | 0.914317 | 0.865880 | 0.930321 | 0.931155 | +0.016838 |
+| Recall@10 | 0.955957 | 0.926132 | 0.954020 | 0.963428 | +0.007471 |
+| all-required-groups success@5 | 0.865719 | 0.817916 | 0.892065 | 0.892898 | +0.027179 |
+| all-required-groups success@10 | 0.937527 | 0.898714 | 0.931449 | 0.944969 | +0.007442 |
+
+254/254 个 dense top-1 均被保留。相对 dense，239 个可评分问题的
+coverage-nDCG@10 为 40 题改善、17 题退化、182 题不变；Recall@10 为 4 题改善、
+2 题退化，但没有新增 hard failure，并救回 `W3154248945_adversarial0` 和
+`W4242318543_chunk2_lookup` 两个原 hard failure。BM25 相对 dense 的有效信息被 R1
+带入 27 题，同时有 13 题继承了部分 BM25 污染；固定 2:1 权重和 top-1 保护使污染没有
+扩展成新的 Recall@10 hard failure。
+
+等权 hybrid 的 primary 虽比 R1 高 `0.002714`，但它相对 dense 的 adversarial
+coverage-nDCG@10 退化 `-0.052052`、all-required-groups success@10 退化
+`-0.006078`，并新增 3 个 hard failures，故仍是 `valid-but-poor`。R1 相对 dense 的
+adversarial、multi-hop、lookup、comprehension 分别变化
+`+0.023332/+0.007566/+0.013027/+0.000300`；10 个领域中只有 social science
+退化 `-0.003778`，未触发领域门。这证明 R1 的价值是以很小的总体 primary 让步换回
+guardrail 安全，而不是追求最高表面均值。
+
+串行 observed-only latency 为 p50 `7.28 ms`、p95 `29.48 ms`，相对 dense 的
+p95 比值约 `1.47`；没有加载 reranker。R1 据此归类为 `valid-and-rankable`，进入最终
+候选集合；本轮停止，不继续扫描权重或 `k`。
+
+### 5.3 后续候选
 
 | ID | 单变量候选 | 目的 | 验证要求 |
 |---|---|---|---|
@@ -1101,6 +1142,7 @@ depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50
 | `N0 note-route-eligibility-gate` | 20/20 eligible，103/103 claim 基础块可回链，0 fallback；精确 PDF-only 回退测试通过 | 已关闭；后续 S1 复用，不得用 reviewer-only 建立资格 |
 | `N3 note-concern-parser-contract` | 20/20 严格解析；58 行=4 major+54 minor，7 个 multi-claim/range；4 个 reviewer chunks | 已关闭；reviewer-only 仍 diagnostic-only |
 | `RR1 preserve-top1 rank-RRF` | 20/254 正式评测完成；primary `+0.013572`，0 新 hard failure，`valid-and-rankable` | 已关闭；保留为最终候选，不扫描 depth、权重或 `k` |
+| `R1 preserve-dense-top1 weighted RRF` | 20/254 正式评测完成；primary `+0.010229`，0 新 hard failure，`valid-and-rankable` | 已关闭；保留为最终候选，不扫描权重或 `k` |
 | controlled finalist latency | 已确认串行 p95 在热降频下只能 observed-only；合同已冻结 | 只交错复测质量 tie group；不可比时跳过 latency 决胜 |
 
 P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、失败可以局部降级、恢复不会混入
@@ -1109,8 +1151,8 @@ P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、�
 ### P1：最有证据的质量候选
 
 1. `RR1`：已完成；`valid-and-rankable`，进入最终候选集合
-2. `R1`：当前下一项；preserve dense top-1 + dense:BM25 `2:1` RRF (`k=60`)
-3. `S0 + N1 + S1`：N0/N3/N1 前置已满足；在 R1 后执行固定 0.9/0.1 候选
+2. `R1`：已完成；`valid-and-rankable`，进入最终候选集合
+3. `S0 + N1 + S1`：当前下一项；N0/N3/N1 前置已满足，执行固定 0.9/0.1 候选
 4. `H1 hierarchical-parent-expand-direct-fallback`
 
 这些候选不得一次全叠加。先分别与 fixed-1200 + hybrid + PDF-only + rerank-off 基线做
@@ -1159,15 +1201,16 @@ rerank-enabled 候选已经在 fresh CUDA 路径取得可审计终态，不再�
 当前仍没有可发布 winner：真实性审计只证明“这些分数是真的”，不证明 26 个
 `valid-but-poor` 可以晋级，也没有关闭 outer task publication gate。F2 已取得
 `valid-but-poor` 终态，N0/N3/N1 前置合同已关闭，RR1 已取得
-`valid-and-rankable` 终态；下一步按冻结顺序执行 R1 和条件 S1。全部扩展
+`valid-and-rankable` 终态，R1 也已取得 `valid-and-rankable` 终态；下一步执行
+条件 S1。全部扩展
 取得终态后再做 outer-state reconciliation
 与最终报告，期间不得回到旧 35 项反复重跑。
 
 基线关闭后，最值得进入后续单变量验证的不是再换一个更大的模型，而是：
 
-1. 保留 base top-1 的 depth-20 重排融合；
-2. 保留 dense top-1 的 dense-heavy RRF；
-3. 有逐论文 coverage gate 和 PDF-only fallback 的笔记增强；
+1. 保留 base top-1 的 depth-20 重排融合：已完成并通过；
+2. 保留 dense top-1 的 dense-heavy RRF：已完成并通过；
+3. 有逐论文 coverage gate 和 PDF-only fallback 的笔记增强：当前下一项；
 4. 真正的 parent 命中后 child 重检索，而不是双重 top-k 硬门。
 
 这些候选在 `rq-2` 完成前只作为 backlog 记录；是否进入 `rq-5` 仍由 ADR-003 的 stop gate
