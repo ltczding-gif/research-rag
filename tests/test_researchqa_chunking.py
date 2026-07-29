@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 
 import pytest
 
 from benchmarks.researchqa_chunking import (
+    EXECUTABLE_PDF_CHUNKER_IDS,
     NOTE_CHUNKER_IDS,
     PDF_CHUNKER_IDS,
+    PDF_STRUCTURE_FALLBACK_ID,
     chunk_note,
     chunk_pdf,
     note_chunk_pdf_backlinks,
     parse_source_citations,
+    structure_fallback_corpus_diagnostics,
 )
 from service.pdf_ir import (
     CanonicalDocument,
@@ -188,6 +192,112 @@ def test_structure_atomic_block_is_not_split_at_non_atomic_hard_max():
     assert "b" * 650 in atomic.text
 
 
+def test_structure_fallback_uses_fixed_1200_with_its_own_provenance():
+    document = _document("Plain prose " * 180)
+
+    first = chunk_pdf(
+        document,
+        PDF_STRUCTURE_FALLBACK_ID,
+        is_main=True,
+    )
+    second = chunk_pdf(
+        document,
+        PDF_STRUCTURE_FALLBACK_ID,
+        is_main=True,
+    )
+    fixed = chunk_pdf(document, "pdf-fixed-1200", is_main=True)
+
+    assert first.status == "completed"
+    assert first.diagnostics["fallback"] is True
+    assert (
+        first.diagnostics["fallback_reason"]
+        == "structure-detection-failed"
+    )
+    assert [chunk.text for chunk in first.chunks] == [
+        chunk.text for chunk in fixed.chunks
+    ]
+    assert [chunk.source_spans for chunk in first.chunks] == [
+        chunk.source_spans for chunk in fixed.chunks
+    ]
+    assert {chunk.config_id for chunk in first.chunks} == {
+        PDF_STRUCTURE_FALLBACK_ID
+    }
+    assert {chunk.chunker_fingerprint for chunk in first.chunks}.isdisjoint(
+        {chunk.chunker_fingerprint for chunk in fixed.chunks}
+    )
+    assert {chunk.chunk_id for chunk in first.chunks}.isdisjoint(
+        {chunk.chunk_id for chunk in fixed.chunks}
+    )
+    assert [chunk.chunk_id for chunk in first.chunks] == [
+        chunk.chunk_id for chunk in second.chunks
+    ]
+
+
+def test_structure_fallback_keeps_healthy_structure_chunks():
+    document = _document(
+        "Introduction\n\n"
+        + "context " * 50
+        + "\n\nFigure 1. Accuracy by condition.\n\n"
+        + "interpretation " * 50
+    )
+
+    result = chunk_pdf(
+        document,
+        PDF_STRUCTURE_FALLBACK_ID,
+        is_main=True,
+    )
+
+    assert result.status == "completed"
+    assert result.diagnostics["structure_detected"] is True
+    assert result.diagnostics["fallback"] is False
+    assert result.diagnostics["fallback_reason"] is None
+    assert all(
+        chunk.config_id == PDF_STRUCTURE_FALLBACK_ID
+        for chunk in result.chunks
+    )
+    assert any("Figure 1." in chunk.text for chunk in result.chunks)
+
+
+def test_structure_fallback_corpus_gate_reports_mixed_and_over_cost():
+    healthy = chunk_pdf(
+        _document(
+            "Introduction\n\n"
+            + "context " * 50
+            + "\n\nFigure 1. Result.\n\n"
+            + "interpretation " * 50
+        ),
+        PDF_STRUCTURE_FALLBACK_ID,
+        is_main=True,
+    )
+    fallback = chunk_pdf(
+        _document("Plain prose " * 180),
+        PDF_STRUCTURE_FALLBACK_ID,
+        is_main=True,
+    )
+
+    mixed = structure_fallback_corpus_diagnostics(
+        {"paper-a": healthy, "paper-b": fallback}
+    )
+    assert mixed["paper_count"] == 2
+    assert mixed["fallback_paper_ids"] == ["paper-b"]
+    assert mixed["fallback_rate"] == 0.5
+    assert mixed["contract_status"] == "passed"
+
+    over_cost = {
+        **fallback.diagnostics,
+        "fixed_1200_chunk_count": 1,
+        "output_chunk_count": 2,
+    }
+    failed = structure_fallback_corpus_diagnostics(
+        {
+            "paper-a": replace(fallback, diagnostics=over_cost),
+            "paper-b": replace(fallback, diagnostics=over_cost),
+        }
+    )
+    assert failed["output_to_fixed_1200_ratio"] == 2.0
+    assert failed["contract_status"] == "failed"
+
+
 def test_parent_child_returns_separate_parent_blocks_and_child_backlinks():
     document = _document(
         "Paragraph one. " * 70
@@ -224,6 +334,8 @@ def test_parent_child_rebalances_uneven_paragraphs_to_approved_range():
 
 def test_all_seven_pdf_chunker_ids_are_public_and_unknown_is_rejected():
     assert len(PDF_CHUNKER_IDS) == 7
+    assert len(EXECUTABLE_PDF_CHUNKER_IDS) == 8
+    assert PDF_STRUCTURE_FALLBACK_ID not in PDF_CHUNKER_IDS
     with pytest.raises(ValueError, match="unknown PDF chunker"):
         chunk_pdf(_document("text"), "pdf-invented", is_main=True)
 

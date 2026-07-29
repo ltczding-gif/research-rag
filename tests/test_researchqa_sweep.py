@@ -23,6 +23,7 @@ from benchmarks.researchqa_strategy import (
     EvidenceMappingBundle,
     QuestionStrategyResult,
     StrategyContractError,
+    generate_f2_candidate,
     generate_orthogonal_candidates,
 )
 from benchmarks.researchqa_sweep import (
@@ -35,6 +36,7 @@ from benchmarks.researchqa_sweep import (
     _pareto_frontier,
     _relative_guardrail_diagnostics,
     _write_candidate_progress,
+    run_extension_candidate,
     run_strategy_sweep,
 )
 from service.pdf_ir import (
@@ -192,6 +194,8 @@ def _primary(candidate) -> float:
         },
     }
     if candidate.stage_id == "pdf-chunker":
+        if candidate.pdf_chunker == "pdf-structure-aware-fallback":
+            return 0.985
         return stage_scores["pdf-chunker"][candidate.pdf_chunker]
     if candidate.stage_id == "note-chunker":
         return stage_scores["note-chunker"][candidate.note_chunker]
@@ -266,6 +270,17 @@ def _candidate_result(candidate, *, incomplete=False, alternate_group=False):
         index_bytes=100,
         chunk_count=1,
         guardrails_passed=True,
+        corpus_diagnostics=(
+            {
+                "pdf_chunking": {
+                    "config_id": "pdf-structure-aware-fallback",
+                    "paper_count": 1,
+                    "contract_status": "passed",
+                }
+            }
+            if candidate.pdf_chunker == "pdf-structure-aware-fallback"
+            else {}
+        ),
     )
 
 
@@ -360,6 +375,147 @@ def _run(
         ),
         candidate_executor=executor,
     )
+
+
+def test_extension_candidate_uses_separate_path_and_resumes(tmp_path):
+    events = []
+    _run(tmp_path, _FakeExecutor(), events)
+    config = _config()
+    f2 = generate_f2_candidate(config)
+    baseline = next(
+        candidate
+        for candidate in generate_orthogonal_candidates(config).stages[
+            "pdf-chunker"
+        ]
+        if candidate.pdf_chunker == "pdf-fixed-800"
+    )
+    executor = _FakeExecutor()
+
+    first = run_extension_candidate(
+        config,
+        tmp_path,
+        _documents(),
+        QUESTIONS,
+        {"W1": "# Frozen note\n\nAlpha evidence. [Main p.1]"},
+        _FakeEmbedder(events),
+        _FakeReranker(events),
+        extension_id="F2",
+        candidate=f2,
+        baseline_candidate=baseline,
+        candidate_executor=executor,
+    )
+    resumed = run_extension_candidate(
+        config,
+        tmp_path,
+        _documents(),
+        QUESTIONS,
+        {"W1": "# Frozen note\n\nAlpha evidence. [Main p.1]"},
+        _FakeEmbedder(events),
+        _FakeReranker(events),
+        extension_id="F2",
+        candidate=f2,
+        baseline_candidate=baseline,
+        candidate_executor=executor,
+    )
+
+    assert first.status == "completed"
+    assert first.guardrail_finalized
+    assert first.guardrails_passed
+    assert first.payload["corpus_diagnostics"]["pdf_chunking"][
+        "contract_status"
+    ] == "passed"
+    assert Path(first.result_path).is_relative_to(
+        tmp_path / "sweep" / "extensions" / "F2"
+    )
+    assert resumed.resumed
+    assert resumed.payload["extension"] == {
+        "extension_id": "F2",
+        "baseline_config_id": baseline.config_id,
+    }
+    assert resumed.payload["corpus_diagnostics"] == first.payload[
+        "corpus_diagnostics"
+    ]
+    assert executor.calls == [f2.config_id]
+    assert len(
+        list(
+            (
+                tmp_path
+                / "sweep"
+                / "candidates"
+                / "pdf-chunker"
+            ).glob("*.json")
+        )
+    ) == 7
+
+
+def test_finalized_extension_resume_ignores_stale_progress(tmp_path):
+    config = _config()
+    config["performance"]["sample_question_count"] = 1
+    documents, note = _recoverable_documents_and_note()
+    events = []
+    run_strategy_sweep(
+        config,
+        tmp_path,
+        documents,
+        QUESTIONS,
+        {"W1": note},
+        _FakeEmbedder(events),
+        _FakeReranker(events),
+        before_rerank_stage=lambda: events.append("before-rerank"),
+        assert_embedding_cache_only=lambda candidate: events.append(
+            f"cache-only:{candidate.stage_id}"
+        ),
+        candidate_executor=_FakeExecutor(),
+    )
+    f2 = generate_f2_candidate(config)
+    baseline = next(
+        candidate
+        for candidate in generate_orthogonal_candidates(config).stages[
+            "pdf-chunker"
+        ]
+        if candidate.pdf_chunker == "pdf-fixed-800"
+    )
+    first = run_extension_candidate(
+        config,
+        tmp_path,
+        documents,
+        QUESTIONS,
+        {"W1": note},
+        _FakeEmbedder(events),
+        _FakeReranker(events),
+        extension_id="F2",
+        candidate=f2,
+        baseline_candidate=baseline,
+    )
+    assert first.status == "completed"
+    assert first.guardrail_finalized
+
+    progress_path = next(
+        (
+            tmp_path
+            / "sweep"
+            / "progress"
+            / "pdf-chunker"
+            / f2.config_id
+        ).glob("*.json")
+    )
+    progress_path.write_text("{stale-progress", encoding="utf-8")
+
+    resumed = run_extension_candidate(
+        config,
+        tmp_path,
+        documents,
+        QUESTIONS,
+        {"W1": note},
+        _FakeEmbedder(events),
+        _FakeReranker(events),
+        extension_id="F2",
+        candidate=f2,
+        baseline_candidate=baseline,
+    )
+    assert resumed.status == "completed"
+    assert resumed.resumed
+    assert resumed.result_path == first.result_path
 
 
 def test_sweep_rejects_non_paper_scoped_retrieval(tmp_path):

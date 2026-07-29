@@ -626,9 +626,11 @@ _COMPACT_PAYLOAD_KEYS = (
     "chunk_count",
     "completed_paper_ids",
     "completed_question_ids",
+    "corpus_diagnostics",
     "error",
     "error_type",
     "execution_complete",
+    "extension",
     "failure_context",
     "failure_kind",
     "guardrail_diagnostics",
@@ -2654,10 +2656,381 @@ def run_strategy_sweep(
     )
 
 
+def run_extension_candidate(
+    config: Mapping[str, Any],
+    run_root: str | Path,
+    documents: Mapping[str, CanonicalDocument],
+    questions: Sequence[Mapping[str, Any]],
+    frozen_notes: Mapping[str, str],
+    embedder: EmbedderAdapter,
+    reranker: object,
+    *,
+    extension_id: str,
+    candidate: StrategyCandidate,
+    baseline_candidate: StrategyCandidate,
+    before_rerank_stage: BeforeRerankCallback | None = None,
+    assert_embedding_cache_only: CacheOnlyCallback | None = None,
+    candidate_executor: CandidateExecutor = run_complete_candidate,
+    guardrail_check: GuardrailCheck | None = None,
+) -> SweepCandidateRecord:
+    """Execute one approved extension against a frozen baseline candidate."""
+
+    if (
+        not extension_id
+        or any(
+            character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
+            for character in extension_id
+        )
+    ):
+        raise SweepContractError("extension_id must be an uppercase safe ID")
+    if candidate.stage_id != baseline_candidate.stage_id:
+        raise SweepContractError(
+            "extension and baseline candidates must share a stage"
+        )
+    if candidate.config_id == baseline_candidate.config_id:
+        raise SweepContractError("extension candidate must have a new config ID")
+
+    root = Path(run_root).resolve(strict=False)
+    paper_ids, question_ids = _validate_inputs(
+        config,
+        documents,
+        questions,
+        frozen_notes,
+    )
+    gates = config.get("gates")
+    performance = config.get("performance")
+    metrics = config.get("metrics")
+    if (
+        not isinstance(gates, Mapping)
+        or not isinstance(performance, Mapping)
+        or not isinstance(metrics, Mapping)
+    ):
+        raise SweepContractError(
+            "config gates/performance/metrics must be mappings"
+        )
+    configured_guardrails = metrics.get("guardrails")
+    if (
+        not isinstance(configured_guardrails, list)
+        or not configured_guardrails
+        or any(
+            not isinstance(metric, str) or not metric
+            for metric in configured_guardrails
+        )
+    ):
+        raise SweepContractError(
+            "config.metrics.guardrails must be a non-empty string array"
+        )
+    mapping_overall = float(gates.get("mapping_overall_minimum", 0.95))
+    mapping_per_paper = float(
+        gates.get("mapping_per_paper_minimum", 0.90)
+    )
+    performance_sample_count = int(
+        performance.get("sample_question_count", 0)
+    )
+    performance_warmup_passes = int(performance.get("warmup_passes", 0))
+    performance_timed_passes = int(performance.get("timed_passes", 0))
+    if (
+        performance_sample_count <= 0
+        or performance_warmup_passes <= 0
+        or performance_timed_passes <= 0
+    ):
+        raise SweepContractError(
+            "config.performance counts must be greater than zero"
+        )
+
+    config_fingerprint = fingerprint_payload(config)
+    candidate_input = _candidate_input_fingerprint(
+        candidate,
+        config_fingerprint=config_fingerprint,
+        documents=documents,
+        questions=questions,
+        notes=frozen_notes,
+        embedder=embedder,
+        reranker=reranker,
+    )
+    baseline_input = _candidate_input_fingerprint(
+        baseline_candidate,
+        config_fingerprint=config_fingerprint,
+        documents=documents,
+        questions=questions,
+        notes=frozen_notes,
+        embedder=embedder,
+        reranker=reranker,
+    )
+    baseline = _load_candidate_record(
+        _result_path(root, baseline_candidate),
+        candidate=baseline_candidate,
+        input_fingerprint=baseline_input,
+        expected_paper_ids=paper_ids,
+        expected_question_ids=question_ids,
+    )
+    if (
+        baseline is None
+        or baseline.status != "completed"
+        or not baseline.guardrail_finalized
+    ):
+        raise SweepContractError(
+            "extension baseline is not a finalized completion: "
+            f"{baseline_candidate.config_id}"
+        )
+
+    path = (
+        root
+        / "sweep"
+        / "extensions"
+        / extension_id
+        / "candidates"
+        / candidate.stage_id
+        / f"{candidate.config_id}.json"
+    )
+    record = _load_candidate_record(
+        path,
+        candidate=candidate,
+        input_fingerprint=candidate_input,
+        expected_paper_ids=paper_ids,
+        expected_question_ids=question_ids,
+    )
+    if (
+        record is not None
+        and record.status == "completed"
+        and record.guardrail_finalized
+    ):
+        extension = record.payload.get("extension")
+        expected_extension = {
+            "extension_id": extension_id,
+            "baseline_config_id": baseline_candidate.config_id,
+        }
+        if extension != expected_extension:
+            raise SweepContractError(
+                "finalized extension metadata mismatch: "
+                f"{candidate.config_id}"
+            )
+        return record
+    progress_enabled = candidate_executor is run_complete_candidate
+    if record is None:
+        resume_progress = None
+        progress_callback = None
+        if progress_enabled:
+            resume_progress = _load_candidate_progress(
+                root,
+                candidate=candidate,
+                input_fingerprint=candidate_input,
+            )
+            if (
+                resume_progress is not None
+                and resume_progress.get("phase") == "finalized"
+            ):
+                raise SweepContractError(
+                    "finalized progress exists but the extension checkpoint "
+                    f"is invalid: {candidate.config_id}"
+                )
+            if resume_progress is None:
+                resume_progress = _empty_candidate_progress()
+                _write_candidate_progress(
+                    root,
+                    candidate=candidate,
+                    input_fingerprint=candidate_input,
+                    execution=resume_progress,
+                )
+
+            def progress_callback(
+                execution: Mapping[str, object],
+            ) -> None:
+                _write_candidate_progress(
+                    root,
+                    candidate=candidate,
+                    input_fingerprint=candidate_input,
+                    execution=execution,
+                )
+
+        if candidate.reranker != "rerank-off":
+            if (
+                before_rerank_stage is None
+                or assert_embedding_cache_only is None
+            ):
+                raise SweepContractError(
+                    "rerank extension requires model lifecycle callbacks"
+                )
+            before_rerank_stage()
+            assert_embedding_cache_only(candidate)
+        try:
+            progress_kwargs = (
+                {
+                    "resume_progress": resume_progress,
+                    "progress_callback": progress_callback,
+                }
+                if progress_enabled
+                else {}
+            )
+            result = candidate_executor(
+                candidate,
+                documents,
+                questions,
+                expected_paper_ids=paper_ids,
+                expected_question_ids=question_ids,
+                embedder=embedder,
+                reranker=reranker,
+                notes=frozen_notes,
+                mapping_overall_minimum=mapping_overall,
+                mapping_per_paper_minimum=mapping_per_paper,
+                performance_sample_question_count=performance_sample_count,
+                performance_warmup_passes=performance_warmup_passes,
+                performance_timed_passes=performance_timed_passes,
+                evidence_mapping_cache={},
+                **progress_kwargs,
+            )
+            metric_bundle_complete = all(
+                (
+                    value := result.aggregate.overall.get(metric)
+                )
+                is not None
+                and math.isfinite(float(value))
+                for metric in configured_guardrails
+            )
+            custom_guardrail_passed = (
+                True
+                if guardrail_check is None
+                else bool(guardrail_check(result))
+            )
+            result = replace(
+                result,
+                guardrails_passed=(
+                    result.guardrails_passed
+                    and metric_bundle_complete
+                    and custom_guardrail_passed
+                ),
+            )
+            payload = result.to_dict()
+            payload["metric_bundle_complete"] = metric_bundle_complete
+            payload["custom_guardrail_passed"] = custom_guardrail_passed
+            payload["execution_complete"] = result.is_complete(
+                expected_paper_ids=paper_ids,
+                expected_question_ids=question_ids,
+            )
+            payload["guardrail_finalized"] = False
+            payload["extension"] = {
+                "extension_id": extension_id,
+                "baseline_config_id": baseline_candidate.config_id,
+            }
+            record = _write_candidate_record(
+                path,
+                candidate=candidate,
+                input_fingerprint=candidate_input,
+                status=(
+                    "completed"
+                    if payload["execution_complete"]
+                    else "incomplete"
+                ),
+                payload=payload,
+            )
+        except ModelTransportError:
+            raise
+        except Exception as exc:
+            failure_context = {
+                "phase": "candidate-execution",
+                "paper_id": None,
+                "row_id": None,
+                "pass_kind": None,
+                "pass_index": None,
+            }
+            if progress_enabled:
+                annotated = getattr(
+                    exc,
+                    "researchqa_failure_context",
+                    None,
+                )
+                if isinstance(annotated, Mapping):
+                    failure_context.update(dict(annotated))
+                failure_context["progress"] = _candidate_progress_reference(
+                    root,
+                    candidate=candidate,
+                    input_fingerprint=candidate_input,
+                )
+            record = _write_candidate_record(
+                path,
+                candidate=candidate,
+                input_fingerprint=candidate_input,
+                status="failed",
+                payload={
+                    "candidate": candidate.to_dict(),
+                    "extension": {
+                        "extension_id": extension_id,
+                        "baseline_config_id": baseline_candidate.config_id,
+                    },
+                    "execution_complete": False,
+                    "failure_kind": _failure_kind(exc),
+                    "error_type": type(exc).__name__,
+                    "error": str(exc) or type(exc).__name__,
+                    "failure_context": failure_context,
+                    "traceback": traceback.format_exc(),
+                    "guardrail_finalized": False,
+                },
+            )
+
+    if record.status != "completed":
+        return record
+    policy = gates.get("relative_guardrails")
+    if not isinstance(policy, Mapping):
+        raise SweepContractError(
+            "config.gates.relative_guardrails must be a mapping"
+        )
+    candidate_payload = _read_full_candidate_payload(record)
+    baseline_payload = _read_full_candidate_payload(baseline)
+    diagnostics = _relative_guardrail_diagnostics(
+        record,
+        baseline,
+        candidate_payload,
+        baseline_payload,
+        max_domain_regression=float(
+            policy.get("max_domain_regression", 0.02)
+        ),
+        max_regressed_domains=int(
+            policy.get("max_regressed_domains", 1)
+        ),
+        max_question_type_regression=float(
+            policy.get("max_question_type_regression", 0.02)
+        ),
+        max_overall_guardrail_regression=float(
+            policy.get("max_overall_guardrail_regression", 0.005)
+        ),
+        max_new_recall_at_10_hard_failures=int(
+            policy.get("max_new_recall_at_10_hard_failures", 0)
+        ),
+    )
+    candidate_payload["guardrail_diagnostics"] = diagnostics
+    candidate_payload["guardrails_passed"] = bool(diagnostics["passed"])
+    candidate_payload["guardrail_finalized"] = True
+    record = replace(
+        _write_candidate_record(
+            path,
+            candidate=candidate,
+            input_fingerprint=candidate_input,
+            status="completed",
+            payload=candidate_payload,
+        ),
+        resumed=record.resumed,
+    )
+    if progress_enabled:
+        progress_path = _candidate_progress_path(
+            root,
+            candidate,
+            candidate_input,
+        )
+        if progress_path.is_file():
+            _finalize_candidate_progress(
+                root,
+                candidate=candidate,
+                input_fingerprint=candidate_input,
+                candidate_path=path,
+            )
+    return record
+
+
 __all__ = [
     "StrategySweepResult",
     "SweepCandidateRecord",
     "SweepContractError",
     "SweepStageRanking",
+    "run_extension_candidate",
     "run_strategy_sweep",
 ]

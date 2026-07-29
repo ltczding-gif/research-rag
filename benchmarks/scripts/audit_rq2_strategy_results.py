@@ -9,6 +9,11 @@ from pathlib import Path
 
 import yaml
 
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from benchmarks.researchqa_validity_audit import (
     audit_strategy_run,
     write_audit_csv,
@@ -16,7 +21,6 @@ from benchmarks.researchqa_validity_audit import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "benchmarks" / "configs" / "rq2-overnight.yaml"
 
 

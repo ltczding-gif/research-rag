@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from benchmarks.researchqa_chunking import (
+    PDF_STRUCTURE_FALLBACK_ID,
+    chunk_pdf,
+    structure_fallback_corpus_diagnostics,
+)
 from benchmarks.researchqa_models import (
     OLLAMA_EMBED_DIMENSIONS,
     OLLAMA_EMBED_MODEL_DIGEST,
@@ -24,11 +29,16 @@ from benchmarks.researchqa_retrieval import (
     RERANKER_REVISION,
 )
 from benchmarks.researchqa_strategy import (
+    StrategyCandidate,
+    generate_f2_candidate,
+    generate_orthogonal_candidates,
     load_main_documents,
     normalize_paper_id,
 )
 from benchmarks.researchqa_sweep import (
     StrategySweepResult,
+    SweepCandidateRecord,
+    run_extension_candidate,
     run_strategy_sweep,
 )
 
@@ -36,11 +46,14 @@ from benchmarks.researchqa_sweep import (
 RUNTIME_SCHEMA_VERSION = 1
 EXPECTED_PAPER_COUNT = 20
 EXPECTED_QUESTION_COUNT = 254
+EXPECTED_EVALUABLE_QUESTION_COUNT = 239
+EXPECTED_MAPPED_GROUP_COUNT = 380
 _PAPER_ID_RE = re.compile(r"^W\d+$")
 
 EmbeddingFactory = Callable[..., object]
 RerankerFactory = Callable[..., object]
 SweepRunner = Callable[..., StrategySweepResult]
+ExtensionRunner = Callable[..., SweepCandidateRecord]
 
 
 class ResearchQARuntimeError(RuntimeError):
@@ -53,6 +66,17 @@ class ResearchQARuntimeResult:
 
     sweep_result: StrategySweepResult
     model_preflight_path: str
+    runtime_summary_path: str
+
+
+@dataclass(frozen=True)
+class ResearchQAExtensionRuntimeResult:
+    """Completed extension plus its runtime-owned audit artifacts."""
+
+    extension_id: str
+    record: SweepCandidateRecord
+    model_preflight_path: str
+    prequality_path: str
     runtime_summary_path: str
 
 
@@ -338,6 +362,304 @@ def _sweep_summary(result: StrategySweepResult) -> dict[str, Any]:
     }
 
 
+def _f2_candidates(
+    config: Mapping[str, Any],
+) -> tuple[StrategyCandidate, StrategyCandidate]:
+    candidate = generate_f2_candidate(config)
+    plan = generate_orthogonal_candidates(config)
+    baselines = tuple(
+        row
+        for row in plan.stages.get("pdf-chunker", ())
+        if (
+            row.pdf_chunker == "pdf-fixed-1200"
+            and row.retriever == "dense"
+            and row.source_composition == "pdf-only"
+            and row.reranker == "rerank-off"
+        )
+    )
+    if len(baselines) != 1:
+        raise ResearchQARuntimeError(
+            "F2 requires exactly one frozen pdf-fixed-1200 dense baseline"
+        )
+    return candidate, baselines[0]
+
+
+def _f2_prequality(
+    documents: Mapping[str, object],
+) -> Mapping[str, object]:
+    results = {
+        paper_id: chunk_pdf(
+            document,
+            PDF_STRUCTURE_FALLBACK_ID,
+            is_main=True,
+        )
+        for paper_id, document in sorted(documents.items())
+    }
+    diagnostics = structure_fallback_corpus_diagnostics(results)
+    if diagnostics.get("contract_status") != "passed":
+        raise ResearchQARuntimeError(
+            "F2 pre-quality contract failed: output/fixed1200="
+            f"{float(diagnostics['output_to_fixed_1200_ratio']):.6f}"
+        )
+    return diagnostics
+
+
+def run_researchqa_extension_runtime(
+    config: Mapping[str, Any],
+    run_root: str | Path,
+    *,
+    extension_id: str,
+    embedding_factory: EmbeddingFactory = OllamaBatchEmbeddingClient,
+    extension_runner: ExtensionRunner = run_extension_candidate,
+) -> ResearchQAExtensionRuntimeResult:
+    """Run one approved extension without loading an unused reranker."""
+
+    if extension_id != "F2":
+        raise ResearchQARuntimeError(
+            f"unsupported extension {extension_id!r}; currently expected 'F2'"
+        )
+
+    root = Path(run_root).resolve(strict=False)
+    extension_root = root / "sweep" / "extensions" / extension_id
+    runtime_root = extension_root / "runtime"
+    preflight_path = runtime_root / "model-preflight.json"
+    prequality_path = runtime_root / "prequality.json"
+    summary_path = runtime_root / "runtime-summary.json"
+    embedding_cache_dir = root / "model-cache" / "embeddings"
+
+    embedding: object | None = None
+    embedding_preflight: Mapping[str, Any] | None = None
+    embedding_released = False
+    record: SweepCandidateRecord | None = None
+    candidate: StrategyCandidate | None = None
+    baseline: StrategyCandidate | None = None
+    diagnostics: Mapping[str, object] | None = None
+    input_summary: dict[str, Any] = {}
+
+    def write_preflight(
+        *,
+        status: str,
+        error: BaseException | None = None,
+    ) -> None:
+        _atomic_write_json(
+            preflight_path,
+            {
+                "schema_version": RUNTIME_SCHEMA_VERSION,
+                "extension_id": extension_id,
+                "status": status,
+                "embedding": embedding_preflight,
+                "reranker": {
+                    "required": False,
+                    "reason": "extension-candidate-rerank-off",
+                },
+                "lifecycle": {
+                    "embedding_released": embedding_released,
+                    "reranker_loaded": False,
+                },
+                "error": (
+                    {
+                        "type": type(error).__name__,
+                        "message": str(error),
+                    }
+                    if error is not None
+                    else None
+                ),
+            },
+        )
+
+    failure: BaseException | None = None
+    try:
+        _validate_model_config(config)
+        questions, paper_ids, question_path = load_suite_questions(config)
+        frozen_notes, manifest_path = load_frozen_notes(
+            root,
+            expected_paper_ids=paper_ids,
+        )
+        documents = load_main_documents(
+            root,
+            expected_paper_ids=paper_ids,
+        )
+        if len(documents) != EXPECTED_PAPER_COUNT:
+            raise ResearchQARuntimeError(
+                f"runtime requires exactly {EXPECTED_PAPER_COUNT} Main documents"
+            )
+        candidate, baseline = _f2_candidates(config)
+        diagnostics = _f2_prequality(documents)
+        _atomic_write_json(
+            prequality_path,
+            {
+                "schema_version": RUNTIME_SCHEMA_VERSION,
+                "extension_id": extension_id,
+                "candidate_config_id": candidate.config_id,
+                "status": "completed",
+                "diagnostics": diagnostics,
+            },
+        )
+        input_summary = {
+            "questions_path": str(question_path),
+            "frozen_notes_manifest_path": str(manifest_path),
+            "retrieval_scope": config["retrieval"]["scope"],
+            "paper_count": len(documents),
+            "question_count": len(questions),
+            "paper_ids": list(paper_ids),
+        }
+
+        embedding = embedding_factory(cache_dir=embedding_cache_dir)
+        embedding_preflight = _preflight_payload(embedding.preflight())
+        write_preflight(status="embedding-preflighted")
+
+        record = extension_runner(
+            config=config,
+            run_root=root,
+            documents=documents,
+            questions=questions,
+            frozen_notes=frozen_notes,
+            embedder=embedding,
+            reranker=None,
+            extension_id=extension_id,
+            candidate=candidate,
+            baseline_candidate=baseline,
+        )
+        if not isinstance(record, SweepCandidateRecord):
+            raise ResearchQARuntimeError(
+                "extension runner must return SweepCandidateRecord"
+            )
+        if record.candidate != candidate:
+            raise ResearchQARuntimeError(
+                "extension runner returned a different candidate identity"
+            )
+        if not record.is_complete(
+            expected_paper_ids=paper_ids,
+            expected_question_ids=tuple(
+                str(question["row_id"]) for question in questions
+            ),
+        ):
+            raise ResearchQARuntimeError(
+                f"extension {extension_id} did not complete the frozen input set: "
+                f"status={record.status}, error={record.error}"
+            )
+        if not record.guardrail_finalized:
+            raise ResearchQARuntimeError(
+                f"extension {extension_id} completed without finalized guardrails"
+            )
+        if (
+            len(record.evaluable_set) != EXPECTED_MAPPED_GROUP_COUNT
+            or len({row_id for row_id, _group_id in record.evaluable_set})
+            != EXPECTED_EVALUABLE_QUESTION_COUNT
+        ):
+            raise ResearchQARuntimeError(
+                f"extension {extension_id} must preserve "
+                f"{EXPECTED_EVALUABLE_QUESTION_COUNT} evaluable questions and "
+                f"{EXPECTED_MAPPED_GROUP_COUNT} mapped groups"
+            )
+        corpus_diagnostics = record.payload.get("corpus_diagnostics")
+        if (
+            not isinstance(corpus_diagnostics, Mapping)
+            or corpus_diagnostics.get("pdf_chunking") != diagnostics
+        ):
+            raise ResearchQARuntimeError(
+                "extension result diagnostics differ from F2 pre-quality"
+            )
+    except BaseException as exc:
+        failure = exc
+    finally:
+        if embedding is not None:
+            try:
+                embedding.release_model()
+                embedding_released = True
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+
+    if failure is not None:
+        write_preflight(status="failed", error=failure)
+        _atomic_write_json(
+            summary_path,
+            {
+                "schema_version": RUNTIME_SCHEMA_VERSION,
+                "extension_id": extension_id,
+                "status": "failed",
+                "run_root": str(root),
+                "inputs": input_summary,
+                "candidate": (
+                    candidate.to_dict() if candidate is not None else None
+                ),
+                "baseline": (
+                    baseline.to_dict() if baseline is not None else None
+                ),
+                "prequality_path": str(prequality_path.resolve()),
+                "model_preflight_path": str(preflight_path.resolve()),
+                "error": {
+                    "type": type(failure).__name__,
+                    "message": str(failure),
+                },
+            },
+        )
+        if isinstance(failure, (KeyboardInterrupt, SystemExit)):
+            raise failure
+        if isinstance(failure, ResearchQARuntimeError):
+            raise failure
+        raise ResearchQARuntimeError(
+            f"ResearchQA extension runtime failed: {failure}"
+        ) from failure
+
+    assert record is not None
+    assert candidate is not None
+    assert baseline is not None
+    assert diagnostics is not None
+    write_preflight(status="completed")
+    _atomic_write_json(
+        summary_path,
+        {
+            "schema_version": RUNTIME_SCHEMA_VERSION,
+            "extension_id": extension_id,
+            "status": "completed",
+            "run_root": str(root),
+            "inputs": input_summary,
+            "candidate": candidate.to_dict(),
+            "baseline": baseline.to_dict(),
+            "model_cache": {
+                "embeddings": str(embedding_cache_dir.resolve()),
+            },
+            "lifecycle": {
+                "embedding_released": embedding_released,
+                "reranker_loaded": False,
+            },
+            "prequality_path": str(prequality_path.resolve()),
+            "model_preflight_path": str(preflight_path.resolve()),
+            "result": {
+                "status": record.status,
+                "result_path": record.result_path,
+                "resumed": record.resumed,
+                "primary_score": record.primary,
+                "guardrails_passed": record.guardrails_passed,
+                "completed_paper_count": len(record.completed_paper_ids),
+                "completed_question_count": len(
+                    record.completed_question_ids
+                ),
+                "evaluable_question_count": len(
+                    {
+                        row_id
+                        for row_id, _group_id in record.evaluable_set
+                    }
+                ),
+                "mapped_group_count": len(record.evaluable_set),
+                "chunk_count": record.chunk_count,
+                "corpus_diagnostics": {
+                    "pdf_chunking": diagnostics,
+                },
+            },
+        },
+    )
+    return ResearchQAExtensionRuntimeResult(
+        extension_id=extension_id,
+        record=record,
+        model_preflight_path=str(preflight_path.resolve()),
+        prequality_path=str(prequality_path.resolve()),
+        runtime_summary_path=str(summary_path.resolve()),
+    )
+
+
 def run_researchqa_runtime(
     config: Mapping[str, Any],
     run_root: str | Path,
@@ -543,10 +865,14 @@ def run_researchqa_runtime(
 __all__ = [
     "EXPECTED_PAPER_COUNT",
     "EXPECTED_QUESTION_COUNT",
+    "EXPECTED_EVALUABLE_QUESTION_COUNT",
+    "EXPECTED_MAPPED_GROUP_COUNT",
     "RUNTIME_SCHEMA_VERSION",
     "ResearchQARuntimeError",
+    "ResearchQAExtensionRuntimeResult",
     "ResearchQARuntimeResult",
     "load_frozen_notes",
     "load_suite_questions",
+    "run_researchqa_extension_runtime",
     "run_researchqa_runtime",
 ]

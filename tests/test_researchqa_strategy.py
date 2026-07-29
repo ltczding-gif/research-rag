@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from benchmarks.researchqa_chunking import chunk_pdf
+import benchmarks.researchqa_strategy as strategy
+from benchmarks.researchqa_chunking import (
+    PDF_STRUCTURE_FALLBACK_ID,
+    PDF_STRUCTURE_FALLBACK_POLICY,
+    chunk_pdf,
+)
 from benchmarks.researchqa_retrieval import (
     RERANKER_MODEL_ID,
     RERANKER_REVISION,
@@ -21,6 +26,7 @@ from benchmarks.researchqa_strategy import (
     REFERENCE_PAGE_HINT_METHOD,
     REFERENCE_SECTION_HINT_METHOD,
     StrategyContractError,
+    generate_f2_candidate,
     generate_orthogonal_candidates,
     load_main_documents,
     map_all_references,
@@ -385,6 +391,69 @@ def test_candidate_plan_is_orthogonal_and_confirmation_is_capped_at_16():
         if candidate.note_chunker == "note-whole"
     )
     assert not note_whole.rankable
+
+
+def test_f2_candidate_is_independent_and_policy_bound():
+    config = _config()
+    original = generate_orthogonal_candidates(config)
+    first = generate_f2_candidate(config)
+    second = generate_f2_candidate(config)
+
+    assert len(original.candidates) == 23
+    assert all(
+        candidate.pdf_chunker != PDF_STRUCTURE_FALLBACK_ID
+        for candidate in original.candidates
+    )
+    assert first == second
+    assert first.config_id.startswith("repair-f2-")
+    assert first.stage_id == "pdf-chunker"
+    assert first.pdf_chunker == PDF_STRUCTURE_FALLBACK_ID
+    assert first.retriever == "dense"
+    assert first.source_composition == "pdf-only"
+    assert first.reranker == "rerank-off"
+    assert (
+        PDF_STRUCTURE_FALLBACK_POLICY["revision"]
+        == "rq2-f2-structure-quality-v1"
+    )
+
+
+def test_f2_corpus_records_global_diagnostics_and_fails_over_cost(
+    tmp_path,
+    monkeypatch,
+):
+    documents, _questions = _fixture_corpus(tmp_path)
+    candidate = generate_f2_candidate(_config())
+
+    corpus = strategy._prepare_candidate_corpus(
+        candidate,
+        documents,
+        notes=None,
+    )
+    diagnostics = corpus.diagnostics["pdf_chunking"]
+    assert diagnostics["paper_count"] == 2
+    assert diagnostics["contract_status"] == "passed"
+    assert all(
+        chunk.config_id == PDF_STRUCTURE_FALLBACK_ID
+        for chunk in corpus.pdf_chunks
+    )
+
+    monkeypatch.setattr(
+        strategy,
+        "structure_fallback_corpus_diagnostics",
+        lambda _results: {
+            "contract_status": "failed",
+            "output_to_fixed_1200_ratio": 1.3,
+        },
+    )
+    with pytest.raises(
+        StrategyContractError,
+        match="F2 global output cost 1.300000 exceeds 1.250000",
+    ):
+        strategy._prepare_candidate_corpus(
+            candidate,
+            documents,
+            notes=None,
+        )
 
 
 def test_confirmation_deduplicates_hierarchical_pdf_compatibility_aliases():

@@ -11,6 +11,11 @@ from benchmarks.researchqa_models import (
     OLLAMA_EMBED_MODEL_DIGEST,
     OLLAMA_EMBED_MODEL_ID,
 )
+from benchmarks.researchqa_chunking import (
+    PDF_STRUCTURE_FALLBACK_ID,
+    chunk_pdf,
+    structure_fallback_corpus_diagnostics,
+)
 from benchmarks.researchqa_notes import GENERIC_TEMPLATE
 from benchmarks.researchqa_retrieval import (
     RERANKER_MODEL_ID,
@@ -18,9 +23,13 @@ from benchmarks.researchqa_retrieval import (
 )
 from benchmarks.researchqa_runtime import (
     ResearchQARuntimeError,
+    run_researchqa_extension_runtime,
     run_researchqa_runtime,
 )
-from benchmarks.researchqa_sweep import StrategySweepResult
+from benchmarks.researchqa_sweep import (
+    StrategySweepResult,
+    SweepCandidateRecord,
+)
 
 
 def _sha(value: bytes | str) -> str:
@@ -40,7 +49,14 @@ def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
 
 
 def _write_native_ir(run_root: Path, paper_id: str) -> None:
-    text = f"Evidence for {paper_id} appears on this Main page."
+    text = " ".join(
+        (
+            f"Evidence for {paper_id} appears on this Main page.",
+            "The methods, observations, controls, and limitations are retained",
+            "so deterministic chunking has enough indexable text for runtime",
+            "contract tests without relying on an external PDF parser.",
+        )
+    )
     _write_jsonl(
         run_root / "source" / paper_id / "native-ir.jsonl",
         [
@@ -139,6 +155,142 @@ def _runtime_fixture(tmp_path: Path) -> tuple[dict[str, object], Path]:
         },
     }
     return config, run_root
+
+
+def _add_extension_contract(config: dict[str, object]) -> None:
+    config["gates"] = {
+        "mapping_overall_minimum": 0.95,
+        "mapping_per_paper_minimum": 0.90,
+        "relative_guardrails": {
+            "max_domain_regression": 0.02,
+            "max_regressed_domains": 1,
+            "max_question_type_regression": 0.02,
+            "max_overall_guardrail_regression": 0.005,
+            "max_new_recall_at_10_hard_failures": 0,
+        },
+    }
+    config["metrics"] = {
+        "guardrails": [
+            "recall_at_5",
+            "recall_at_10",
+            "mrr",
+            "all_required_groups_success_at_5",
+            "all_required_groups_success_at_10",
+            "groups_covered_at_10",
+        ],
+    }
+    config["performance"] = {
+        "sample_question_count": 40,
+        "warmup_passes": 1,
+        "timed_passes": 3,
+    }
+    config["stages"] = {
+        "pdf_chunkers": [
+            {"id": value}
+            for value in (
+                "pdf-fixed-400",
+                "pdf-fixed-800",
+                "pdf-fixed-1200",
+                "pdf-page-aware",
+                "pdf-section-aware",
+                "pdf-structure-aware",
+                "pdf-parent-child",
+            )
+        ],
+        "note_chunkers": [
+            {"id": "note-whole", "rankable": False},
+            {"id": "note-section", "rankable": True},
+            {"id": "note-claim-evidence", "rankable": True},
+            {"id": "note-reviewer-concern", "rankable": False},
+        ],
+        "retrievers": [
+            {"id": "dense"},
+            {"id": "bm25"},
+            {"id": "hybrid-rrf"},
+        ],
+        "source_compositions": [
+            {"id": "pdf-only"},
+            {"id": "note-to-pdf"},
+            {"id": "pdf-note-rrf"},
+            {"id": "note-guided-pdf"},
+            {"id": "hierarchical-pdf"},
+        ],
+        "rerankers": [
+            {"id": "rerank-off", "enabled": False},
+            {
+                "id": "rerank-20-to-10",
+                "enabled": True,
+                "input_k": 20,
+                "output_k": 10,
+            },
+            {
+                "id": "rerank-50-to-10",
+                "enabled": True,
+                "input_k": 50,
+                "output_k": 10,
+            },
+            {
+                "id": "rerank-100-to-10",
+                "enabled": True,
+                "input_k": 100,
+                "output_k": 10,
+            },
+        ],
+    }
+
+
+def _extension_record(
+    kwargs: dict[str, object],
+    *,
+    status: str = "completed",
+) -> SweepCandidateRecord:
+    documents = kwargs["documents"]
+    diagnostics = structure_fallback_corpus_diagnostics(
+        {
+            paper_id: chunk_pdf(
+                document,
+                PDF_STRUCTURE_FALLBACK_ID,
+                is_main=True,
+            )
+            for paper_id, document in documents.items()
+        }
+    )
+    candidate = kwargs["candidate"]
+    questions = kwargs["questions"]
+    question_ids = [str(question["row_id"]) for question in questions]
+    evaluable_set = [
+        [row_id, f"group-{index:03d}-a"]
+        for index, row_id in enumerate(question_ids[:239])
+    ]
+    evaluable_set.extend(
+        [row_id, f"group-{index:03d}-b"]
+        for index, row_id in enumerate(question_ids[:141])
+    )
+    payload = {
+        "execution_complete": status == "completed",
+        "guardrail_finalized": status == "completed",
+        "guardrails_passed": status == "completed",
+        "primary_score": 0.75,
+        "completed_paper_ids": sorted(documents),
+        "completed_question_ids": question_ids,
+        "mapping": {
+            "coverage": {"passed": status == "completed"},
+            "evaluable_set": evaluable_set,
+        },
+        "chunk_count": diagnostics["output_chunk_count"],
+        "corpus_diagnostics": {"pdf_chunking": diagnostics},
+        "extension": {
+            "extension_id": kwargs["extension_id"],
+            "baseline_config_id": kwargs["baseline_candidate"].config_id,
+        },
+    }
+    return SweepCandidateRecord(
+        candidate=candidate,
+        status=status,
+        input_fingerprint="synthetic-extension-input",
+        payload=payload,
+        result_path="synthetic-extension-result.json",
+    )
 
 
 @pytest.mark.parametrize("failure_mode", ["missing", "sha-mismatch"])
@@ -374,3 +526,128 @@ def test_runtime_fails_closed_and_releases_reranker_on_sweep_error(
     assert summary["status"] == "failed"
     assert summary["error"]["type"] == "ValueError"
     assert summary["error"]["message"] == "synthetic sweep failure"
+
+
+def test_extension_runtime_runs_f2_without_loading_reranker(
+    tmp_path: Path,
+) -> None:
+    config, run_root = _runtime_fixture(tmp_path)
+    _add_extension_contract(config)
+    events: list[str] = []
+
+    class FakeEmbedding:
+        model_id = OLLAMA_EMBED_MODEL_ID
+        model_digest = OLLAMA_EMBED_MODEL_DIGEST
+        dimensions = OLLAMA_EMBED_DIMENSIONS
+        normalization_revision = "exact-text-utf8-v1"
+
+        def __init__(self, *, cache_dir: Path):
+            self.cache_dir = Path(cache_dir)
+            events.append("embedding:init")
+
+        def preflight(self) -> dict[str, object]:
+            events.append("embedding:preflight")
+            return {
+                "provider": "fake-ollama",
+                "model_id": self.model_id,
+                "fingerprint": "extension-embedding",
+            }
+
+        def release_model(self) -> bool:
+            events.append("embedding:release")
+            return True
+
+    def fake_extension(**kwargs: object) -> SweepCandidateRecord:
+        events.append("extension:run")
+        assert kwargs["extension_id"] == "F2"
+        assert kwargs["reranker"] is None
+        assert kwargs["candidate"].pdf_chunker == PDF_STRUCTURE_FALLBACK_ID
+        assert kwargs["baseline_candidate"].pdf_chunker == "pdf-fixed-1200"
+        return _extension_record(kwargs)
+
+    result = run_researchqa_extension_runtime(
+        config,
+        run_root,
+        extension_id="F2",
+        embedding_factory=FakeEmbedding,
+        extension_runner=fake_extension,
+    )
+
+    assert events == [
+        "embedding:init",
+        "embedding:preflight",
+        "extension:run",
+        "embedding:release",
+    ]
+    assert result.record.status == "completed"
+    assert result.record.guardrail_finalized is True
+    preflight = json.loads(
+        Path(result.model_preflight_path).read_text(encoding="utf-8")
+    )
+    prequality = json.loads(
+        Path(result.prequality_path).read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        Path(result.runtime_summary_path).read_text(encoding="utf-8")
+    )
+    assert preflight["status"] == "completed"
+    assert preflight["reranker"]["required"] is False
+    assert prequality["status"] == "completed"
+    assert prequality["diagnostics"]["paper_count"] == 20
+    assert summary["status"] == "completed"
+    assert summary["lifecycle"] == {
+        "embedding_released": True,
+        "reranker_loaded": False,
+    }
+    assert summary["result"]["completed_paper_count"] == 20
+    assert summary["result"]["completed_question_count"] == 254
+    assert summary["result"]["evaluable_question_count"] == 239
+    assert summary["result"]["mapped_group_count"] == 380
+
+
+def test_extension_runtime_fails_closed_on_incomplete_record(
+    tmp_path: Path,
+) -> None:
+    config, run_root = _runtime_fixture(tmp_path)
+    _add_extension_contract(config)
+    events: list[str] = []
+
+    class FakeEmbedding:
+        def __init__(self, **_kwargs: object):
+            pass
+
+        def preflight(self) -> dict[str, str]:
+            return {"fingerprint": "extension-embedding"}
+
+        def release_model(self) -> bool:
+            events.append("embedding:release")
+            return True
+
+    def incomplete_extension(**kwargs: object) -> SweepCandidateRecord:
+        return _extension_record(kwargs, status="failed")
+
+    with pytest.raises(
+        ResearchQARuntimeError,
+        match="did not complete the frozen input set",
+    ):
+        run_researchqa_extension_runtime(
+            config,
+            run_root,
+            extension_id="F2",
+            embedding_factory=FakeEmbedding,
+            extension_runner=incomplete_extension,
+        )
+
+    assert events == ["embedding:release"]
+    summary = json.loads(
+        (
+            run_root
+            / "sweep"
+            / "extensions"
+            / "F2"
+            / "runtime"
+            / "runtime-summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert summary["status"] == "failed"
+    assert summary["error"]["type"] == "ResearchQARuntimeError"

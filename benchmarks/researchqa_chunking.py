@@ -26,12 +26,25 @@ PDF_CHUNKER_IDS = (
     "pdf-structure-aware",
     "pdf-parent-child",
 )
+PDF_STRUCTURE_FALLBACK_ID = "pdf-structure-aware-fallback"
+PDF_EXTENSION_CHUNKER_IDS = (PDF_STRUCTURE_FALLBACK_ID,)
+EXECUTABLE_PDF_CHUNKER_IDS = PDF_CHUNKER_IDS + PDF_EXTENSION_CHUNKER_IDS
 NOTE_CHUNKER_IDS = (
     "note-whole",
     "note-section",
     "note-claim-evidence",
     "note-reviewer-concern",
 )
+PDF_STRUCTURE_FALLBACK_POLICY: Mapping[str, object] = {
+    "revision": "rq2-f2-structure-quality-v1",
+    "fallback_chunker": "pdf-fixed-1200",
+    "max_structure_to_fixed_1200_ratio": 2.5,
+    "max_short_chunk_rate": 0.40,
+    "short_chunk_character_threshold": 100,
+    "minimum_exact_duplicate_count": 5,
+    "minimum_exact_duplicate_rate": 0.04,
+    "max_global_output_to_fixed_1200_ratio": 1.25,
+}
 
 _FIXED_CONFIGS = {
     "pdf-fixed-400": (400, 320, 80),
@@ -108,7 +121,7 @@ class ResearchQAChunk:
     extraction_warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.config_id not in PDF_CHUNKER_IDS:
+        if self.config_id not in EXECUTABLE_PDF_CHUNKER_IDS:
             raise ValueError(f"unknown PDF chunker: {self.config_id}")
         if self.role not in {"chunk", "child", "parent"}:
             raise ValueError(f"invalid chunk role: {self.role}")
@@ -146,6 +159,7 @@ class ChunkingResult:
     chunks: tuple[ResearchQAChunk, ...]
     parents: tuple[ResearchQAChunk, ...] = ()
     failure_reason: str | None = None
+    diagnostics: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if self.status not in {"completed", "failed"}:
@@ -291,6 +305,22 @@ def _chunker_fingerprint(config_id: str) -> str:
             "hard_max_non_atomic": 1200,
             "atomic": ("figure-caption", "table", "equation", "adjacent-explanation"),
             "detector_revision": 1,
+        }
+    elif config_id == PDF_STRUCTURE_FALLBACK_ID:
+        rule = {
+            "kind": "structure-aware-with-fixed-1200-fallback",
+            "structure_rule": {
+                "target": 800,
+                "hard_max_non_atomic": 1200,
+                "atomic": (
+                    "figure-caption",
+                    "table",
+                    "equation",
+                    "adjacent-explanation",
+                ),
+                "detector_revision": 1,
+            },
+            "policy": dict(PDF_STRUCTURE_FALLBACK_POLICY),
         }
     elif config_id == "pdf-parent-child":
         rule = {
@@ -549,10 +579,12 @@ def _fixed_chunks(
     *,
     is_main: bool,
     config_id: str,
+    output_config_id: str | None = None,
 ) -> ChunkingResult:
     joined, page_ranges = _joined_pages(document)
     joined = truncate_final_references(joined)
     size, step, minimum = _FIXED_CONFIGS[config_id]
+    materialized_config_id = output_config_id or config_id
     chunks = []
     for start in range(0, len(joined), step):
         text = joined[start : start + size]
@@ -562,7 +594,7 @@ def _fixed_chunks(
             _make_pdf_chunk(
                 document=document,
                 is_main=is_main,
-                config_id=config_id,
+                config_id=materialized_config_id,
                 role="chunk",
                 text=text,
                 start=start,
@@ -573,13 +605,13 @@ def _fixed_chunks(
         )
     if not chunks:
         return ChunkingResult(
-            config_id=config_id,
+            config_id=materialized_config_id,
             status="failed",
             chunks=(),
             failure_reason="no-indexable-text",
         )
     return ChunkingResult(
-        config_id=config_id,
+        config_id=materialized_config_id,
         status="completed",
         chunks=_link_pdf_chunks(chunks),
     )
@@ -674,8 +706,8 @@ def _structure_chunks(
     document: CanonicalDocument,
     *,
     is_main: bool,
+    config_id: str = "pdf-structure-aware",
 ) -> ChunkingResult:
-    config_id = "pdf-structure-aware"
     joined, page_ranges = _joined_pages(document)
     sections = _section_ranges(joined) or ((0, len(joined), ()),)
     chunks = []
@@ -759,6 +791,172 @@ def _structure_chunks(
         status="completed",
         chunks=_link_pdf_chunks(chunks),
     )
+
+
+def _structure_fallback_chunks(
+    document: CanonicalDocument,
+    *,
+    is_main: bool,
+) -> ChunkingResult:
+    """Apply the frozen F2 per-paper structure quality gate."""
+
+    config_id = PDF_STRUCTURE_FALLBACK_ID
+    structure = _structure_chunks(
+        document,
+        is_main=is_main,
+        config_id=config_id,
+    )
+    fixed = _fixed_chunks(
+        document,
+        is_main=is_main,
+        config_id="pdf-fixed-1200",
+        output_config_id=config_id,
+    )
+    if fixed.status != "completed":
+        return ChunkingResult(
+            config_id=config_id,
+            status="failed",
+            chunks=(),
+            failure_reason=(
+                "fixed-1200-fallback-"
+                + str(fixed.failure_reason or "failed")
+            ),
+        )
+
+    structure_chunks = structure.chunks
+    fixed_count = len(fixed.chunks)
+    structure_count = len(structure_chunks)
+    expansion_ratio = (
+        structure_count / fixed_count if fixed_count else float("inf")
+    )
+    short_count = sum(
+        len(chunk.text) < int(
+            PDF_STRUCTURE_FALLBACK_POLICY[
+                "short_chunk_character_threshold"
+            ]
+        )
+        for chunk in structure_chunks
+    )
+    short_rate = (
+        short_count / structure_count if structure_count else 0.0
+    )
+    unique_text_count = len({chunk.text for chunk in structure_chunks})
+    duplicate_count = structure_count - unique_text_count
+    duplicate_rate = (
+        duplicate_count / structure_count if structure_count else 0.0
+    )
+
+    fallback_reason: str | None = None
+    if structure.status != "completed":
+        fallback_reason = str(
+            structure.failure_reason or "structure-chunking-failed"
+        )
+    elif not structure_chunks:
+        fallback_reason = "structure-no-indexable-text"
+    elif expansion_ratio > float(
+        PDF_STRUCTURE_FALLBACK_POLICY[
+            "max_structure_to_fixed_1200_ratio"
+        ]
+    ):
+        fallback_reason = "structure-expansion-ratio-exceeded"
+    elif short_rate > float(
+        PDF_STRUCTURE_FALLBACK_POLICY["max_short_chunk_rate"]
+    ):
+        fallback_reason = "structure-short-chunk-rate-exceeded"
+    elif (
+        duplicate_count
+        >= int(
+            PDF_STRUCTURE_FALLBACK_POLICY[
+                "minimum_exact_duplicate_count"
+            ]
+        )
+        and duplicate_rate
+        >= float(
+            PDF_STRUCTURE_FALLBACK_POLICY[
+                "minimum_exact_duplicate_rate"
+            ]
+        )
+    ):
+        fallback_reason = "structure-exact-duplicate-rate-exceeded"
+
+    selected = fixed if fallback_reason is not None else structure
+    diagnostics: dict[str, object] = {
+        "policy": dict(PDF_STRUCTURE_FALLBACK_POLICY),
+        "structure_detected": structure.status == "completed",
+        "structure_status": structure.status,
+        "structure_failure_reason": structure.failure_reason,
+        "structure_chunk_count": structure_count,
+        "fixed_1200_chunk_count": fixed_count,
+        "structure_to_fixed_1200_ratio": expansion_ratio,
+        "structure_short_chunk_count": short_count,
+        "structure_short_chunk_rate": short_rate,
+        "structure_exact_duplicate_count": duplicate_count,
+        "structure_exact_duplicate_rate": duplicate_rate,
+        "fallback": fallback_reason is not None,
+        "fallback_reason": fallback_reason,
+        "output_chunk_count": len(selected.chunks),
+    }
+    return ChunkingResult(
+        config_id=config_id,
+        status="completed",
+        chunks=selected.chunks,
+        diagnostics=diagnostics,
+    )
+
+
+def structure_fallback_corpus_diagnostics(
+    results: Mapping[str, ChunkingResult],
+) -> Mapping[str, object]:
+    """Summarize and apply F2's frozen global output-cost contract."""
+
+    per_paper: dict[str, Mapping[str, object]] = {}
+    for paper_id, result in sorted(results.items()):
+        if (
+            result.config_id != PDF_STRUCTURE_FALLBACK_ID
+            or result.status != "completed"
+            or not isinstance(result.diagnostics, Mapping)
+        ):
+            raise ValueError(
+                f"{paper_id}: invalid {PDF_STRUCTURE_FALLBACK_ID} result"
+            )
+        per_paper[paper_id] = dict(result.diagnostics)
+    fixed_total = sum(
+        int(row["fixed_1200_chunk_count"])
+        for row in per_paper.values()
+    )
+    output_total = sum(
+        int(row["output_chunk_count"]) for row in per_paper.values()
+    )
+    output_ratio = (
+        output_total / fixed_total if fixed_total else float("inf")
+    )
+    fallback_paper_ids = tuple(
+        paper_id
+        for paper_id, row in per_paper.items()
+        if row.get("fallback") is True
+    )
+    maximum = float(
+        PDF_STRUCTURE_FALLBACK_POLICY[
+            "max_global_output_to_fixed_1200_ratio"
+        ]
+    )
+    return {
+        "config_id": PDF_STRUCTURE_FALLBACK_ID,
+        "policy": dict(PDF_STRUCTURE_FALLBACK_POLICY),
+        "paper_count": len(per_paper),
+        "fixed_1200_chunk_count": fixed_total,
+        "output_chunk_count": output_total,
+        "output_to_fixed_1200_ratio": output_ratio,
+        "fallback_paper_ids": list(fallback_paper_ids),
+        "fallback_paper_count": len(fallback_paper_ids),
+        "fallback_rate": (
+            len(fallback_paper_ids) / len(per_paper)
+            if per_paper
+            else 0.0
+        ),
+        "contract_status": "passed" if output_ratio <= maximum else "failed",
+        "per_paper": per_paper,
+    }
 
 
 def _bounded_parent_ranges(
@@ -855,8 +1053,8 @@ def chunk_pdf(
     *,
     is_main: bool,
 ) -> ChunkingResult:
-    """Run one of the seven approved deterministic PDF chunkers."""
-    if config_id not in PDF_CHUNKER_IDS:
+    """Run an approved baseline or explicit repair PDF chunker."""
+    if config_id not in EXECUTABLE_PDF_CHUNKER_IDS:
         raise ValueError(f"unknown PDF chunker: {config_id}")
     if not isinstance(is_main, bool):
         raise TypeError("is_main must be a bool")
@@ -866,6 +1064,8 @@ def chunk_pdf(
         return _aware_chunks(document, is_main=is_main, config_id=config_id)
     if config_id == "pdf-structure-aware":
         return _structure_chunks(document, is_main=is_main)
+    if config_id == PDF_STRUCTURE_FALLBACK_ID:
+        return _structure_fallback_chunks(document, is_main=is_main)
     return _parent_child_chunks(document, is_main=is_main)
 
 

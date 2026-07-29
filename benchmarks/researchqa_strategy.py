@@ -27,13 +27,17 @@ from typing import (
 from urllib.parse import urlparse
 
 from benchmarks.researchqa_chunking import (
+    EXECUTABLE_PDF_CHUNKER_IDS,
     NOTE_CHUNKER_IDS,
     PDF_CHUNKER_IDS,
+    PDF_STRUCTURE_FALLBACK_ID,
+    PDF_STRUCTURE_FALLBACK_POLICY,
     NoteChunk,
     ResearchQAChunk,
     chunk_note,
     chunk_pdf,
     note_chunk_pdf_backlinks,
+    structure_fallback_corpus_diagnostics,
 )
 from benchmarks.researchqa_retrieval import (
     BM25Index,
@@ -712,7 +716,11 @@ class StrategyCandidate:
             )
         if not self.config_id:
             raise StrategyContractError("candidate config_id must be non-empty")
-        _require_member(self.pdf_chunker, PDF_CHUNKER_IDS, "pdf_chunker")
+        _require_member(
+            self.pdf_chunker,
+            EXECUTABLE_PDF_CHUNKER_IDS,
+            "pdf_chunker",
+        )
         if self.note_chunker is not None:
             _require_member(self.note_chunker, NOTE_CHUNKER_IDS, "note_chunker")
         _require_member(self.retriever, RETRIEVER_IDS, "retriever")
@@ -1024,6 +1032,42 @@ def generate_orthogonal_candidates(
     return CandidatePlan(stages=planned)
 
 
+def generate_f2_candidate(
+    config: Mapping[str, Any],
+) -> StrategyCandidate:
+    """Create the independent F2 repair candidate without changing the 35."""
+
+    stages = config.get("stages")
+    if not isinstance(stages, Mapping):
+        raise StrategyContractError("config.stages must be a mapping")
+    reranker_rows = _option_rows(stages, "rerankers")
+    reranker_options = {str(row["id"]): row for row in reranker_rows}
+    if set(reranker_options) != set(RERANKER_IDS):
+        raise StrategyContractError(
+            f"rerankers must be exactly {list(RERANKER_IDS)}"
+        )
+    components = {
+        "stage_id": "pdf-chunker",
+        "pdf_chunker": PDF_STRUCTURE_FALLBACK_ID,
+        "note_chunker": None,
+        "retriever": "dense",
+        "source_composition": "pdf-only",
+        "reranker": "rerank-off",
+    }
+    identity = {
+        "repair_id": "F2",
+        "components": components,
+        "policy": dict(PDF_STRUCTURE_FALLBACK_POLICY),
+    }
+    reranker_option = reranker_options["rerank-off"]
+    return StrategyCandidate(
+        config_id=f"repair-f2-{canonical_fingerprint(identity)[:20]}",
+        reranker_depth=None,
+        reranker_keep=int(reranker_option.get("output_k", 10)),
+        **components,
+    )
+
+
 def _option_rows(
     stages: Mapping[str, Any],
     key: str,
@@ -1102,6 +1146,7 @@ class CandidateRunResult:
     guardrails_passed: bool
     retrieval_scope: str = PAPER_SCOPED_RETRIEVAL
     latency_metrics: Mapping[str, object] = field(default_factory=dict)
+    corpus_diagnostics: Mapping[str, object] = field(default_factory=dict)
 
     @property
     def primary_metric(self) -> str:
@@ -1178,6 +1223,7 @@ class CandidateRunResult:
             "guardrails_passed": self.guardrails_passed,
             "retrieval_scope": self.retrieval_scope,
             "latency_metrics": dict(self.latency_metrics),
+            "corpus_diagnostics": dict(self.corpus_diagnostics),
         }
 
 
@@ -1187,6 +1233,7 @@ class _CandidateCorpus:
     pdf_parents: tuple[ResearchQAChunk, ...]
     note_chunks: tuple[NoteChunk, ...]
     note_backlinks: Mapping[str, tuple[str, ...]]
+    diagnostics: Mapping[str, object] = field(default_factory=dict)
 
 
 def _prepare_candidate_corpus(
@@ -1196,6 +1243,7 @@ def _prepare_candidate_corpus(
 ) -> _CandidateCorpus:
     pdf_chunks: list[ResearchQAChunk] = []
     pdf_parents: list[ResearchQAChunk] = []
+    pdf_chunking_results = {}
     for paper_id, document in sorted(documents.items()):
         if document.paper_id != paper_id:
             raise StrategyContractError(
@@ -1208,6 +1256,20 @@ def _prepare_candidate_corpus(
             )
         pdf_chunks.extend(result.chunks)
         pdf_parents.extend(result.parents)
+        if candidate.pdf_chunker == PDF_STRUCTURE_FALLBACK_ID:
+            pdf_chunking_results[paper_id] = result
+    corpus_diagnostics: dict[str, object] = {}
+    if candidate.pdf_chunker == PDF_STRUCTURE_FALLBACK_ID:
+        f2_diagnostics = structure_fallback_corpus_diagnostics(
+            pdf_chunking_results
+        )
+        corpus_diagnostics["pdf_chunking"] = f2_diagnostics
+        if f2_diagnostics.get("contract_status") != "passed":
+            raise StrategyContractError(
+                f"{candidate.config_id}: F2 global output cost "
+                f"{f2_diagnostics['output_to_fixed_1200_ratio']:.6f} "
+                "exceeds 1.250000"
+            )
     if candidate.requires_parents and not pdf_parents:
         raise StrategyContractError(
             "hierarchical-pdf requires pdf-parent-child parent chunks"
@@ -1270,6 +1332,7 @@ def _prepare_candidate_corpus(
         pdf_parents=tuple(pdf_parents),
         note_chunks=tuple(note_chunks),
         note_backlinks=backlinks,
+        diagnostics=corpus_diagnostics,
     )
 
 
@@ -2337,6 +2400,7 @@ def run_complete_candidate(
         chunk_count=len(indexed_passages),
         guardrails_passed=bool(guardrails_passed),
         latency_metrics=latency_metrics,
+        corpus_diagnostics=corpus.diagnostics,
     )
 
 
@@ -2440,6 +2504,7 @@ __all__ = [
     "StrategyContractError",
     "UnmappedEvidenceGroup",
     "generate_orthogonal_candidates",
+    "generate_f2_candidate",
     "load_main_document",
     "load_main_documents",
     "map_all_references",

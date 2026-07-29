@@ -664,6 +664,48 @@ provenance：
 fixed-800 的 p95/max 从 `2.095x/2.167x` 降到 `1.481x/1.678x`。这些统计只证明结构与
 成本合同，不构成 F2 的质量结论。
 
+2026-07-29 已完成 F2 独立扩展候选
+`repair-f2-7c4dd379b103c65ec922` 的正式 paper-scoped 评测。候选覆盖
+20/20 papers、254/254 questions、239 evaluable questions 和 380/380 mapped groups；
+`execution_complete=true`、`guardrail_finalized=true`，pre-quality 与候选内
+diagnostics 完全一致。相对同 stage 的 `pdf-fixed-1200 + dense + pdf-only +
+rerank-off` 基线：
+
+| 指标 | fixed-1200 | F2 | F2 - baseline |
+|---|---:|---:|---:|
+| Recall@5（本 stage primary） | 0.9143 | 0.8930 | -0.0213 |
+| Recall@10 | 0.9560 | 0.9471 | -0.0089 |
+| coverage-nDCG@10 | 0.8216 | 0.7824 | -0.0391 |
+| MRR | 0.8447 | 0.7931 | -0.0517 |
+| all-required-groups success@10 | 0.9375 | 0.9284 | -0.0091 |
+
+13 篇 fallback 论文的逐论文 score summary 与 fixed-1200 **完全相同**；所有变化都来自
+7 篇实际采用 structure route 的论文。该 89 题子集的逐题 Recall@5、Recall@10 和
+coverage-nDCG@10 均值分别变化 `-0.0597/-0.0247/-0.1162`。总体上 lookup Recall@5
+改善 `+0.0125`，但 adversarial Recall@5/Recall@10 分别退化
+`-0.1167/-0.0917`，multi-hop Recall@5 退化 `-0.0319`；economics、
+history/humanities、mathematics、psychology 四个领域超过 2 个百分点回归。
+
+F2 新增 3 个 Recall@10 hard failure，且都位于 structure route：
+
+| row_id | fixed-1200 relevant ranks | F2 relevant ranks | 机制证据 |
+|---|---|---|---|
+| `W3011534780_adversarial1` | 1, 15 | 11 | reference-aligned 映射由 2 块降为 1 块 |
+| `W4291782371_adversarial0` | 5, 10, 33, 77 | 55, 69, 88 | 三个结构块均被语义相近但非决定性内容挤出 top-10 |
+| `W4304202992_adversarial0` | 1, 3 | 11 | 两个重叠固定块缩为一个结构块并跌出 top-10 |
+
+这说明当前结构门确实修复了“候选直接失败”和病态碎片化，却不能保证细粒度限定/
+反驳证据的检索质量。结构边界减少了 fixed-1200 overlap 提供的 reference-aligned
+冗余，并可能把决定性句子稀释在较宽的语义段中。F2 因此归类为
+`valid-but-poor`，本轮停止，不按已观察质量反调 `2.5/0.40/0.04` 门，也不进入组合候选。
+`F5` 可保留为未来跨层验证假设，但不能用本次 7 篇结果反向拟合阈值。
+
+第一次 runtime 封装曾把该完成候选误报为失败：磁盘 payload 含完整
+`corpus_diagnostics`，内存 compact record 却漏掉该字段；修复后又发现 finalized
+候选被重复校验旧 progress code fingerprint。两者都没有生成或改写分数。当前修复为：
+compact record 保留 `corpus_diagnostics/extension`，且身份、输入指纹和 guardrail 已
+finalized 的候选直接恢复，不再读取过期内部 progress；相应回归测试覆盖该路径。
+
 `pdf-parent-child` 的 Recall@5 为 `0.8156`，低于固定切分；它的层级组合还存在二次召回
 瓶颈，见第 6 节。
 
@@ -991,7 +1033,7 @@ depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50
 | candidate envelope/public exporter | 严格状态、身份、SHA、coverage 门已通过独立审计 | 候选门关闭；outer task 门仍关闭 |
 | 候选内部原子 progress | 逐论文 quality、完整 pass latency resume 与源码 fingerprint 已实现 | 已关闭；扩展候选直接复用 |
 | outer task publication state | 旧 CUDA failed task 仍留存，完整 public export fail closed | 扩展全部终态后做可验证 superseding reconciliation，禁止手改 |
-| `F2 pdf-structure-aware-fallback` | 生产输入结构门已冻结，代码待实现 | 使用新 config ID，不按质量分数调阈值 |
+| `F2 pdf-structure-aware-fallback` | 20/254 正式评测完成；`valid-but-poor`，3 个新增 hard failures | 已关闭；不调阈值、不晋级组合 |
 | `N0 note-route-eligibility-gate` | 已冻结逐论文同一非空块须 backlinkable；失败逐论文 PDF-only fallback | paper-scoped 基线后实现并报告 fallback IDs/rate |
 | `N3 note-concern-parser-contract` | 已冻结 58 行生产分布、多 claim/range、四级 severity 与 fail-closed 边界 | 实现结构化 parser；reviewer-only 仍 diagnostic-only |
 | controlled finalist latency | 已确认串行 p95 在热降频下只能 observed-only；合同已冻结 | 只交错复测质量 tie group；不可比时跳过 latency 决胜 |
@@ -1050,8 +1092,9 @@ strategy failure；基础设施/unknown/pending/invalid-false-score 均为零。
 rerank-enabled 候选已经在 fresh CUDA 路径取得可审计终态，不再是待办项。
 
 当前仍没有可发布 winner：真实性审计只证明“这些分数是真的”，不证明 26 个
-`valid-but-poor` 可以晋级，也没有关闭 outer task publication gate。下一步按冻结依赖顺序
-执行 F2、N0/N3、RR1、R1 和条件 S1；全部扩展取得终态后再做 outer-state reconciliation
+`valid-but-poor` 可以晋级，也没有关闭 outer task publication gate。F2 已取得
+`valid-but-poor` 终态；下一步按冻结依赖顺序执行 N0/N3、RR1、R1 和条件 S1；全部扩展
+取得终态后再做 outer-state reconciliation
 与最终报告，期间不得回到旧 35 项反复重跑。
 
 基线关闭后，最值得进入后续单变量验证的不是再换一个更大的模型，而是：

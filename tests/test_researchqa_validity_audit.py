@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -179,3 +181,26 @@ def test_candidate_audit_marks_truthy_or_tampered_completion_invalid() -> None:
     )
     assert row.validity_class == "invalid-false-score"
     assert "payload-sha-invalid" in row.contract_errors
+
+
+def test_validity_audit_script_bootstraps_repository_imports(
+    tmp_path: Path,
+) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(
+                ROOT
+                / "benchmarks"
+                / "scripts"
+                / "audit_rq2_strategy_results.py"
+            ),
+            "--help",
+        ],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0
+    assert "Audit all 35 persisted rq-2 strategy candidates" in completed.stdout
