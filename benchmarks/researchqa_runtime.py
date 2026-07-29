@@ -486,6 +486,19 @@ def _s1_candidates(
     return candidate, baselines[0]
 
 
+def approved_extension_candidates(
+    config: Mapping[str, Any],
+) -> Mapping[str, tuple[StrategyCandidate, StrategyCandidate]]:
+    """Return the frozen candidate/baseline pair for every approved extension."""
+
+    return {
+        "F2": _f2_candidates(config),
+        "RR1": _rr1_candidates(config),
+        "R1": _r1_candidates(config),
+        "S1": _s1_candidates(config),
+    }
+
+
 def _s1_note_prequality(
     candidate: StrategyCandidate,
     documents: Mapping[str, object],
@@ -1240,6 +1253,7 @@ __all__ = [
     "ResearchQAExtensionRuntimeResult",
     "ResearchQANotePrequalityResult",
     "ResearchQARuntimeResult",
+    "approved_extension_candidates",
     "load_frozen_notes",
     "load_suite_questions",
     "run_researchqa_extension_runtime",

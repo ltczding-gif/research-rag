@@ -41,6 +41,28 @@ The normative decision, metrics, leakage policy, and single-variable
 iteration order are in
 [`docs/plans/2026-07-28-researchqa-benchmark-adr.md`](../docs/plans/2026-07-28-researchqa-benchmark-adr.md).
 
+## Published `rq-2` result
+
+The first paper-scoped `rq-2` run is complete. Its public, sanitized report
+contains 35 frozen-matrix candidates plus the four approved repair
+extensions. The validity audit classified the frozen matrix as
+6 valid-and-rankable, 26 valid-but-poor, 2 diagnostic-only/ineligible, and
+1 deterministic strategy failure, with no infrastructure/unknown or
+invalid-false-score rows.
+
+RR1 (`repair-rr1-093b3f922f8306f447ae`) is the provisional benchmark winner:
+coverage-nDCG@10 is 0.848098, a +0.013572 paired improvement over its fixed
+hybrid PDF-only baseline. The domain-stratified paper bootstrap 95% interval
+is [+0.008793, +0.018389]. Its 1.331 s p95 latency is observed-only, not a
+controlled production SLA or an automatic product-default decision.
+
+- [Human-readable result](reports/researchqa-rq2/morning-report.md)
+- [Full public manifest and fingerprints](reports/researchqa-rq2/run-manifest.json)
+- [Per-candidate validity and score table](reports/researchqa-rq2/leaderboard.csv)
+- [Publication and privacy contract](reports/README.md)
+
+The run stops after `rq-2`; it does not start `rq-5`.
+
 ## Prepare the four tiers
 
 Install the benchmark-only dependencies:

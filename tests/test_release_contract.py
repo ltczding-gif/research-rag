@@ -60,6 +60,7 @@ def test_rq2_public_report_allowlist_is_explicit():
         "paper-domain-breakdown.csv",
         "paired-bootstrap.json",
         "pareto-frontier.json",
+        "reconciliation.json",
         "run-manifest.json",
         "blocked-and-unmapped.jsonl",
     }

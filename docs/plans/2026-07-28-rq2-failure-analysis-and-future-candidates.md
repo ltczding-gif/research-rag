@@ -1189,9 +1189,9 @@ depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50
 | note rankability | `note-whole`、reviewer-only 均为 diagnostic-only | 已关闭；N0/N3 不得改写旧结果 |
 | pre-rerank、无 reference adversarial | 9 个 rerank repair 和 15 个 null-metric rows 已对账 | 已关闭 |
 | stale adapter 与假 final 隔离 | 9 个旧 adapter 候选、17 个 artifact 已 quarantine 并完成回放 | 已关闭 |
-| candidate envelope/public exporter | 严格状态、身份、SHA、coverage 门已通过独立审计 | 候选门关闭；outer task 门仍关闭 |
+| candidate envelope/public exporter | 严格状态、身份、SHA、coverage 门已通过独立审计 | 候选门与 reconciliation 后的 public export 门均已关闭 |
 | 候选内部原子 progress | 逐论文 quality、完整 pass latency resume 与源码 fingerprint 已实现 | 已关闭；扩展候选直接复用 |
-| outer task publication state | 旧 CUDA failed task 仍留存，完整 public export fail closed | 扩展全部终态后做可验证 superseding reconciliation，禁止手改 |
+| outer task publication state | 旧 CUDA failed task 原样保留；superseding reconciliation 已绑定其 SHA、35 项审计、N0/N3/N1 与四个扩展终态 | 已关闭；有效任务 8 completed、0 failed/blocked/pending，旧失败未被篡改 |
 | `F2 pdf-structure-aware-fallback` | 20/254 正式评测完成；`valid-but-poor`，3 个新增 hard failures | 已关闭；不调阈值、不晋级组合 |
 | `N0 note-route-eligibility-gate` | 20/20 eligible，103/103 claim 基础块可回链，0 fallback；精确 PDF-only 回退测试通过 | 已关闭；后续 S1 复用，不得用 reviewer-only 建立资格 |
 | `N3 note-concern-parser-contract` | 20/20 严格解析；58 行=4 major+54 minor，7 个 multi-claim/range；4 个 reviewer chunks | 已关闭；reviewer-only 仍 diagnostic-only |
@@ -1253,12 +1253,20 @@ filter、depth-100 默认重排。35 项 paper-scoped 基线现为 34 个 comple
 strategy failure；基础设施/unknown/pending/invalid-false-score 均为零。旧 9 个
 rerank-enabled 候选已经在 fresh CUDA 路径取得可审计终态，不再是待办项。
 
-当前仍没有可发布 winner：真实性审计只证明“这些分数是真的”，不证明 26 个
-`valid-but-poor` 可以晋级，也没有关闭 outer task publication gate。F2 已取得
-`valid-but-poor` 终态，N0/N3/N1 前置合同已关闭，RR1 已取得
-`valid-and-rankable` 终态，R1 也已取得 `valid-and-rankable` 终态，S1 已取得
-`valid-but-poor` 终态。所有批准扩展现均有可审计终态；下一步直接做
-outer-state reconciliation 与最终报告，期间不得回到旧 35 项反复重跑。
+所有批准扩展和最终发布门现均已关闭。superseding reconciliation 没有把旧 CUDA failed
+task 改写成 completed，而是保留原 `run-state.json` 的 SHA 与失败 task ID，并以独立
+envelope 绑定 35 项真实性审计、N0/N3/N1 pre-quality、F2/RR1/R1/S1 的 runtime、
+progress、candidate hashes 及最终聚合产物。有效发布任务为 8 completed、
+0 failed/blocked/pending；35 项仍为 `6/26/2/1/0/0`，四个扩展为 2 个
+`valid-and-rankable` 与 2 个 `valid-but-poor`。
+
+统一以 coverage-nDCG@10 比较所有有效候选后，RR1
+`repair-rr1-093b3f922f8306f447ae` 是 rq-2 的 provisional benchmark winner：
+0.848098，相对固定 hybrid PDF-only baseline 提升 `+0.013572`。10,000 次分领域、
+论文级 paired bootstrap 的 95% CI 为 `[+0.008793,+0.018389]`，不跨 0。该结论只证明
+rq-2 检索质量优势；RR1 p95 `1.331 s` 属 observed-only，不是生产 SLA。R1 的
+`+0.010229` 与约 `29.5 ms` observed p95 使其成为更低成本的后续产品候选，但本轮不以
+不可控 latency 改写质量 winner，也不宣称任何候选已自动成为生产默认值。
 
 基线关闭后，最值得进入后续单变量验证的不是再换一个更大的模型，而是：
 
@@ -1267,5 +1275,5 @@ outer-state reconciliation 与最终报告，期间不得回到旧 35 项反复�
 3. 有逐论文 coverage gate 和 PDF-only fallback 的笔记增强：已完成但质量失败；
 4. 真正的 parent 命中后 child 重检索，而不是双重 top-k 硬门。
 
-这些候选在 `rq-2` 完成前只作为 backlog 记录；是否进入 `rq-5` 仍由 ADR-003 的 stop gate
-和项目所有者决议控制。
+rq-2 到此停止，公开报告已经生成；这些后续候选只作为 backlog 记录。是否进入 `rq-5`
+仍由 ADR-003 的 stop gate 和项目所有者决议控制，本轮没有启动 rq-5。

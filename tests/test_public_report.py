@@ -190,6 +190,34 @@ def _valid_rq2_public_manifest():
         if candidate["stage_id"] == "pdf-chunker"
         and candidate["status"] == "completed"
     )
+    extensions = [
+        {
+            "extension_id": extension_id,
+            "config_id": f"repair-{extension_id.lower()}-fixture",
+            "stage_id": "reranker",
+            "status": "completed",
+            "validity_class": (
+                "valid-and-rankable" if passed else "valid-but-poor"
+            ),
+            "rankable": True,
+            "mapping_passed": True,
+            "guardrails_passed": passed,
+            "baseline_config_id": baseline,
+            "primary_score": 0.85 if passed else 0.75,
+            "primary_delta": 0.01 if passed else -0.09,
+            "p95_latency_ms": 100.0,
+            "input_fingerprint": "1" * 64,
+            "payload_sha256": "2" * 64,
+            "progress_payload_sha256": "3" * 64,
+            "code_fingerprint": "4" * 64,
+        }
+        for extension_id, passed in (
+            ("F2", False),
+            ("RR1", True),
+            ("R1", True),
+            ("S1", False),
+        )
+    ]
     return {
         "schema_version": 1,
         "run_id": "rq2-public",
@@ -235,6 +263,47 @@ def _valid_rq2_public_manifest():
             },
         },
         "candidates": candidates,
+        "approved_extensions": extensions,
+        "reconciliation": {
+            "schema_version": 1,
+            "revision": "rq2-superseding-reconciliation-v1",
+            "status": "completed",
+            "payload_sha256": "5" * 64,
+            "source_run_state_sha256": "6" * 64,
+            "source_run_status": "partial",
+            "superseded_failure_count": 1,
+            "baseline_candidate_count": 35,
+            "baseline_classification_counts": {
+                "valid-and-rankable": 6,
+                "valid-but-poor": 26,
+                "diagnostic-only/ineligible": 2,
+                "deterministic-strategy-failure": 1,
+                "infrastructure/unknown": 0,
+                "invalid-false-score": 0,
+            },
+            "approved_extension_config_ids": [
+                row["config_id"] for row in extensions
+            ],
+            "note_prequality": {
+                "status": "passed",
+                "paper_count": 20,
+                "eligible_paper_count": 20,
+                "fallback_paper_count": 0,
+                "artifact_sha256": "9" * 64,
+            },
+            "effective_task_counts": {
+                "pending": 0,
+                "running": 0,
+                "completed": 2,
+                "failed": 0,
+                "blocked": 0,
+            },
+            "provisional_winner": winner,
+            "stop_after_report": True,
+            "rq5_started": False,
+            "code_fingerprint": "7" * 64,
+            "data_inputs_fingerprint": "8" * 64,
+        },
         "confirmation_plan": {
             "cartesian_rows": 16,
             "unique_candidates": 12,
@@ -272,6 +341,7 @@ def _valid_rq2_public_manifest():
                     "paired-bootstrap.json",
                     "pareto-frontier.json",
                     "blocked-and-unmapped.jsonl",
+                    "reconciliation.json",
                 )
             )
         ],
@@ -284,6 +354,40 @@ def _valid_rq2_public_manifest():
 
 def test_rq2_public_manifest_requires_every_final_completion_gate():
     validate_rq2_public_manifest(_valid_rq2_public_manifest())
+
+
+def test_rq2_public_manifest_accepts_audited_extension_winner():
+    payload = _valid_rq2_public_manifest()
+    winner = next(
+        row["config_id"]
+        for row in payload["approved_extensions"]
+        if row["extension_id"] == "RR1"
+    )
+    payload["provisional_winner"] = winner
+    payload["bootstrap"]["candidate_config_id"] = winner
+    payload["pareto_frontier"] = [{"config_id": winner}]
+    payload["reconciliation"]["provisional_winner"] = winner
+
+    validate_rq2_public_manifest(payload)
+
+
+def test_rq2_public_manifest_requires_extensions_and_reconciliation():
+    missing_extension = _valid_rq2_public_manifest()
+    missing_extension["approved_extensions"].pop()
+    with pytest.raises(PublicReportError, match="approved_extensions"):
+        validate_rq2_public_manifest(missing_extension)
+
+    task_mismatch = _valid_rq2_public_manifest()
+    task_mismatch["reconciliation"]["effective_task_counts"]["completed"] = 1
+    with pytest.raises(PublicReportError, match="task counts"):
+        validate_rq2_public_manifest(task_mismatch)
+
+    winner_mismatch = _valid_rq2_public_manifest()
+    winner_mismatch["reconciliation"]["provisional_winner"] = (
+        winner_mismatch["approved_extensions"][0]["config_id"]
+    )
+    with pytest.raises(PublicReportError, match="reconciliation winner"):
+        validate_rq2_public_manifest(winner_mismatch)
 
 
 def test_rq2_public_manifest_requires_paper_scoped_retrieval():

@@ -21,6 +21,10 @@ from benchmarks.researchqa_strategy import (
     StrategyCandidate,
     generate_orthogonal_candidates,
 )
+from benchmarks.researchqa_reconciliation_contract import (
+    ReconciliationContractError,
+    load_rq2_reconciliation,
+)
 from benchmarks.researchqa_sweep import (
     SWEEP_ENGINE_REVISION,
     SWEEP_SCHEMA_VERSION,
@@ -82,6 +86,8 @@ class StrategyValidityAudit:
     classification_counts: Mapping[str, int]
     stage_counts: Mapping[str, int]
     outer_task_counts: Mapping[str, int]
+    historical_outer_task_counts: Mapping[str, int]
+    reconciliation_status: str
     baseline_validity_gate_closed: bool
     public_export_ready: bool
     public_export_blockers: tuple[str, ...]
@@ -94,6 +100,10 @@ class StrategyValidityAudit:
             "classification_counts": dict(self.classification_counts),
             "stage_counts": dict(self.stage_counts),
             "outer_task_counts": dict(self.outer_task_counts),
+            "historical_outer_task_counts": dict(
+                self.historical_outer_task_counts
+            ),
+            "reconciliation_status": self.reconciliation_status,
             "baseline_validity_gate_closed": self.baseline_validity_gate_closed,
             "public_export_ready": self.public_export_ready,
             "public_export_blockers": list(self.public_export_blockers),
@@ -484,7 +494,27 @@ def audit_strategy_run(
         )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         state = {}
-    task_counts = _outer_task_counts(state)
+    historical_task_counts = _outer_task_counts(state)
+    task_counts = historical_task_counts
+    reconciliation_status = "missing-or-invalid"
+    try:
+        reconciliation = load_rq2_reconciliation(root)
+    except (ReconciliationContractError, OSError):
+        reconciliation = None
+    if reconciliation is not None:
+        effective = reconciliation.get("effective_task_counts")
+        if isinstance(effective, Mapping):
+            task_counts = {
+                status: int(effective.get(status, 0))
+                for status in (
+                    "pending",
+                    "running",
+                    "completed",
+                    "failed",
+                    "blocked",
+                )
+            } | {"unknown": 0}
+            reconciliation_status = "completed"
     baseline_closed = (
         len(rows) == 35
         and dict(stage_counts) == EXPECTED_STAGE_COUNTS
@@ -509,6 +539,8 @@ def audit_strategy_run(
             stage: stage_counts[stage] for stage in EXPECTED_STAGE_COUNTS
         },
         outer_task_counts=dict(task_counts),
+        historical_outer_task_counts=dict(historical_task_counts),
+        reconciliation_status=reconciliation_status,
         baseline_validity_gate_closed=baseline_closed,
         public_export_ready=not blockers,
         public_export_blockers=tuple(blockers),

@@ -11,6 +11,7 @@ publication may contain:
 - `paper-domain-breakdown.csv`
 - `paired-bootstrap.json`
 - `pareto-frontier.json`
+- `reconciliation.json`
 - `run-manifest.json`
 - `blocked-and-unmapped.jsonl`
 
@@ -20,9 +21,11 @@ private notes, credentials, and local runtime metadata.
 
 `run-manifest.json` must be regenerated after the runtime task has completed.
 The prepare-stage placeholder is not publishable. The final manifest must
-record all 35 unique strategy candidates, the evidence-mapping gate, the 10,000-sample
-paired bootstrap, the Pareto frontier, the provisional winner, and the
-code/config/model/data/hardware fingerprints needed to reproduce the run.
+record all 35 unique frozen-matrix candidates, the four approved extensions
+(`F2`, `RR1`, `R1`, and `S1`), the evidence-mapping gate, the 10,000-sample
+paired bootstrap, the Pareto frontier, the provisional winner, the
+superseding reconciliation, and the code/config/model/data/hardware
+fingerprints needed to reproduce the run.
 The candidate stage counts are fixed at 7 PDF chunkers, 4 note chunkers,
 3 retrievers, 5 source compositions, 4 reranker modes, and 16 top-two
 Cartesian confirmation rows that reduce to 12 unique compatible combinations.
@@ -47,8 +50,12 @@ stable rule `hierarchical-pdf-requires-pdf-parent-child`. This makes the
 35-candidate total auditable without pretending that identical executions are
 independent experiments.
 
-The outer runner must be `completed`, with no pending, running, failed, or
-blocked tasks. This is distinct from a terminal strategy failure inside the
+The effective publication state must contain no pending, running, failed, or
+blocked tasks. A historical terminal outer failure must never be rewritten.
+It may be superseded only by `reconciliation.json`, whose internal envelope
+hash-binds the original `run-state.json`, the audited 35-candidate matrix,
+the N0/N3/N1 pre-quality result, every approved extension, and all aggregate
+report inputs. This is distinct from a terminal strategy failure inside the
 35-candidate sweep. Evidence mapping must cover exactly the 20 rq-2 papers,
 record both mapped and total evidence-group counts, and pass the configured
 overall and per-paper thresholds.
@@ -107,13 +114,13 @@ ignored local cache and retain their upstream licenses.
 
 The rq-2 public exporter is deliberately run-specific. It must:
 
-1. refuse any run whose outer state is not completed or whose 35 unique candidates
-   are not all terminal;
-2. verify candidate payload hashes and the common evaluable-set/mapping gates
-   before reading report values;
+1. refuse any run without a valid superseding reconciliation or whose 35
+   frozen candidates and four approved extensions are not all terminal;
+2. verify candidate, progress, reconciliation, and aggregate-artifact hashes,
+   plus the common evaluable-set/mapping gates, before reading report values;
 3. parse and rewrite aggregate rows through explicit field allowlists instead
    of copying files or directories;
-4. build all seven files in a temporary directory, validate the manifest and
+4. build all eight files in a temporary directory, validate the manifest and
    sibling hashes, scan for forbidden path/text fields, and only then replace
    `researchqa-rq2/` atomically; and
 5. leave the existing public directory unchanged on any validation failure.

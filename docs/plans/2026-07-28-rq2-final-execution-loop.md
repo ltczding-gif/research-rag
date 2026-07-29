@@ -241,10 +241,13 @@ benchmarks/.cache/researchqa/runs/<run_id>/
 
 ```powershell
 & $PYTHON -m pytest -q
-& $PYTHON benchmarks/scripts/validate_benchmark.py
+& $PYTHON benchmarks/scripts/validate_benchmark.py --allow-empty
 ```
 
-失败则只修当前失败，不扩大重构范围。
+公开仓库只提交 Wave 0A schema/config/suite 骨架，不提交 ResearchQA 原文或逐题结果，因此
+这里固定使用 `--allow-empty`；`rq-2` 的 20/254/239/380 完整性由 run-specific
+validity audit、reconciliation 和 public export gate 单独强制。失败则只修当前失败，
+不扩大重构范围。
 
 ### Gate B：单论文 live canary
 

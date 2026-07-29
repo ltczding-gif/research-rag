@@ -24,6 +24,20 @@ _RQ2_ARTIFACT_NAMES = {
     "paired-bootstrap.json",
     "pareto-frontier.json",
     "blocked-and-unmapped.jsonl",
+    "reconciliation.json",
+}
+_RQ2_EXTENSION_IDS = {"F2", "RR1", "R1", "S1"}
+_RQ2_VALIDITY_CLASSES = {
+    "valid-and-rankable",
+    "valid-but-poor",
+}
+_RQ2_BASELINE_CLASS_COUNTS = {
+    "valid-and-rankable": 6,
+    "valid-but-poor": 26,
+    "diagnostic-only/ineligible": 2,
+    "deterministic-strategy-failure": 1,
+    "infrastructure/unknown": 0,
+    "invalid-false-score": 0,
 }
 
 
@@ -210,6 +224,143 @@ def _validate_rq2_candidates(
     return set(by_id), by_id
 
 
+def _validate_rq2_extensions(
+    value: object,
+) -> tuple[set[str], dict[str, Mapping[str, object]]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise PublicReportError("approved_extensions must be an array")
+    if len(value) != len(_RQ2_EXTENSION_IDS):
+        raise PublicReportError(
+            "approved_extensions must contain four terminal records"
+        )
+    extension_ids: set[str] = set()
+    by_config: dict[str, Mapping[str, object]] = {}
+    for item in value:
+        row = _required_mapping(item, "approved extension")
+        extension_id = _required_id(row, "extension_id")
+        config_id = _required_id(row, "config_id")
+        _required_id(row, "stage_id")
+        _required_id(row, "baseline_config_id")
+        validity_class = _required_id(row, "validity_class")
+        if (
+            extension_id not in _RQ2_EXTENSION_IDS
+            or extension_id in extension_ids
+            or config_id in by_config
+            or row.get("status") != "completed"
+            or validity_class not in _RQ2_VALIDITY_CLASSES
+        ):
+            raise PublicReportError(
+                "approved extension identity/status is inconsistent"
+            )
+        rankable = _required_bool(row, "rankable")
+        mapping_passed = _required_bool(row, "mapping_passed")
+        guardrails_passed = _required_bool(row, "guardrails_passed")
+        _finite_number(row.get("primary_score"), "extension primary")
+        _finite_number(row.get("primary_delta"), "extension delta")
+        _finite_number(row.get("p95_latency_ms"), "extension latency")
+        for field in (
+            "input_fingerprint",
+            "payload_sha256",
+            "progress_payload_sha256",
+            "code_fingerprint",
+        ):
+            value = row.get(field)
+            if not isinstance(value, str) or not _SHA256.fullmatch(value):
+                raise PublicReportError(
+                    f"approved extension {field} is invalid"
+                )
+        if (
+            not rankable
+            or not mapping_passed
+            or (
+                validity_class == "valid-and-rankable"
+                and not guardrails_passed
+            )
+            or (
+                validity_class == "valid-but-poor"
+                and guardrails_passed
+            )
+        ):
+            raise PublicReportError(
+                "approved extension validity classification is inconsistent"
+            )
+        extension_ids.add(extension_id)
+        by_config[config_id] = row
+    if extension_ids != _RQ2_EXTENSION_IDS:
+        raise PublicReportError("approved extension set is incomplete")
+    return set(by_config), by_config
+
+
+def _validate_rq2_reconciliation(
+    value: object,
+    *,
+    task_counts: Mapping[str, object],
+    extension_ids: set[str],
+) -> Mapping[str, object]:
+    reconciliation = _required_mapping(value, "reconciliation")
+    if (
+        reconciliation.get("schema_version") != 1
+        or reconciliation.get("status") != "completed"
+        or reconciliation.get("revision")
+        != "rq2-superseding-reconciliation-v1"
+        or reconciliation.get("baseline_candidate_count") != 35
+        or reconciliation.get("superseded_failure_count", 0) < 1
+    ):
+        raise PublicReportError("reconciliation completion state is invalid")
+    if (
+        reconciliation.get("baseline_classification_counts")
+        != _RQ2_BASELINE_CLASS_COUNTS
+        or reconciliation.get("stop_after_report") is not True
+        or reconciliation.get("rq5_started") is not False
+    ):
+        raise PublicReportError(
+            "reconciliation validity classes or stop gate are invalid"
+        )
+    for field in (
+        "payload_sha256",
+        "source_run_state_sha256",
+        "code_fingerprint",
+        "data_inputs_fingerprint",
+    ):
+        digest = reconciliation.get(field)
+        if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
+            raise PublicReportError(
+                f"reconciliation {field} is invalid"
+            )
+    approved = reconciliation.get("approved_extension_config_ids")
+    if (
+        not isinstance(approved, list)
+        or set(map(str, approved)) != extension_ids
+    ):
+        raise PublicReportError(
+            "reconciliation extension set is inconsistent"
+        )
+    effective = _required_mapping(
+        reconciliation.get("effective_task_counts"),
+        "reconciliation task counts",
+    )
+    if dict(effective) != dict(task_counts):
+        raise PublicReportError(
+            "reconciliation task counts differ from the manifest"
+        )
+    note = _required_mapping(
+        reconciliation.get("note_prequality"),
+        "reconciliation note pre-quality",
+    )
+    if (
+        note.get("status") != "passed"
+        or note.get("paper_count") != 20
+        or note.get("eligible_paper_count") != 20
+        or note.get("fallback_paper_count") != 0
+        or not isinstance(note.get("artifact_sha256"), str)
+        or not _SHA256.fullmatch(str(note.get("artifact_sha256")))
+    ):
+        raise PublicReportError(
+            "reconciliation note pre-quality is incomplete"
+        )
+    return reconciliation
+
+
 def _validate_rq2_confirmation(value: object) -> None:
     confirmation = _required_mapping(value, "confirmation")
     expected = {
@@ -326,9 +477,29 @@ def validate_rq2_public_manifest(manifest: Mapping[str, object]) -> None:
     candidate_ids, candidates = _validate_rq2_candidates(
         manifest.get("candidates")
     )
+    extension_ids, extensions = _validate_rq2_extensions(
+        manifest.get("approved_extensions")
+    )
+    if candidate_ids & extension_ids:
+        raise PublicReportError(
+            "baseline and extension candidate IDs overlap"
+        )
+    if any(
+        row.get("baseline_config_id") not in candidate_ids
+        for row in extensions.values()
+    ):
+        raise PublicReportError(
+            "approved extension references an unknown frozen baseline"
+        )
+    all_candidate_ids = candidate_ids | extension_ids
     _validate_rq2_confirmation(manifest.get("confirmation_plan"))
     bootstrap = _validate_rq2_bootstrap(
-        manifest.get("bootstrap"), candidate_ids
+        manifest.get("bootstrap"), all_candidate_ids
+    )
+    reconciliation = _validate_rq2_reconciliation(
+        manifest.get("reconciliation"),
+        task_counts=task_counts,
+        extension_ids=extension_ids,
     )
 
     pareto = manifest.get("pareto_frontier")
@@ -338,24 +509,39 @@ def validate_rq2_public_manifest(manifest: Mapping[str, object]) -> None:
     for item in pareto:
         row = _required_mapping(item, "pareto row")
         config_id = _required_id(row, "config_id")
-        if config_id not in candidate_ids:
+        if config_id not in all_candidate_ids:
             raise PublicReportError("pareto frontier references unknown candidate")
         pareto_ids.add(config_id)
 
     winner = _required_id(manifest, "provisional_winner")
+    winner_row = candidates.get(winner) or extensions.get(winner)
+    baseline_winner = winner in candidates
     if (
         winner not in pareto_ids
-        or candidates[winner].get("status") != "completed"
-        or candidates[winner].get("stage_id") != "top2-confirmation"
-        or candidates[winner].get("rankable") is not True
-        or candidates[winner].get("mapping_passed") is not True
-        or candidates[winner].get("guardrails_passed") is not True
+        or winner_row is None
+        or winner_row.get("status") != "completed"
+        or (
+            baseline_winner
+            and winner_row.get("stage_id") != "top2-confirmation"
+        )
+        or winner_row.get("rankable") is not True
+        or winner_row.get("mapping_passed") is not True
+        or winner_row.get("guardrails_passed") is not True
+        or (
+            not baseline_winner
+            and winner_row.get("validity_class")
+            != "valid-and-rankable"
+        )
     ):
         raise PublicReportError(
-            "winner is not an eligible Pareto confirmation"
+            "winner is not an eligible Pareto completion"
         )
     if bootstrap.get("candidate_config_id") != winner:
         raise PublicReportError("bootstrap winner differs from provisional winner")
+    if reconciliation.get("provisional_winner") != winner:
+        raise PublicReportError(
+            "reconciliation winner differs from provisional winner"
+        )
 
     _validate_rq2_artifacts(manifest.get("artifacts"))
     for field in ("partial", "blocked", "failed"):

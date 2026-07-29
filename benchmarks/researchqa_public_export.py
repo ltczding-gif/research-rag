@@ -22,6 +22,14 @@ from benchmarks.public_report import (
     sanitize_rq2_blocked_rows,
     validate_rq2_public_manifest,
 )
+from benchmarks.researchqa_reconciliation import (
+    BREAKDOWN_FIELDS,
+    LEADERBOARD_FIELDS,
+)
+from benchmarks.researchqa_reconciliation_contract import (
+    ReconciliationContractError,
+    load_rq2_reconciliation,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -35,25 +43,6 @@ EXPECTED_STAGE_COUNTS = {
     "reranker": 4,
     "top2-confirmation": 12,
 }
-LEADERBOARD_FIELDS = (
-    "stage_id",
-    "stage_rank",
-    "config_id",
-    "status",
-    "rankable",
-    "mapping_passed",
-    "guardrails_passed",
-    "primary_metric",
-    "primary_score",
-    "p95_latency_ms",
-    "index_bytes",
-    "chunk_count",
-    "pdf_chunker",
-    "note_chunker",
-    "retriever",
-    "source_composition",
-    "reranker",
-)
 BREAKDOWN_BASE_FIELDS = ("role", "config_id", "scope", "key", "domain")
 BREAKDOWN_METRIC_FIELDS = {
     "all_required_groups_success_at_10",
@@ -324,6 +313,97 @@ def _candidate_envelopes(
     )
 
 
+def _public_extensions(
+    reconciliation: Mapping[str, Any],
+) -> list[dict[str, object]]:
+    rows = reconciliation.get("approved_extensions")
+    if not isinstance(rows, list):
+        raise RQ2PublicExportError(
+            "reconciliation approved extensions are missing"
+        )
+    fields = (
+        "extension_id",
+        "config_id",
+        "stage_id",
+        "status",
+        "validity_class",
+        "rankable",
+        "mapping_passed",
+        "guardrails_passed",
+        "baseline_config_id",
+        "primary_metric",
+        "primary_score",
+        "primary_delta",
+        "new_hard_failure_count",
+        "p95_latency_ms",
+        "latency_validity",
+        "index_bytes",
+        "chunk_count",
+        "input_fingerprint",
+        "payload_sha256",
+        "progress_payload_sha256",
+        "code_fingerprint",
+    )
+    public_rows = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise RQ2PublicExportError(
+                "reconciliation extension row is invalid"
+            )
+        public_rows.append({field: row.get(field) for field in fields})
+    return public_rows
+
+
+def _public_reconciliation(
+    reconciliation: Mapping[str, Any],
+) -> dict[str, object]:
+    source_state = reconciliation.get("source_run_state")
+    source_state = (
+        source_state if isinstance(source_state, Mapping) else {}
+    )
+    baseline = reconciliation.get("baseline_audit")
+    baseline = baseline if isinstance(baseline, Mapping) else {}
+    decision = reconciliation.get("decision")
+    decision = decision if isinstance(decision, Mapping) else {}
+    fingerprints = reconciliation.get("fingerprints")
+    fingerprints = (
+        fingerprints if isinstance(fingerprints, Mapping) else {}
+    )
+    note = reconciliation.get("note_prequality")
+    note = note if isinstance(note, Mapping) else {}
+    extensions = reconciliation.get("approved_extensions")
+    extensions = extensions if isinstance(extensions, list) else []
+    return {
+        "schema_version": 1,
+        "revision": "rq2-superseding-reconciliation-v1",
+        "status": "completed",
+        "payload_sha256": fingerprint_payload(reconciliation),
+        "source_run_state_sha256": source_state.get("sha256"),
+        "source_run_status": source_state.get("status"),
+        "superseded_failure_count": source_state.get(
+            "superseded_failure_count"
+        ),
+        "baseline_candidate_count": baseline.get("candidate_count"),
+        "baseline_classification_counts": baseline.get(
+            "classification_counts"
+        ),
+        "approved_extension_config_ids": sorted(
+            str(row.get("config_id"))
+            for row in extensions
+            if isinstance(row, Mapping)
+        ),
+        "note_prequality": dict(note),
+        "effective_task_counts": dict(
+            reconciliation.get("effective_task_counts", {})
+        ),
+        "provisional_winner": decision.get("provisional_winner"),
+        "stop_after_report": decision.get("stop_after_report"),
+        "rq5_started": decision.get("rq5_started"),
+        "code_fingerprint": fingerprints.get("code"),
+        "data_inputs_fingerprint": fingerprints.get("data-inputs"),
+    }
+
+
 def _rewrite_csv(
     source: Path,
     destination: Path,
@@ -533,12 +613,21 @@ def _thermal_line(run_root: Path) -> str:
 def _morning_report(
     *,
     candidates: Sequence[Mapping[str, object]],
+    extensions: Sequence[Mapping[str, object]],
+    reconciliation: Mapping[str, object],
     bootstrap: Mapping[str, object],
     pareto: Mapping[str, object],
     run_root: Path,
 ) -> bytes:
     counts = Counter(str(row["status"]) for row in candidates)
-    rankable = sum(bool(row["rankable"]) for row in candidates)
+    baseline_classes = reconciliation.get("baseline_classification_counts")
+    if not isinstance(baseline_classes, Mapping):
+        raise RQ2PublicExportError(
+            "reconciliation baseline classifications are missing"
+        )
+    extension_classes = Counter(
+        str(row["validity_class"]) for row in extensions
+    )
     winner = str(bootstrap["candidate_config_id"])
     pareto_rows = pareto.get("rows")
     winner_row = next(
@@ -555,18 +644,42 @@ def _morning_report(
         (
             "# ResearchQA rq-2 strategy report",
             "",
-            f"- Unique candidates: {len(candidates)}",
-            f"- Completed: {counts['completed']}",
-            f"- Failed: {counts['failed']}",
-            f"- Incomplete: {counts['incomplete']}",
-            f"- Rankable: {rankable}",
+            f"- Frozen matrix candidates: {len(candidates)}",
+            f"- Frozen completed / failed: "
+            f"{counts['completed']} / {counts['failed']}",
+            "- Frozen validity classes: "
+            f"{baseline_classes.get('valid-and-rankable')} "
+            "valid-and-rankable, "
+            f"{baseline_classes.get('valid-but-poor')} valid-but-poor, "
+            f"{baseline_classes.get('diagnostic-only/ineligible')} "
+            "diagnostic-only/ineligible, "
+            f"{baseline_classes.get('deterministic-strategy-failure')} "
+            "deterministic-strategy-failure, "
+            f"{baseline_classes.get('infrastructure/unknown')} "
+            "infrastructure/unknown, "
+            f"{baseline_classes.get('invalid-false-score')} "
+            "invalid-false-score",
+            f"- Approved extensions: {len(extensions)} "
+            f"({extension_classes['valid-and-rankable']} "
+            f"valid-and-rankable, "
+            f"{extension_classes['valid-but-poor']} valid-but-poor)",
             f"- Provisional winner: `{winner}`",
             f"- Winner coverage-nDCG@10: {float(winner_row['primary']):.6f}",
-            f"- Winner p95 latency: {float(winner_row['p95_latency_ms']):.3f} ms",
-            f"- Paired delta vs C0: {float(bootstrap['observed_delta']):+.6f} "
+            f"- Winner p95 latency: "
+            f"{float(winner_row['p95_latency_ms']):.3f} ms "
+            "(observed-only)",
+            "- Paired delta vs fixed hybrid PDF-only baseline "
+            f"`{str(bootstrap['baseline_config_id'])}`: "
+            f"{float(bootstrap['observed_delta']):+.6f} "
             f"(95% CI {float(bootstrap['lower']):+.6f} to "
             f"{float(bootstrap['upper']):+.6f}; "
             f"{int(bootstrap['samples']):,} domain-stratified paper resamples)",
+            "",
+            "The original outer runtime task retains its historical CUDA "
+            "failure. It was not rewritten. Publication is opened by the "
+            "hash-bound superseding reconciliation after the 35-candidate "
+            "validity audit, note pre-quality gate, and all four approved "
+            "extensions reached auditable terminal states.",
             "",
             _thermal_line(run_root),
             "",
@@ -576,8 +689,14 @@ def _morning_report(
             "this run does not measure direct SI/native-source retrieval.",
             "",
             "The winner is provisional and passed the rq-2 relative regression "
-            "guardrails. Operational ratios above 1.5x still require an explicit "
-            "quality justification and rollback switch before production use.",
+            "guardrails. Its latency is observed-only and is not a controlled "
+            "production SLA. Operational ratios above 1.5x still require an "
+            "explicit quality justification and rollback switch before "
+            "production use.",
+            "",
+            f"Reconciliation status: "
+            f"{str(reconciliation.get('status'))}; no invalid false score "
+            "entered the final decision.",
             "",
             "This run stops after rq-2 and does not start rq-5 automatically.",
             "",
@@ -634,34 +753,68 @@ def export_rq2_public_report(
     output_root: str | Path = DEFAULT_OUTPUT,
     config_path: str | Path = DEFAULT_CONFIG,
 ) -> Path:
-    """Validate one completed run and atomically publish seven aggregate files."""
+    """Validate one reconciled run and atomically publish aggregate files."""
 
     run = Path(run_root).resolve(strict=True)
     output = Path(output_root).resolve(strict=False)
     config = _load_config(Path(config_path).resolve(strict=True))
     state = _read_json(run / "run-state.json", "run state")
-    if state.get("status") != "completed":
-        raise RQ2PublicExportError("outer run is not completed")
-    fingerprints = state.get("fingerprints")
-    if not isinstance(fingerprints, Mapping):
+    historical_fingerprints = state.get("fingerprints")
+    if not isinstance(historical_fingerprints, Mapping):
         raise RQ2PublicExportError("run fingerprints are missing")
-    if fingerprints.get("config") != fingerprint_payload(config):
+    config_fingerprint = fingerprint_payload(config)
+    if historical_fingerprints.get("config") != config_fingerprint:
         raise RQ2PublicExportError("run/config fingerprint mismatch")
-    task_counts, task_lists = _task_lists(state)
-    if any(task_counts[key] for key in ("pending", "running", "failed", "blocked")):
-        raise RQ2PublicExportError("outer task completion gate failed")
+    try:
+        reconciliation = load_rq2_reconciliation(
+            run,
+            expected_config_fingerprint=config_fingerprint,
+        )
+    except ReconciliationContractError as exc:
+        raise RQ2PublicExportError(str(exc)) from exc
+    fingerprints = reconciliation["fingerprints"]
+    task_counts = dict(reconciliation["effective_task_counts"])
+    task_lists = {
+        "pending": [],
+        "running": [],
+        "completed": sorted(
+            str(row["task_id"])
+            for row in reconciliation["effective_tasks"]
+        ),
+        "failed": [],
+        "blocked": [],
+    }
+    data_fingerprint = _data_fingerprint(run)
+    if fingerprints.get("data-inputs") != data_fingerprint:
+        raise RQ2PublicExportError(
+            "reconciliation data fingerprint differs from public export"
+        )
 
     candidates, mapping, _papers, _questions = _candidate_envelopes(run)
+    extensions = _public_extensions(reconciliation)
+    public_reconciliation = _public_reconciliation(reconciliation)
     report_root = run / "report"
     final_root = run / "sweep" / "final"
-    decision = _read_json(final_root / "decision-summary.json", "decision summary")
+    decision = _read_json(
+        final_root / "superseding-decision-summary.json",
+        "superseding decision summary",
+    )
     provisional_winner = _safe_id(
         decision.get("provisional_winner"), "provisional winner"
     )
+    reconciliation_winner = (
+        reconciliation.get("decision", {}).get("provisional_winner")
+        if isinstance(reconciliation.get("decision"), Mapping)
+        else None
+    )
+    if provisional_winner != reconciliation_winner:
+        raise RQ2PublicExportError(
+            "decision artifact differs from reconciliation winner"
+        )
     winner_record = next(
         (
             row
-            for row in candidates
+            for row in (*candidates, *extensions)
             if row.get("config_id") == provisional_winner
         ),
         None,
@@ -669,7 +822,6 @@ def export_rq2_public_report(
     if (
         not isinstance(winner_record, Mapping)
         or winner_record.get("status") != "completed"
-        or winner_record.get("stage_id") != "top2-confirmation"
         or winner_record.get("rankable") is not True
         or winner_record.get("mapping_passed") is not True
         or winner_record.get("guardrails_passed") is not True
@@ -685,21 +837,27 @@ def export_rq2_public_report(
     moved = False
     try:
         _rewrite_csv(
-            report_root / "leaderboard.csv",
+            report_root / "superseding-leaderboard.csv",
             staged / "leaderboard.csv",
             exact_fields=LEADERBOARD_FIELDS,
         )
         _rewrite_csv(
-            report_root / "paper-domain-breakdown.csv",
+            report_root / "superseding-paper-domain-breakdown.csv",
             staged / "paper-domain-breakdown.csv",
-            required_fields=BREAKDOWN_BASE_FIELDS,
-            allowed_fields=set(BREAKDOWN_BASE_FIELDS) | BREAKDOWN_METRIC_FIELDS,
+            exact_fields=BREAKDOWN_FIELDS,
         )
-        bootstrap = _public_bootstrap(report_root / "paired-bootstrap.json")
-        pareto = _public_pareto(final_root / "pareto-frontier.json")
-        blocked = _blocked_rows(report_root / "blocked-and-unmapped.jsonl")
+        bootstrap = _public_bootstrap(
+            report_root / "superseding-paired-bootstrap.json"
+        )
+        pareto = _public_pareto(
+            final_root / "superseding-pareto-frontier.json"
+        )
+        blocked = _blocked_rows(
+            report_root / "superseding-blocked-and-unmapped.jsonl"
+        )
         _write_json(staged / "paired-bootstrap.json", bootstrap)
         _write_json(staged / "pareto-frontier.json", pareto)
+        _write_json(staged / "reconciliation.json", public_reconciliation)
         _write_bytes(
             staged / "blocked-and-unmapped.jsonl",
             b"".join(_json_bytes(row) for row in blocked),
@@ -708,6 +866,8 @@ def export_rq2_public_report(
             staged / "morning-report.md",
             _morning_report(
                 candidates=candidates,
+                extensions=extensions,
+                reconciliation=public_reconciliation,
                 bootstrap=bootstrap,
                 pareto=pareto,
                 run_root=run,
@@ -721,6 +881,7 @@ def export_rq2_public_report(
             "paired-bootstrap.json",
             "pareto-frontier.json",
             "blocked-and-unmapped.jsonl",
+            "reconciliation.json",
         }
         public_manifest = {
             "schema_version": 1,
@@ -755,6 +916,8 @@ def export_rq2_public_report(
             "stage_anchors": dict(config["stages"]["stage_anchors"]),
             "mapping_coverage": dict(mapping),
             "candidates": candidates,
+            "approved_extensions": extensions,
+            "reconciliation": public_reconciliation,
             "confirmation_plan": {
                 "cartesian_rows": 16,
                 "unique_candidates": 12,
