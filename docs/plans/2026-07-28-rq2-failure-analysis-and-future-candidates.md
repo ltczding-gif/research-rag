@@ -1004,6 +1004,60 @@ paper-scoped 重跑把 global note 污染从结果中移除，但没有把这些
 对产品级全库搜索可另记 `S3 document-router-top1-3-5`，但它必须用 query-only 路由并单独
 报告 paper recall；不得在 ResearchQA 运行时直接读取 gold `paper_id`。
 
+### 6.3 S0+N1+S1 正式评测
+
+2026-07-29 已完成冻结候选 `repair-s1-62672cb9c8dfd6006311` 的正式
+paper-scoped 评测。候选固定使用 `fixed-1200 + note-claim-plus-reviewer +
+hybrid-rrf + pdf-note-rrf`，PDF/note 权重为 `0.9/0.1`、`k=60`；没有扫描其他权重。
+正式产物覆盖 20/20 papers、254/254 questions、239 evaluable questions 和
+380/380 mapped groups，candidate、baseline 与 progress envelope 的 payload hash
+均通过，progress 为 `finalized`。input fingerprint 为
+`b02133ddf2a4feba4d4a5b129d8cd732c219006c5e57d29b1f63c15364f23cb7`，
+payload SHA-256 为
+`3d7f85f7dea696882650ed7266a66d651c4a66e5d266211af9c670a6cff852fb`。
+
+N0/N1/N3 与逐 query 路由合同也全部有效：20/20 papers eligible、0 paper fallback，
+103/103 claim chunks 和 4/4 fatal-major reviewer chunks 可回链；pre-quality 与正式
+产物中的 note-route 逐项相同。254/254 queries 都有非空 note projection，0
+empty-projection fallback、0 ineligible-paper fallback；246 题排序发生变化，148 题
+出现至少一个 note 独有 top-10 PDF item，共 182 个。这证明候选确实执行了冻结的
+笔记路线，不是 PDF-only no-op，也没有用缺失 route 的默认值生成分数。逐论文和空投影
+精确退化为 PDF-only 的行为另有合同测试覆盖。
+
+相对同 stage 的 `fixed-1200 + hybrid-rrf + pdf-only + rerank-off` 基线：
+
+| 指标 | PDF-only | S0+N1+S1 | S1 - baseline |
+|---|---:|---:|---:|
+| coverage-nDCG@10（primary） | 0.834526 | 0.765915 | -0.068610 |
+| MRR | 0.855759 | 0.767457 | -0.088303 |
+| Recall@5 | 0.930321 | 0.908870 | -0.021451 |
+| Recall@10 | 0.954020 | 0.954020 | 0.000000 |
+| all-required-groups success@5 | 0.892065 | 0.859827 | -0.032238 |
+| all-required-groups success@10 | 0.931449 | 0.931449 | 0.000000 |
+
+总体 Recall@10 不变是 1 个 rescue 与 1 个新 hard failure 相抵的结果：
+`W2988916019_adversarial0` 从 Recall@10=0 恢复，而
+`W3154248945_adversarial0` 降为 0。10 个领域的 primary 都下降，其中除
+social science（`-0.011132`）外的 9 个领域均超过 `-0.02` 回归门，因此正式
+guardrail 失败原因为 `too-many-domain-regressions` 与
+`new-recall-at-10-hard-failures`。
+
+分层归因进一步排除了 reviewer parser 是主要污染源：有 fatal-major reviewer 的
+25 个可评分问题平均只下降 `-0.010347`，没有 reviewer 的 214 题下降
+`-0.078350`。相反，note 独有 top-10 的 140 个可评分问题下降 `-0.088144`，没有
+note 独有 top-10 的 99 题下降 `-0.047328`；246 个排序变化 query 中的 232 个可评分
+问题下降 `-0.073386`，7 个排序不变的可评分问题精确不变。高置信机制因此是：
+rank-RRF 即使只给 note route `0.1` 权重，仍会让高 fanout 的 note 投影系统性重排
+direct PDF 结果；问题不在空 route 或 reviewer-only 资格，而在 rank-only source
+fusion 没有保留 direct PDF 的绝对 score/top-rank。
+
+串行 observed-only latency 为 p50 `7.956 ms`、p95 `27.072 ms`，p95 比值
+`1.114`，index bytes 比值 `1.052`。质量差距远大于 `0.005` tie 门，因此不做
+controlled latency 复跑。该候选所有真实性与运行合同均有效，但质量 guardrail
+失败，正式归类为 `valid-but-poor`；按预先冻结的停止规则不调 `0.1`、不扫描 `k`、
+不晋级组合。若未来另行批准 source 修复，优先验证“保留 direct PDF top-rank/score，
+只补充 novel evidence”的 S2，而不是继续微调当前 weighted rank-RRF。
+
 ## 7. Reranker 丢分
 
 ### 7.1 质量—延迟权衡
@@ -1143,6 +1197,7 @@ depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50
 | `N3 note-concern-parser-contract` | 20/20 严格解析；58 行=4 major+54 minor，7 个 multi-claim/range；4 个 reviewer chunks | 已关闭；reviewer-only 仍 diagnostic-only |
 | `RR1 preserve-top1 rank-RRF` | 20/254 正式评测完成；primary `+0.013572`，0 新 hard failure，`valid-and-rankable` | 已关闭；保留为最终候选，不扫描 depth、权重或 `k` |
 | `R1 preserve-dense-top1 weighted RRF` | 20/254 正式评测完成；primary `+0.010229`，0 新 hard failure，`valid-and-rankable` | 已关闭；保留为最终候选，不扫描权重或 `k` |
+| `S0+N1+S1 weighted source RRF` | 20/254 正式评测完成；primary `-0.068610`，1 个新 hard failure，`valid-but-poor` | 已关闭；不调权重、不扫描 `k`、不晋级组合 |
 | controlled finalist latency | 已确认串行 p95 在热降频下只能 observed-only；合同已冻结 | 只交错复测质量 tie group；不可比时跳过 latency 决胜 |
 
 P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、失败可以局部降级、恢复不会混入
@@ -1152,7 +1207,7 @@ P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、�
 
 1. `RR1`：已完成；`valid-and-rankable`，进入最终候选集合
 2. `R1`：已完成；`valid-and-rankable`，进入最终候选集合
-3. `S0 + N1 + S1`：当前下一项；N0/N3/N1 前置已满足，执行固定 0.9/0.1 候选
+3. `S0 + N1 + S1`：已完成；`valid-but-poor`，按冻结停止规则关闭
 4. `H1 hierarchical-parent-expand-direct-fallback`
 
 这些候选不得一次全叠加。先分别与 fixed-1200 + hybrid + PDF-only + rerank-off 基线做
@@ -1201,16 +1256,15 @@ rerank-enabled 候选已经在 fresh CUDA 路径取得可审计终态，不再�
 当前仍没有可发布 winner：真实性审计只证明“这些分数是真的”，不证明 26 个
 `valid-but-poor` 可以晋级，也没有关闭 outer task publication gate。F2 已取得
 `valid-but-poor` 终态，N0/N3/N1 前置合同已关闭，RR1 已取得
-`valid-and-rankable` 终态，R1 也已取得 `valid-and-rankable` 终态；下一步执行
-条件 S1。全部扩展
-取得终态后再做 outer-state reconciliation
-与最终报告，期间不得回到旧 35 项反复重跑。
+`valid-and-rankable` 终态，R1 也已取得 `valid-and-rankable` 终态，S1 已取得
+`valid-but-poor` 终态。所有批准扩展现均有可审计终态；下一步直接做
+outer-state reconciliation 与最终报告，期间不得回到旧 35 项反复重跑。
 
 基线关闭后，最值得进入后续单变量验证的不是再换一个更大的模型，而是：
 
 1. 保留 base top-1 的 depth-20 重排融合：已完成并通过；
 2. 保留 dense top-1 的 dense-heavy RRF：已完成并通过；
-3. 有逐论文 coverage gate 和 PDF-only fallback 的笔记增强：当前下一项；
+3. 有逐论文 coverage gate 和 PDF-only fallback 的笔记增强：已完成但质量失败；
 4. 真正的 parent 命中后 child 重检索，而不是双重 top-k 硬门。
 
 这些候选在 `rq-2` 完成前只作为 backlog 记录；是否进入 `rq-5` 仍由 ADR-003 的 stop gate
