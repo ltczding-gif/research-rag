@@ -91,6 +91,10 @@ def test_generic_template_is_field_neutral_and_kept_in_sync():
     assert "不列举或导入当前 active pack" in catalysis
     assert "按 claim 实际限定后的强度进行裁决" in catalysis
     assert "严重性只相对该行原样写出的 bounded claim" in catalysis
+    assert "对每个拟列为 fatal / major 的 concern 做内部准入检查" in catalysis
+    assert "零个 fatal / major 是完全有效的结果" in catalysis
+    assert "最多三个 surviving 科学问题" in catalysis
+    assert "不得凑满三个" in catalysis
     assert "必须在逻辑上能够区分表中所写的替代解释" in catalysis
     assert "每个 major concern 只能指定一项最有判别力的补证设计" in catalysis
     assert "不得合并 `timeout/unknown`" in catalysis
@@ -149,3 +153,62 @@ def test_profiler_routes_out_of_pack_methods_and_theory_to_generic():
     assert "Formal reasoning or ML methodology" in catalysis
     assert "earth-system methods" in catalysis
     assert "Active-pack boundary gate (required)" in bootstrap
+
+
+def test_note_generator_override_ignores_profiler_recommendation(monkeypatch):
+    captured = {}
+
+    class Backend:
+        def call_model(self, **kwargs):
+            captured.update(kwargs)
+            return {"frontmatter": {}, "body_markdown": "ok"}
+
+    monkeypatch.setattr(
+        pipeline,
+        "load_vertex_schema",
+        lambda _name: {"type": "OBJECT", "properties": {}},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "load_note_generator_system_prompt",
+        lambda template_id: f"SYSTEM:{template_id}",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "compose_note_generator_rules",
+        lambda template_id: f"RULES:{template_id}",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_note_generator_user_prompt",
+        lambda document_profile, note_template_id, template_rules_text: (
+            f"{note_template_id}|{template_rules_text}"
+        ),
+    )
+
+    result = pipeline.run_note_generator(
+        Backend(),
+        "model",
+        {"recommended_template": "electrocatalysis-experimental"},
+        note_template_override="generic-research-note",
+    )
+
+    assert result["body_markdown"] == "ok"
+    assert captured["system_prompt"] == "SYSTEM:generic-research-note"
+    assert captured["user_prompt"] == (
+        "generic-research-note|RULES:generic-research-note"
+    )
+
+
+def test_benchmark_cli_accepts_only_generic_template():
+    parser = pipeline.build_arg_parser()
+
+    parsed = parser.parse_args(
+        ["paper.pdf", "--note-template", "generic-research-note"]
+    )
+    assert parsed.note_template == "generic-research-note"
+
+    import pytest
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["paper.pdf", "--note-template", "domain-specific"])

@@ -51,6 +51,31 @@ def test_local_codex_state_is_ignored():
     assert ".codex/" in gitignore
 
 
+def test_rq2_public_report_allowlist_is_explicit():
+    gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    report_root = "benchmarks/reports/researchqa-rq2/"
+    allowed = {
+        "morning-report.md",
+        "detailed-strategy-analysis.html",
+        "leaderboard.csv",
+        "paper-domain-breakdown.csv",
+        "paired-bootstrap.json",
+        "pareto-frontier.json",
+        "reconciliation.json",
+        "run-manifest.json",
+        "blocked-and-unmapped.jsonl",
+    }
+
+    assert f"!{report_root}" in gitignore
+    assert f"{report_root}*" in gitignore
+    assert f"!{report_root}**" not in gitignore
+    assert {
+        line.removeprefix(f"!{report_root}")
+        for line in gitignore
+        if line.startswith(f"!{report_root}") and line != f"!{report_root}"
+    } == allowed
+
+
 def test_readmes_link_to_each_other():
     english = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     chinese = (REPO_ROOT / "README_zh-CN.md").read_text(encoding="utf-8")

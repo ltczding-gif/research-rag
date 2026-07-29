@@ -61,8 +61,9 @@ A freshly-dispatched, isolated agent whose only input is the manifest path.
 Its job — and **only its job**:
 
 1. Read the manifest JSON at the path given.
-2. Read every PDF listed in `manifest.pdf_paths`.
-3. Apply `manifest.system_prompt` + `manifest.user_prompt` to those PDFs.
+2. Read every PDF listed in `manifest.pdf_paths` and every native-coordinate
+   source packet listed in optional `manifest.source_artifacts`.
+3. Apply `manifest.system_prompt` + `manifest.user_prompt` to those sources.
 4. Produce a single JSON object that strictly conforms to
    `manifest.response_schema`.
 5. Write that JSON to `manifest.expected_output_path`.
@@ -87,6 +88,7 @@ above split machine-readably.
   "temperature": 0.0,
   "combined_hash": "...",                     // stable id for the paper
   "pdf_paths": ["/abs/path/main.pdf", ...],   // what the sub-agent reads
+  "source_artifacts": ["/abs/path/si.json"],  // optional native-coordinate packets
   "system_prompt": "...",                     // pass verbatim
   "user_prompt": "...",                       // pass verbatim
   "response_schema": { ... },                 // strict JSON schema
@@ -97,7 +99,8 @@ above split machine-readably.
     "role": "Fresh sub-agent. Has only this manifest as input.",
     "steps": [
       "Read every PDF listed in pdf_paths.",
-      "Apply system_prompt + user_prompt to those PDFs.",
+      "Read every native-coordinate source packet listed in source_artifacts.",
+      "Apply system_prompt + user_prompt to those sources.",
       "Produce a single JSON object that strictly conforms to response_schema.",
       "Write that JSON to expected_output_path. No other files, no logs, no scanner re-invocation."
     ],
@@ -124,7 +127,7 @@ above split machine-readably.
 ```
 
 **The contract for the sub-agent is the entire `subagent_task` block plus the
-six top-level fields it references** (`pdf_paths`, `system_prompt`,
+top-level fields it references** (`pdf_paths`, `source_artifacts`, `system_prompt`,
 `user_prompt`, `response_schema`, `expected_output_path`, `combined_hash`).
 
 Everything else is for the parent agent.
@@ -208,8 +211,9 @@ The protocol above is host-agnostic. Below are the host-specific bindings.
   (or another fitting subagent if you have one).
 - **Prompt to give the sub-agent:**
   > Read the manifest JSON at `<manifest_path>`. Read every PDF in
-  > `manifest.pdf_paths`. Apply `manifest.system_prompt` and
-  > `manifest.user_prompt` to those PDFs. Produce a single JSON object that
+  > `manifest.pdf_paths` and every packet in optional
+  > `manifest.source_artifacts`. Apply `manifest.system_prompt` and
+  > `manifest.user_prompt` to those sources. Produce a single JSON object that
   > strictly conforms to `manifest.response_schema`. Write that JSON (no
   > extra text, no code fences) to `manifest.expected_output_path`. Do not
   > re-invoke any scanner script. Do not touch any other file.

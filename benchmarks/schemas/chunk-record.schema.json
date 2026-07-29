@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/chunk-record.schema.json",
+  "title": "Wave 1A canonical C0 chunk",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "chunk_id",
+    "paper_id",
+    "file_id",
+    "file_hash",
+    "is_main",
+    "is_si",
+    "start_page",
+    "end_page",
+    "section_path",
+    "source_spans",
+    "text",
+    "text_hash",
+    "extractor_fingerprint",
+    "chunker_fingerprint",
+    "previous_chunk_id",
+    "next_chunk_id",
+    "extraction_warnings"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "chunk_id": {"$ref": "#/$defs/chunk_id"},
+    "paper_id": {"$ref": "#/$defs/id"},
+    "file_id": {"$ref": "#/$defs/id"},
+    "file_hash": {"$ref": "#/$defs/sha256"},
+    "is_main": {"type": "boolean"},
+    "is_si": {"type": "boolean"},
+    "start_page": {"type": "integer", "minimum": 0},
+    "end_page": {"type": "integer", "minimum": 0},
+    "section_path": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "source_spans": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/source_span"}
+    },
+    "text": {"type": "string", "minLength": 1},
+    "text_hash": {"$ref": "#/$defs/sha256"},
+    "extractor_fingerprint": {"$ref": "#/$defs/sha256"},
+    "chunker_fingerprint": {"$ref": "#/$defs/sha256"},
+    "previous_chunk_id": {
+      "oneOf": [
+        {"$ref": "#/$defs/chunk_id"},
+        {"type": "null"}
+      ]
+    },
+    "next_chunk_id": {
+      "oneOf": [
+        {"$ref": "#/$defs/chunk_id"},
+        {"type": "null"}
+      ]
+    },
+    "extraction_warnings": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "is_main": {"const": true},
+        "is_si": {"const": false}
+      }
+    },
+    {
+      "properties": {
+        "is_main": {"const": false},
+        "is_si": {"const": true}
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "chunk_id": {
+      "type": "string",
+      "pattern": "^chunk-[a-f0-9]{64}$"
+    },
+    "source_span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file_id",
+        "pdf_page_index",
+        "char_start_in_normalized_page",
+        "char_end_in_normalized_page",
+        "page_text_hash"
+      ],
+      "properties": {
+        "file_id": {"$ref": "#/$defs/id"},
+        "pdf_page_index": {"type": "integer", "minimum": 0},
+        "char_start_in_normalized_page": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "char_end_in_normalized_page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "page_text_hash": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

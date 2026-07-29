@@ -647,6 +647,23 @@ def build_arg_parser():
             "instead of writing a fresh manifest. See SKILL.md for the 3-invocation flow."
         ),
     )
+    parser.add_argument(
+        "--note-template",
+        choices=["generic-research-note"],
+        help=(
+            "Force Stage B to use the field-neutral repository template instead "
+            "of the profiler recommendation. Intended for controlled benchmarks."
+        ),
+    )
+    parser.add_argument(
+        "--source-artifact",
+        action="append",
+        default=[],
+        help=(
+            "Path to a native-coordinate non-PDF source packet. Repeat for "
+            "multiple packets. Supported only by --backend subagent."
+        ),
+    )
     parser.add_argument("--gcs-bucket", help="GCS bucket used for temporary Vertex AI PDF uploads (vertex backend only).")
     parser.add_argument(
         "--backend",
@@ -937,13 +954,20 @@ def validate_note_draft(payload):
     return payload
 
 
-def run_note_generator(backend, model, document_profile):
+def run_note_generator(
+    backend,
+    model,
+    document_profile,
+    note_template_override=None,
+):
     """Stage B: generate the structured note JSON.
 
     `backend` must already have had `attach_pdfs()` called for the current paper.
     """
     schema = load_vertex_schema("structured_note.vertex.schema.json")
-    note_template_id = document_profile["recommended_template"]
+    note_template_id = (
+        note_template_override or document_profile["recommended_template"]
+    )
     system_prompt = load_note_generator_system_prompt(note_template_id)
     combined_rules_text = compose_note_generator_rules(note_template_id)
     user_prompt = build_note_generator_user_prompt(
@@ -1510,6 +1534,7 @@ def run_multifacet_spec_pipeline(
     preflight=None,
     prepared_pdf_paths=None,
     prepared_pdf_manifest=None,
+    note_template_override=None,
 ):
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1563,6 +1588,7 @@ def run_multifacet_spec_pipeline(
         backend=backend,
         model=note_generator_model,
         document_profile=document_profile,
+        note_template_override=note_template_override,
     )
     note_draft_path = run_dir / "02-note-draft.json"
     write_run_artifact(note_draft_path, note_draft)
@@ -1722,10 +1748,13 @@ def make_backend_from_args(args, *, run_dir=None):
             ("--publish-target", "publish_target"),
             ("--post-publish", "post_publish"),
             ("--note-index-file", "note_index_file"),
+            ("--note-template", "note_template"),
         ):
             value = getattr(args, attribute, None)
             if value is not None:
                 resume_cli_args.extend((flag, str(value)))
+        for source_artifact in getattr(args, "source_artifact", ()) or ():
+            resume_cli_args.extend(("--source-artifact", str(source_artifact)))
         overrides["resume_cli_args"] = resume_cli_args
     elif resume_dir:
         # User passed --resume but selected a non-subagent backend. The flag
@@ -1754,6 +1783,15 @@ def main():
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
     parser = build_arg_parser()
     args = parser.parse_args()
+    if args.source_artifact and args.backend != "subagent":
+        parser.error("--source-artifact requires --backend subagent")
+    source_artifact_records = [
+        {
+            "path": str(Path(path).expanduser().resolve()),
+            "sha256": get_file_hash(Path(path).expanduser().resolve()),
+        }
+        for path in args.source_artifact
+    ]
     note_index = load_note_index(args.note_index_file)
 
     hash_variants = get_combined_hash_variants(args.pdf_paths)
@@ -1775,14 +1813,17 @@ def main():
         # rendered under paper A's frontmatter/hash (hybrid note) and paper
         # A is falsely marked processed.
         recorded_hash = None
+        recorded_bootstrap = {}
         bootstrap_path = run_dir / "00-pipeline-bootstrap.json"
         if bootstrap_path.exists():
             try:
-                recorded_hash = (
+                recorded_bootstrap = (
                     json.loads(bootstrap_path.read_text(encoding="utf-8")) or {}
-                ).get("combined_hash")
+                )
+                recorded_hash = recorded_bootstrap.get("combined_hash")
             except (OSError, json.JSONDecodeError):
                 recorded_hash = None
+                recorded_bootstrap = {}
         if not recorded_hash and re.fullmatch(r"[0-9a-f]{64}", run_dir.name):
             # Default run dirs are named after the combined_hash.
             recorded_hash = run_dir.name
@@ -1793,6 +1834,17 @@ def main():
                 f"   argv PDFs    : {combined_hash}\n"
                 "   Refusing to mix papers. Pass the run_dir that matches these "
                 "PDFs, or drop --resume to start fresh.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        recorded_source_artifacts = recorded_bootstrap.get("source_artifacts")
+        if (
+            recorded_source_artifacts is not None
+            and recorded_source_artifacts != source_artifact_records
+        ):
+            print(
+                "❌ --resume source artifacts differ from the original run. "
+                "Refusing to mix native-coordinate source packets.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -1841,6 +1893,7 @@ def main():
         {
             "combined_hash": combined_hash,
             "pdf_paths": [os.path.abspath(p) for p in args.pdf_paths],
+            "source_artifacts": source_artifact_records,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "domain_pack": DOMAIN_PACK_NAME,
             "assets_available": {
@@ -1894,6 +1947,8 @@ def main():
             combined_hash=combined_hash,
             profiler_pdf_paths=profiler_pdf_paths,
         )
+        if args.source_artifact:
+            backend.attach_source_artifacts(args.source_artifact)
 
         if is_vertex:
             print(f"🪣 Vertex bucket: gs://{backend.bucket_name}")
@@ -1955,6 +2010,7 @@ def main():
             preflight=preflight,
             prepared_pdf_paths=prepared_pdf_paths,
             prepared_pdf_manifest=prepared_pdf_manifest,
+            note_template_override=args.note_template,
         )
         if is_vertex:
             archive_manifest["status"] = "completed"

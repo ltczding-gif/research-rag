@@ -1,0 +1,62 @@
+schema_version: 1
+benchmark_id: researchqa
+status: active
+
+source:
+  repository: khoj-ai/ResearchQA
+  revision: 33f3d7a83a1ae61511b4e3bfadab2f866eff2a03
+  filename: eval_dataset.jsonl
+  bytes: 15921446
+  sha256: 681af78bcb1b60d7740a481a9d37ef3af7d9326a72174dc6798c7e87aaa99b73
+  dataset_card_url: https://huggingface.co/datasets/khoj-ai/ResearchQA
+  download_url: https://huggingface.co/datasets/khoj-ai/ResearchQA/resolve/33f3d7a83a1ae61511b4e3bfadab2f866eff2a03/eval_dataset.jsonl?download=true
+  license: CC-BY-NC-4.0
+  redistribution: external-only
+
+selection:
+  seed: research-rag-researchqa-v1
+  unit: paper
+  ranking: sha256-seed-domain-paper-id
+  include_all_questions: true
+  nested: true
+  tiers:
+    - tier_id: rq-2
+      papers_per_domain: 2
+      expected_papers: 20
+      expected_questions: 254
+      purpose: Fast pipeline smoke and failure inspection; not a quality claim.
+    - tier_id: rq-5
+      papers_per_domain: 5
+      expected_papers: 50
+      expected_questions: 638
+      purpose: First cross-domain chunking and retrieval iteration.
+    - tier_id: rq-10
+      papers_per_domain: 10
+      expected_papers: 100
+      expected_questions: 1263
+      purpose: Broader confirmation before full-corpus execution.
+    - tier_id: rq-all
+      papers_per_domain: all
+      expected_papers: 494
+      expected_questions: 6211
+      purpose: Full public ResearchQA benchmark report.
+
+expected:
+  papers: 494
+  questions: 6211
+  domains:
+    biology: {papers: 49, questions: 629}
+    economics: {papers: 50, questions: 628}
+    education: {papers: 50, questions: 642}
+    environmental_science: {papers: 48, questions: 608}
+    history_humanities: {papers: 50, questions: 636}
+    machine_learning: {papers: 49, questions: 632}
+    mathematics: {papers: 50, questions: 637}
+    psychology: {papers: 50, questions: 544}
+    public_health: {papers: 48, questions: 612}
+    social_science: {papers: 50, questions: 643}
+  question_types:
+    adversarial: 1221
+    comprehension: 1999
+    lookup: 1999
+    multi_hop: 992

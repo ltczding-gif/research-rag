@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/researchqa-source.schema.json",
+  "title": "Pinned ResearchQA source and scale contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "benchmark_id",
+    "status",
+    "source",
+    "selection",
+    "expected"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "benchmark_id": {"const": "researchqa"},
+    "status": {"const": "active"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "revision",
+        "filename",
+        "bytes",
+        "sha256",
+        "dataset_card_url",
+        "download_url",
+        "license",
+        "redistribution"
+      ],
+      "properties": {
+        "repository": {"const": "khoj-ai/ResearchQA"},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "filename": {"const": "eval_dataset.jsonl"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "dataset_card_url": {"type": "string", "format": "uri"},
+        "download_url": {"type": "string", "format": "uri"},
+        "license": {"const": "CC-BY-NC-4.0"},
+        "redistribution": {"const": "external-only"}
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seed",
+        "unit",
+        "ranking",
+        "include_all_questions",
+        "nested",
+        "tiers"
+      ],
+      "properties": {
+        "seed": {"type": "string", "minLength": 1},
+        "unit": {"const": "paper"},
+        "ranking": {"const": "sha256-seed-domain-paper-id"},
+        "include_all_questions": {"const": true},
+        "nested": {"const": true},
+        "tiers": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tier_id",
+              "papers_per_domain",
+              "expected_papers",
+              "expected_questions",
+              "purpose"
+            ],
+            "properties": {
+              "tier_id": {"enum": ["rq-2", "rq-5", "rq-10", "rq-all"]},
+              "papers_per_domain": {
+                "oneOf": [
+                  {"type": "integer", "enum": [2, 5, 10]},
+                  {"const": "all"}
+                ]
+              },
+              "expected_papers": {"type": "integer", "minimum": 1},
+              "expected_questions": {"type": "integer", "minimum": 1},
+              "purpose": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["papers", "questions", "domains", "question_types"],
+      "properties": {
+        "papers": {"type": "integer", "minimum": 1},
+        "questions": {"type": "integer", "minimum": 1},
+        "domains": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["papers", "questions"],
+            "properties": {
+              "papers": {"type": "integer", "minimum": 1},
+              "questions": {"type": "integer", "minimum": 1}
+            }
+          }
+        },
+        "question_types": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/researchqa-run-state.schema.json",
+  "title": "ResearchQA overnight run state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "status",
+    "created_at",
+    "updated_at",
+    "budget_seconds",
+    "elapsed_seconds",
+    "fingerprints",
+    "tasks",
+    "stage_statistics",
+    "events",
+    "report_artifacts"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"$ref": "#/$defs/id"},
+    "status": {
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "partial",
+        "failed",
+        "blocked",
+        "budget-exhausted",
+        "interrupted"
+      ]
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "budget_seconds": {"type": "number", "exclusiveMinimum": 0},
+    "elapsed_seconds": {"type": "number", "minimum": 0},
+    "fingerprints": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "tasks": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/id"},
+      "additionalProperties": {"$ref": "#/$defs/task"}
+    },
+    "stage_statistics": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/stage-statistics"}
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["at", "kind"],
+        "properties": {
+          "at": {"type": "string", "format": "date-time"},
+          "kind": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": true
+      }
+    },
+    "report_artifacts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/artifact"}
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes", "media_type", "schema_id"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 0},
+        "media_type": {"type": "string", "minLength": 1},
+        "schema_id": {"type": ["string", "null"], "minLength": 1}
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "stage_id",
+        "paper_id",
+        "config_id",
+        "input_fingerprint",
+        "status",
+        "attempts",
+        "interruptions",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "duration_seconds",
+        "artifacts",
+        "metadata",
+        "error"
+      ],
+      "properties": {
+        "task_id": {"$ref": "#/$defs/id"},
+        "stage_id": {"$ref": "#/$defs/id"},
+        "paper_id": {"type": "string", "minLength": 1},
+        "config_id": {"type": "string", "minLength": 1},
+        "input_fingerprint": {"type": "string", "minLength": 1},
+        "status": {
+          "enum": ["pending", "running", "completed", "failed", "blocked"]
+        },
+        "attempts": {"type": "integer", "minimum": 0},
+        "interruptions": {"type": "integer", "minimum": 0},
+        "created_at": {"type": "string", "format": "date-time"},
+        "started_at": {"type": ["string", "null"], "format": "date-time"},
+        "finished_at": {"type": ["string", "null"], "format": "date-time"},
+        "duration_seconds": {"type": ["number", "null"], "minimum": 0},
+        "artifacts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/artifact"}
+        },
+        "metadata": {"type": "object"},
+        "error": {"type": ["string", "null"]}
+      }
+    },
+    "stage-statistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "completed_count",
+        "total_duration_seconds",
+        "recent_durations_seconds",
+        "moving_average_seconds"
+      ],
+      "properties": {
+        "completed_count": {"type": "integer", "minimum": 0},
+        "total_duration_seconds": {"type": "number", "minimum": 0},
+        "recent_durations_seconds": {
+          "type": "array",
+          "items": {"type": "number", "minimum": 0},
+          "maxItems": 8
+        },
+        "moving_average_seconds": {"type": ["number", "null"], "minimum": 0}
+      }
+    }
+  }
+}

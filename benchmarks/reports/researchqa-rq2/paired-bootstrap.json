@@ -1,0 +1,1 @@
+{"baseline_config_id":"reranker-4c0466f31afde6284ef0","candidate_config_id":"repair-rr1-093b3f922f8306f447ae","confidence":0.95,"lower":0.008792839488225897,"metric":"coverage_ndcg_at_10","observed_delta":0.013572140173649822,"samples":10000,"schema_version":1,"seed":"research-rag-rq2-final-bootstrap-v1","upper":0.01838922845402013}

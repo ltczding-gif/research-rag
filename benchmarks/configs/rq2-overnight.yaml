@@ -1,0 +1,175 @@
+schema_version: 1
+config_kind: researchqa-overnight
+config_id: rq2-overnight
+description: Deterministic Gate A-F strategy sweep for ResearchQA rq-2.
+
+benchmark:
+  benchmark_id: researchqa
+  tier_id: rq-2
+  paper_count: 20
+  question_count: 254
+  domain_count: 10
+  adversarial_question_count: 50
+  referenced_adversarial_count: 35
+
+paths:
+  cache_root: F:/research-rag/benchmarks/.cache/researchqa
+  runs_dir: runs
+  source_dir: pdfs/rq-2
+  suite_dir: suites/rq-2
+
+retrieval:
+  scope: paper-scoped
+
+budget:
+  wall_clock_seconds: 36000
+  retry_delays_seconds: [5, 20, 60]
+  moving_average_window: 8
+  max_active_note_subagents: 3
+
+gates:
+  mapping_overall_minimum: 0.95
+  mapping_per_paper_minimum: 0.90
+  require_same_evaluable_set: true
+  require_all_papers: true
+  require_all_applicable_questions: true
+  relative_guardrails:
+    max_domain_regression: 0.02
+    max_regressed_domains: 1
+    max_question_type_regression: 0.02
+    max_overall_guardrail_regression: 0.005
+    max_new_recall_at_10_hard_failures: 0
+
+models:
+  embedding:
+    provider: ollama
+    model: qwen3-embedding:4b
+    digest: df5bd2e3c74cd8d069d21dc038f1b359fcdc9458fce1c99bd43c9eb1518ff907
+    dimensions: 2560
+    distance_metric: cosine
+    batch_endpoint: /api/embed
+  reranker:
+    model: Qwen/Qwen3-Reranker-0.6B
+    revision: e61197ed45024b0ed8a2d74b80b4d909f1255473
+    license: Apache-2.0
+
+metrics:
+  chunking_primary: recall_at_5
+  retrieval_primary: coverage_ndcg_at_10
+  source_composition_primary: coverage_ndcg_at_10
+  reranker_primary: coverage_ndcg_at_10
+  guardrails:
+    - recall_at_5
+    - recall_at_10
+    - mrr
+    - all_required_groups_success_at_5
+    - all_required_groups_success_at_10
+    - groups_covered_at_10
+  aggregation_order: [question, paper, domain, overall]
+
+bootstrap:
+  seed: research-rag-rq2-bootstrap-v1
+  samples: 10000
+  confidence: 0.95
+  sampling_unit: paper
+  stratify_by: domain
+
+performance:
+  sample_question_count: 40
+  warmup_passes: 1
+  timed_passes: 3
+  sample_rule: min_sha256_row_id_per_domain_question_type
+
+stages:
+  stage_anchors:
+    pdf_chunker: pdf-fixed-1200
+    note_chunker: note-reviewer-concern
+    retriever: hybrid-rrf
+    source_composition: pdf-only
+  pdf_chunkers:
+    - id: pdf-fixed-400
+      size: 400
+      step: 320
+      min_length: 80
+    - id: pdf-fixed-800
+      size: 800
+      step: 700
+      min_length: 100
+    - id: pdf-fixed-1200
+      size: 1200
+      step: 1000
+      min_length: 120
+    - id: pdf-page-aware
+      target_size: 800
+      hard_max: 1200
+    - id: pdf-section-aware
+      target_size: 800
+      hard_max: 1200
+    - id: pdf-structure-aware
+      target_size: 800
+      hard_max: 1200
+    - id: pdf-parent-child
+      child_size: 400
+      child_step: 320
+      parent_min: 800
+      parent_max: 1600
+  note_chunkers:
+    - id: note-whole
+      rankable: false
+    - id: note-section
+      rankable: true
+    - id: note-claim-evidence
+      rankable: true
+    - id: note-reviewer-concern
+      rankable: false
+  retrievers:
+    - id: dense
+      top_k: 100
+    - id: bm25
+      top_k: 100
+      k1: 1.2
+      b: 0.75
+    - id: hybrid-rrf
+      top_k_per_route: 100
+      rrf_k: 60
+  source_compositions:
+    - id: pdf-only
+    - id: note-to-pdf
+    - id: pdf-note-rrf
+    - id: note-guided-pdf
+    - id: hierarchical-pdf
+  rerankers:
+    - id: rerank-off
+      enabled: false
+    - id: rerank-20-to-10
+      enabled: true
+      input_k: 20
+      output_k: 10
+    - id: rerank-50-to-10
+      enabled: true
+      input_k: 50
+      output_k: 10
+    - id: rerank-100-to-10
+      enabled: true
+      input_k: 100
+      output_k: 10
+  top2_confirmation:
+    pdf_chunkers: 2
+    retrievers: 2
+    source_compositions: 2
+    reranker_modes: 2
+    maximum_combinations: 16
+    selected_pdf_chunkers: [pdf-fixed-800, pdf-fixed-1200]
+    selected_retrievers: [dense, hybrid-rrf]
+    selected_source_compositions: [pdf-only, hierarchical-pdf]
+    selected_reranker_modes: [rerank-off, rerank-50-to-10]
+
+decision:
+  primary_tie_threshold: 0.005
+  tie_break_order:
+    - p95_latency_ms
+    - index_bytes
+    - chunk_count
+    - config_id
+  winner_label: provisional
+  stop_after_report: true

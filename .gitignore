@@ -27,6 +27,18 @@ benchmarks/artifacts/
 benchmarks/corpus/files/
 benchmarks/reports/*
 !benchmarks/reports/.gitkeep
+!benchmarks/reports/README.md
+!benchmarks/reports/researchqa-rq2/
+benchmarks/reports/researchqa-rq2/*
+!benchmarks/reports/researchqa-rq2/morning-report.md
+!benchmarks/reports/researchqa-rq2/detailed-strategy-analysis.html
+!benchmarks/reports/researchqa-rq2/leaderboard.csv
+!benchmarks/reports/researchqa-rq2/paper-domain-breakdown.csv
+!benchmarks/reports/researchqa-rq2/paired-bootstrap.json
+!benchmarks/reports/researchqa-rq2/pareto-frontier.json
+!benchmarks/reports/researchqa-rq2/reconciliation.json
+!benchmarks/reports/researchqa-rq2/run-manifest.json
+!benchmarks/reports/researchqa-rq2/blocked-and-unmapped.jsonl
 
 # --- User state (never check in personal data) ---
 service/chroma/

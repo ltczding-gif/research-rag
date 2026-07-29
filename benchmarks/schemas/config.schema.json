@@ -1,79 +1,474 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/config.schema.json",
-  "title": "Benchmark candidate configuration",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "config_id",
-    "description",
-    "extractor",
-    "chunker",
-    "embedding",
-    "retriever",
-    "reranker"
+  "title": "Benchmark candidate or ResearchQA overnight configuration",
+  "oneOf": [
+    {"$ref": "#/$defs/candidate-config"},
+    {"$ref": "#/$defs/researchqa-overnight-config"}
   ],
-  "properties": {
-    "schema_version": {"const": 1},
-    "config_id": {"$ref": "#/$defs/id"},
-    "description": {"type": "string", "minLength": 1},
-    "extractor": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "revision"],
-      "properties": {
-        "id": {"$ref": "#/$defs/id"},
-        "revision": {"type": "string", "minLength": 1}
-      }
-    },
-    "chunker": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "size", "step", "min_length"],
-      "properties": {
-        "id": {"$ref": "#/$defs/id"},
-        "size": {"type": "integer", "minimum": 1},
-        "step": {"type": "integer", "minimum": 1},
-        "min_length": {"type": "integer", "minimum": 0}
-      }
-    },
-    "embedding": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["provider", "model", "revision"],
-      "properties": {
-        "provider": {"enum": ["fastembed", "ollama", "openai-compat"]},
-        "model": {"type": "string", "minLength": 1},
-        "revision": {"type": "string", "minLength": 1}
-      }
-    },
-    "retriever": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["mode", "distance_metric", "top_k"],
-      "properties": {
-        "mode": {"enum": ["dense", "lexical", "hybrid"]},
-        "distance_metric": {"type": "string", "minLength": 1},
-        "top_k": {"type": "integer", "minimum": 1}
-      }
-    },
-    "reranker": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled"],
-      "properties": {
-        "enabled": {"type": "boolean"},
-        "model": {"type": "string", "minLength": 1},
-        "revision": {"type": "string", "minLength": 1},
-        "top_k": {"type": "integer", "minimum": 1}
-      }
-    }
-  },
   "$defs": {
     "id": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "candidate-config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "config_id",
+        "description",
+        "extractor",
+        "chunker",
+        "embedding",
+        "retriever",
+        "reranker"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "config_id": {"$ref": "#/$defs/id"},
+        "description": {"type": "string", "minLength": 1},
+        "extractor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "revision"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"},
+            "revision": {"type": "string", "minLength": 1}
+          }
+        },
+        "chunker": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "size", "step", "min_length"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"},
+            "size": {"type": "integer", "minimum": 1},
+            "step": {"type": "integer", "minimum": 1},
+            "min_length": {"type": "integer", "minimum": 0}
+          }
+        },
+        "embedding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "model", "revision"],
+          "properties": {
+            "provider": {
+              "enum": ["fastembed", "ollama", "openai-compat"]
+            },
+            "model": {"type": "string", "minLength": 1},
+            "revision": {"type": "string", "minLength": 1}
+          }
+        },
+        "retriever": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "distance_metric", "top_k"],
+          "properties": {
+            "mode": {"enum": ["dense", "lexical", "hybrid"]},
+            "distance_metric": {"type": "string", "minLength": 1},
+            "top_k": {"type": "integer", "minimum": 1}
+          }
+        },
+        "reranker": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "model": {"type": "string", "minLength": 1},
+            "revision": {"type": "string", "minLength": 1},
+            "top_k": {"type": "integer", "minimum": 1}
+          }
+        }
+      }
+    },
+    "researchqa-overnight-config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "config_kind",
+        "config_id",
+        "description",
+        "benchmark",
+        "retrieval",
+        "paths",
+        "budget",
+        "gates",
+        "models",
+        "metrics",
+        "bootstrap",
+        "performance",
+        "stages",
+        "decision"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "config_kind": {"const": "researchqa-overnight"},
+        "config_id": {"const": "rq2-overnight"},
+        "description": {"type": "string", "minLength": 1},
+        "benchmark": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "benchmark_id",
+            "tier_id",
+            "paper_count",
+            "question_count",
+            "domain_count",
+            "adversarial_question_count",
+            "referenced_adversarial_count"
+          ],
+          "properties": {
+            "benchmark_id": {"const": "researchqa"},
+            "tier_id": {"const": "rq-2"},
+            "paper_count": {"const": 20},
+            "question_count": {"const": 254},
+            "domain_count": {"const": 10},
+            "adversarial_question_count": {"const": 50},
+            "referenced_adversarial_count": {"const": 35}
+          }
+        },
+        "retrieval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope"],
+          "properties": {
+            "scope": {"const": "paper-scoped"}
+          }
+        },
+        "paths": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cache_root", "runs_dir", "source_dir", "suite_dir"],
+          "properties": {
+            "cache_root": {"type": "string", "minLength": 1},
+            "runs_dir": {"type": "string", "minLength": 1},
+            "source_dir": {"type": "string", "minLength": 1},
+            "suite_dir": {"type": "string", "minLength": 1}
+          }
+        },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "wall_clock_seconds",
+            "retry_delays_seconds",
+            "moving_average_window",
+            "max_active_note_subagents"
+          ],
+          "properties": {
+            "wall_clock_seconds": {"type": "number", "exclusiveMinimum": 0},
+            "retry_delays_seconds": {
+              "type": "array",
+              "prefixItems": [
+                {"const": 5},
+                {"const": 20},
+                {"const": 60}
+              ],
+              "items": false,
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "moving_average_window": {"type": "integer", "minimum": 1},
+            "max_active_note_subagents": {"const": 3}
+          }
+        },
+        "gates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mapping_overall_minimum",
+            "mapping_per_paper_minimum",
+            "require_same_evaluable_set",
+            "require_all_papers",
+            "require_all_applicable_questions",
+            "relative_guardrails"
+          ],
+          "properties": {
+            "mapping_overall_minimum": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "mapping_per_paper_minimum": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "require_same_evaluable_set": {"const": true},
+            "require_all_papers": {"const": true},
+            "require_all_applicable_questions": {"const": true},
+            "relative_guardrails": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "max_domain_regression",
+                "max_regressed_domains",
+                "max_question_type_regression",
+                "max_overall_guardrail_regression",
+                "max_new_recall_at_10_hard_failures"
+              ],
+              "properties": {
+                "max_domain_regression": {"const": 0.02},
+                "max_regressed_domains": {"const": 1},
+                "max_question_type_regression": {"const": 0.02},
+                "max_overall_guardrail_regression": {"const": 0.005},
+                "max_new_recall_at_10_hard_failures": {"const": 0}
+              }
+            }
+          }
+        },
+        "models": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["embedding", "reranker"],
+          "properties": {
+            "embedding": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "model",
+                "digest",
+                "dimensions",
+                "distance_metric",
+                "batch_endpoint"
+              ],
+              "properties": {
+                "provider": {"const": "ollama"},
+                "model": {"const": "qwen3-embedding:4b"},
+                "digest": {
+                  "const": "df5bd2e3c74cd8d069d21dc038f1b359fcdc9458fce1c99bd43c9eb1518ff907"
+                },
+                "dimensions": {"const": 2560},
+                "distance_metric": {"const": "cosine"},
+                "batch_endpoint": {"const": "/api/embed"}
+              }
+            },
+            "reranker": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "revision", "license"],
+              "properties": {
+                "model": {"const": "Qwen/Qwen3-Reranker-0.6B"},
+                "revision": {
+                  "const": "e61197ed45024b0ed8a2d74b80b4d909f1255473"
+                },
+                "license": {"const": "Apache-2.0"}
+              }
+            }
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "chunking_primary",
+            "retrieval_primary",
+            "source_composition_primary",
+            "reranker_primary",
+            "guardrails",
+            "aggregation_order"
+          ],
+          "properties": {
+            "chunking_primary": {"const": "recall_at_5"},
+            "retrieval_primary": {"const": "coverage_ndcg_at_10"},
+            "source_composition_primary": {"const": "coverage_ndcg_at_10"},
+            "reranker_primary": {"const": "coverage_ndcg_at_10"},
+            "guardrails": {
+              "type": "array",
+              "items": {"type": "string", "minLength": 1},
+              "uniqueItems": true,
+              "minItems": 1
+            },
+            "aggregation_order": {
+              "const": ["question", "paper", "domain", "overall"]
+            }
+          }
+        },
+        "bootstrap": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "seed",
+            "samples",
+            "confidence",
+            "sampling_unit",
+            "stratify_by"
+          ],
+          "properties": {
+            "seed": {"const": "research-rag-rq2-bootstrap-v1"},
+            "samples": {"const": 10000},
+            "confidence": {"const": 0.95},
+            "sampling_unit": {"const": "paper"},
+            "stratify_by": {"const": "domain"}
+          }
+        },
+        "performance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sample_question_count",
+            "warmup_passes",
+            "timed_passes",
+            "sample_rule"
+          ],
+          "properties": {
+            "sample_question_count": {"const": 40},
+            "warmup_passes": {"const": 1},
+            "timed_passes": {"const": 3},
+            "sample_rule": {
+              "const": "min_sha256_row_id_per_domain_question_type"
+            }
+          }
+        },
+        "stages": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stage_anchors",
+            "pdf_chunkers",
+            "note_chunkers",
+            "retrievers",
+            "source_compositions",
+            "rerankers",
+            "top2_confirmation"
+          ],
+          "properties": {
+            "stage_anchors": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "pdf_chunker",
+                "note_chunker",
+                "retriever",
+                "source_composition"
+              ],
+              "properties": {
+                "pdf_chunker": {"const": "pdf-fixed-1200"},
+                "note_chunker": {"const": "note-reviewer-concern"},
+                "retriever": {"const": "hybrid-rrf"},
+                "source_composition": {"const": "pdf-only"}
+              }
+            },
+            "pdf_chunkers": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/stage-option"},
+              "minItems": 7,
+              "maxItems": 7
+            },
+            "note_chunkers": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/stage-option"},
+              "minItems": 4,
+              "maxItems": 4
+            },
+            "retrievers": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/stage-option"},
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "source_compositions": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/stage-option"},
+              "minItems": 5,
+              "maxItems": 5
+            },
+            "rerankers": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/stage-option"},
+              "minItems": 4,
+              "maxItems": 4
+            },
+            "top2_confirmation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "pdf_chunkers",
+                "retrievers",
+                "source_compositions",
+                "reranker_modes",
+                "maximum_combinations",
+                "selected_pdf_chunkers",
+                "selected_retrievers",
+                "selected_source_compositions",
+                "selected_reranker_modes"
+              ],
+              "properties": {
+                "pdf_chunkers": {"const": 2},
+                "retrievers": {"const": 2},
+                "source_compositions": {"const": 2},
+                "reranker_modes": {"const": 2},
+                "maximum_combinations": {"const": 16},
+                "selected_pdf_chunkers": {
+                  "const": ["pdf-fixed-800", "pdf-fixed-1200"]
+                },
+                "selected_retrievers": {
+                  "const": ["dense", "hybrid-rrf"]
+                },
+                "selected_source_compositions": {
+                  "const": ["pdf-only", "hierarchical-pdf"]
+                },
+                "selected_reranker_modes": {
+                  "const": ["rerank-off", "rerank-50-to-10"]
+                }
+              }
+            }
+          }
+        },
+        "decision": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "primary_tie_threshold",
+            "tie_break_order",
+            "winner_label",
+            "stop_after_report"
+          ],
+          "properties": {
+            "primary_tie_threshold": {"const": 0.005},
+            "tie_break_order": {
+              "const": [
+                "p95_latency_ms",
+                "index_bytes",
+                "chunk_count",
+                "config_id"
+              ]
+            },
+            "winner_label": {"const": "provisional"},
+            "stop_after_report": {"const": true}
+          }
+        }
+      }
+    },
+    "stage-option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "size": {"type": "integer", "minimum": 1},
+        "step": {"type": "integer", "minimum": 1},
+        "min_length": {"type": "integer", "minimum": 0},
+        "target_size": {"type": "integer", "minimum": 1},
+        "hard_max": {"type": "integer", "minimum": 1},
+        "child_size": {"type": "integer", "minimum": 1},
+        "child_step": {"type": "integer", "minimum": 1},
+        "parent_min": {"type": "integer", "minimum": 1},
+        "parent_max": {"type": "integer", "minimum": 1},
+        "rankable": {"type": "boolean"},
+        "top_k": {"type": "integer", "minimum": 1},
+        "top_k_per_route": {"type": "integer", "minimum": 1},
+        "rrf_k": {"type": "integer", "minimum": 1},
+        "k1": {"type": "number", "exclusiveMinimum": 0},
+        "b": {"type": "number", "minimum": 0, "maximum": 1},
+        "enabled": {"type": "boolean"},
+        "input_k": {"type": "integer", "minimum": 1},
+        "output_k": {"type": "integer", "minimum": 1}
+      }
     }
   }
 }

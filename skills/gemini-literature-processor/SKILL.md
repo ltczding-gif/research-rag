@@ -234,6 +234,13 @@ the command by hand. It preserves the original canary/vault target, output
 directory, force flag, and model-routing options so a canary run cannot silently
 resume as a live-vault publish.
 
+For a field-neutral benchmark, pass
+`--note-template generic-research-note`. This preserves the profiler stage for
+the three-invocation protocol but forces Stage B to ignore its template
+recommendation. Repeat `--source-artifact <path>` for native-coordinate
+DOCX/XLSX/CSV source packets; they appear in Stage B's
+`manifest.source_artifacts` and are excluded from Stage A.
+
 If an independent cross-audit finds a source-verifiable P1 defect after Stage B,
 do not hand-edit the rendered Markdown and do not ask the original generator to
 self-review. Write a narrow repair brief and build a `note_repair` manifest with
