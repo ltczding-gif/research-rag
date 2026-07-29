@@ -379,6 +379,57 @@ def preserve_top1_rank_rrf(
     return (protected, *remaining[: max(0, top_k - 1)])
 
 
+def preserve_dense_top1_weighted_rrf(
+    dense_hits: Sequence[RetrievalHit],
+    bm25_hits: Sequence[RetrievalHit],
+    *,
+    dense_weight: float,
+    bm25_weight: float,
+    top_k: int,
+    k: int = RRF_K,
+) -> tuple[RetrievalHit, ...]:
+    """Fuse dense/BM25 ranks while deterministically protecting dense top-1."""
+
+    if top_k < 1:
+        raise ValueError("top_k must be positive")
+    fused = reciprocal_rank_fusion(
+        (tuple(dense_hits), tuple(bm25_hits)),
+        k=k,
+        weights=(dense_weight, bm25_weight),
+        top_k=None,
+        source="dense-bm25-weighted-rrf",
+    )
+    if not dense_hits:
+        return fused[:top_k]
+    protected_id = dense_hits[0].item_id
+    fused_by_id = {hit.item_id: hit for hit in fused}
+    protected_fused = fused_by_id.get(protected_id)
+    remaining = tuple(
+        hit for hit in fused if hit.item_id != protected_id
+    )
+    maximum_score = max(
+        (hit.score for hit in fused),
+        default=0.0,
+    )
+    protected = RetrievalHit(
+        item_id=protected_id,
+        score=math.nextafter(maximum_score, math.inf),
+        source="dense-bm25-weighted-rrf",
+        metadata={
+            **dict(dense_hits[0].metadata),
+            "protected_dense_top1": True,
+            "dense_weight": dense_weight,
+            "bm25_weight": bm25_weight,
+            "unprotected_rrf_score": (
+                protected_fused.score
+                if protected_fused is not None
+                else 0.0
+            ),
+        },
+    )
+    return (protected, *remaining[: max(0, top_k - 1)])
+
+
 def pdf_only(
     pdf_hits: Sequence[RetrievalHit],
     *,
@@ -626,6 +677,7 @@ __all__ = [
     "note_to_pdf",
     "pdf_note_rrf",
     "pdf_only",
+    "preserve_dense_top1_weighted_rrf",
     "preserve_top1_rank_rrf",
     "reciprocal_rank_fusion",
     "rerank_hits",

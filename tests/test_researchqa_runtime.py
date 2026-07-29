@@ -21,7 +21,10 @@ from benchmarks.researchqa_retrieval import (
     RERANKER_MODEL_ID,
     RERANKER_REVISION,
 )
-from benchmarks.researchqa_strategy import RR1_RERANK_FUSION_POLICY
+from benchmarks.researchqa_strategy import (
+    R1_RETRIEVER_FUSION_POLICY,
+    RR1_RERANK_FUSION_POLICY,
+)
 from benchmarks.researchqa_runtime import (
     ResearchQARuntimeError,
     run_n0_n3_prequality_runtime,
@@ -269,9 +272,12 @@ def _extension_record(
                 for paper_id, document in documents.items()
             }
         )
-    else:
+    elif kwargs["extension_id"] == "RR1":
         diagnostic_key = "rerank_fusion"
         diagnostics = dict(RR1_RERANK_FUSION_POLICY)
+    else:
+        diagnostic_key = "retriever_fusion"
+        diagnostics = dict(R1_RETRIEVER_FUSION_POLICY)
     candidate = kwargs["candidate"]
     questions = kwargs["questions"]
     question_ids = [str(question["row_id"]) for question in questions]
@@ -740,6 +746,71 @@ def test_extension_runtime_runs_rr1_in_embedding_cache_only_mode(
     }
     assert summary["result"]["corpus_diagnostics"] == {
         "rerank_fusion": dict(RR1_RERANK_FUSION_POLICY)
+    }
+
+
+def test_extension_runtime_runs_r1_without_loading_reranker(
+    tmp_path: Path,
+) -> None:
+    config, run_root = _runtime_fixture(tmp_path)
+    _add_extension_contract(config)
+    events: list[str] = []
+
+    class FakeEmbedding:
+        model_id = OLLAMA_EMBED_MODEL_ID
+        model_digest = OLLAMA_EMBED_MODEL_DIGEST
+        dimensions = OLLAMA_EMBED_DIMENSIONS
+        normalization_revision = "exact-text-utf8-v1"
+
+        def __init__(self, *, cache_dir: Path):
+            self.cache_dir = Path(cache_dir)
+            events.append("embedding:init")
+
+        def preflight(self) -> dict[str, object]:
+            events.append("embedding:preflight")
+            return {
+                "provider": "fake-ollama",
+                "model_id": self.model_id,
+                "fingerprint": "r1-embedding",
+            }
+
+        def release_model(self) -> bool:
+            events.append("embedding:release")
+            return True
+
+    def fake_extension(**kwargs: object) -> SweepCandidateRecord:
+        events.append("extension:run")
+        assert kwargs["extension_id"] == "R1"
+        assert kwargs["reranker"] is None
+        assert kwargs["candidate"].retriever_fusion is not None
+        assert kwargs["baseline_candidate"].retriever == "dense"
+        return _extension_record(kwargs)
+
+    result = run_researchqa_extension_runtime(
+        config,
+        run_root,
+        extension_id="R1",
+        embedding_factory=FakeEmbedding,
+        extension_runner=fake_extension,
+    )
+
+    assert events == [
+        "embedding:init",
+        "embedding:preflight",
+        "extension:run",
+        "embedding:release",
+    ]
+    summary = json.loads(
+        Path(result.runtime_summary_path).read_text(encoding="utf-8")
+    )
+    assert summary["lifecycle"] == {
+        "embedding_released": True,
+        "embedding_cache_only": False,
+        "reranker_required": False,
+        "reranker_released": False,
+    }
+    assert summary["result"]["corpus_diagnostics"] == {
+        "retriever_fusion": dict(R1_RETRIEVER_FUSION_POLICY)
     }
 
 

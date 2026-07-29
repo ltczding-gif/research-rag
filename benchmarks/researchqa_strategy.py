@@ -55,6 +55,7 @@ from benchmarks.researchqa_retrieval import (
     note_to_pdf,
     pdf_note_rrf,
     pdf_only,
+    preserve_dense_top1_weighted_rrf,
     preserve_top1_rank_rrf,
     reciprocal_rank_fusion,
     rerank_hits,
@@ -108,6 +109,16 @@ NOTE_ROUTE_ELIGIBILITY_POLICY: Mapping[str, object] = {
     "requires_pdf_backlink": True,
     "ineligible_fallback": "direct-pdf-only",
     "reviewer_route_can_establish_eligibility": False,
+}
+R1_RETRIEVER_FUSION_ID = "preserve-dense-top1-dense-bm25-2-1-rrf"
+R1_RETRIEVER_FUSION_POLICY: Mapping[str, object] = {
+    "revision": "rq2-r1-preserve-dense-top1-weighted-rrf-v1",
+    "fusion": "weighted-rank-rrf",
+    "dense_weight": 2.0,
+    "bm25_weight": 1.0,
+    "rrf_k": 60,
+    "preserve_dense_top1": True,
+    "output_k": 100,
 }
 RR1_RERANK_FUSION_ID = "preserve-base-top1-equal-rank-rrf"
 RR1_RERANK_FUSION_POLICY: Mapping[str, object] = {
@@ -731,6 +742,7 @@ class StrategyCandidate:
     reranker_depth: int | None
     reranker_keep: int = 10
     rankable: bool = True
+    retriever_fusion: str | None = None
     rerank_fusion: str | None = None
 
     def __post_init__(self) -> None:
@@ -752,6 +764,20 @@ class StrategyCandidate:
                 "note_chunker",
             )
         _require_member(self.retriever, RETRIEVER_IDS, "retriever")
+        if (
+            self.retriever_fusion is not None
+            and self.retriever_fusion != R1_RETRIEVER_FUSION_ID
+        ):
+            raise StrategyContractError(
+                f"unsupported retriever fusion: {self.retriever_fusion}"
+            )
+        if (
+            self.retriever_fusion == R1_RETRIEVER_FUSION_ID
+            and self.retriever != "hybrid-rrf"
+        ):
+            raise StrategyContractError(
+                "R1 requires the hybrid-rrf retriever"
+            )
         _require_member(
             self.source_composition,
             SOURCE_COMPOSITION_IDS,
@@ -820,6 +846,8 @@ class StrategyCandidate:
             "reranker_keep": self.reranker_keep,
             "rankable": self.rankable,
         }
+        if self.retriever_fusion is not None:
+            value["retriever_fusion"] = self.retriever_fusion
         if self.rerank_fusion is not None:
             value["rerank_fusion"] = self.rerank_fusion
         return value
@@ -1196,6 +1224,42 @@ def generate_rr1_candidate(
     )
 
 
+def generate_r1_candidate(
+    config: Mapping[str, Any],
+) -> StrategyCandidate:
+    """Create the frozen R1 extension without changing baseline retrievers."""
+
+    stages = config.get("stages")
+    if not isinstance(stages, Mapping):
+        raise StrategyContractError("config.stages must be a mapping")
+    retriever_rows = _option_rows(stages, "retrievers")
+    retriever_options = {str(row["id"]): row for row in retriever_rows}
+    if set(retriever_options) != set(RETRIEVER_IDS):
+        raise StrategyContractError(
+            f"retrievers must be exactly {list(RETRIEVER_IDS)}"
+        )
+    components = {
+        "stage_id": "retriever",
+        "pdf_chunker": "pdf-fixed-1200",
+        "note_chunker": None,
+        "retriever": "hybrid-rrf",
+        "source_composition": "pdf-only",
+        "reranker": "rerank-off",
+    }
+    identity = {
+        "repair_id": "R1",
+        "components": components,
+        "policy": dict(R1_RETRIEVER_FUSION_POLICY),
+    }
+    return StrategyCandidate(
+        config_id=f"repair-r1-{canonical_fingerprint(identity)[:20]}",
+        reranker_depth=None,
+        reranker_keep=10,
+        retriever_fusion=R1_RETRIEVER_FUSION_ID,
+        **components,
+    )
+
+
 def _option_rows(
     stages: Mapping[str, Any],
     key: str,
@@ -1389,6 +1453,10 @@ def _prepare_candidate_corpus(
         if candidate.pdf_chunker == PDF_STRUCTURE_FALLBACK_ID:
             pdf_chunking_results[paper_id] = result
     corpus_diagnostics: dict[str, object] = {}
+    if candidate.retriever_fusion == R1_RETRIEVER_FUSION_ID:
+        corpus_diagnostics["retriever_fusion"] = dict(
+            R1_RETRIEVER_FUSION_POLICY
+        )
     if candidate.rerank_fusion == RR1_RERANK_FUSION_ID:
         corpus_diagnostics["rerank_fusion"] = dict(
             RR1_RERANK_FUSION_POLICY
@@ -1848,6 +1916,7 @@ def _search(
     query: str,
     query_embedding: Sequence[float] | None,
     top_k: int = 100,
+    retriever_fusion: str | None = None,
 ) -> tuple[RetrievalHit, ...]:
     if not index.passages:
         return ()
@@ -1866,15 +1935,27 @@ def _search(
         if query_embedding is None:
             raise StrategyContractError("hybrid retrieval requires query embedding")
         assert index.bm25 is not None
-        return reciprocal_rank_fusion(
-            (
-                exact_cosine_search(
-                    query_embedding,
-                    index.embeddings,
-                    top_k=top_k,
+        dense_hits = exact_cosine_search(
+            query_embedding,
+            index.embeddings,
+            top_k=top_k,
+        )
+        bm25_hits = index.bm25.search(query, top_k=top_k)
+        if retriever_fusion == R1_RETRIEVER_FUSION_ID:
+            return preserve_dense_top1_weighted_rrf(
+                dense_hits,
+                bm25_hits,
+                dense_weight=float(
+                    R1_RETRIEVER_FUSION_POLICY["dense_weight"]
                 ),
-                index.bm25.search(query, top_k=top_k),
-            ),
+                bm25_weight=float(
+                    R1_RETRIEVER_FUSION_POLICY["bm25_weight"]
+                ),
+                top_k=top_k,
+                k=int(R1_RETRIEVER_FUSION_POLICY["rrf_k"]),
+            )
+        return reciprocal_rank_fusion(
+            (dense_hits, bm25_hits),
             top_k=top_k,
             source="hybrid-rrf",
         )
@@ -2293,6 +2374,7 @@ def run_complete_candidate(
             retriever=candidate.retriever,
             query=query,
             query_embedding=query_vector,
+            retriever_fusion=candidate.retriever_fusion,
         )
         note_route_fallback = (
             candidate.note_chunker == NOTE_CLAIM_PLUS_REVIEWER_ID
@@ -2306,6 +2388,7 @@ def run_complete_candidate(
                 retriever=candidate.retriever,
                 query=query,
                 query_embedding=query_vector,
+                retriever_fusion=candidate.retriever_fusion,
             )
         )
         parent_hits = _search(
@@ -2313,6 +2396,7 @@ def run_complete_candidate(
             retriever=candidate.retriever,
             query=query,
             query_embedding=query_vector,
+            retriever_fusion=candidate.retriever_fusion,
         )
         hits = (
             pdf_only(pdf_hits, top_k=100)
@@ -2856,6 +2940,8 @@ __all__ = [
     "PAPER_SCOPED_RETRIEVAL",
     "QuestionStrategyResult",
     "REFERENCE_MATCH_REVISION",
+    "R1_RETRIEVER_FUSION_ID",
+    "R1_RETRIEVER_FUSION_POLICY",
     "RR1_RERANK_FUSION_ID",
     "RR1_RERANK_FUSION_POLICY",
     "StageRanking",
@@ -2866,6 +2952,7 @@ __all__ = [
     "generate_orthogonal_candidates",
     "generate_f2_candidate",
     "generate_n1_candidate",
+    "generate_r1_candidate",
     "generate_rr1_candidate",
     "load_main_document",
     "load_main_documents",

@@ -27,12 +27,15 @@ from benchmarks.researchqa_strategy import (
     REFERENCE_MATCH_REVISION,
     REFERENCE_PAGE_HINT_METHOD,
     REFERENCE_SECTION_HINT_METHOD,
+    R1_RETRIEVER_FUSION_ID,
+    R1_RETRIEVER_FUSION_POLICY,
     RR1_RERANK_FUSION_ID,
     RR1_RERANK_FUSION_POLICY,
     StrategyContractError,
     generate_f2_candidate,
     generate_n1_candidate,
     generate_orthogonal_candidates,
+    generate_r1_candidate,
     generate_rr1_candidate,
     load_main_documents,
     map_all_references,
@@ -487,6 +490,74 @@ def test_rr1_candidate_is_independent_and_policy_bound():
     assert all(
         "rerank_fusion" not in candidate.to_dict()
         for candidate in original.candidates
+    )
+
+
+def test_r1_candidate_is_independent_and_policy_bound():
+    original = generate_orthogonal_candidates(_config())
+    first = generate_r1_candidate(_config())
+    second = generate_r1_candidate(_config())
+
+    assert first == second
+    assert first.config_id.startswith("repair-r1-")
+    assert first.stage_id == "retriever"
+    assert first.pdf_chunker == "pdf-fixed-1200"
+    assert first.retriever == "hybrid-rrf"
+    assert first.source_composition == "pdf-only"
+    assert first.reranker == "rerank-off"
+    assert first.retriever_fusion == R1_RETRIEVER_FUSION_ID
+    assert first.to_dict()["retriever_fusion"] == R1_RETRIEVER_FUSION_ID
+    assert R1_RETRIEVER_FUSION_POLICY["dense_weight"] == 2.0
+    assert R1_RETRIEVER_FUSION_POLICY["bm25_weight"] == 1.0
+    assert R1_RETRIEVER_FUSION_POLICY["rrf_k"] == 60
+    assert all(
+        "retriever_fusion" not in candidate.to_dict()
+        for candidate in original.candidates
+    )
+
+
+def test_r1_pipeline_preserves_the_direct_dense_top1(tmp_path):
+    documents, questions = _fixture_corpus(tmp_path)
+    baseline = next(
+        candidate
+        for candidate in generate_orthogonal_candidates(
+            _config(),
+            anchor_pdf_chunker="pdf-fixed-1200",
+            anchor_note_chunker="note-reviewer-concern",
+            anchor_retriever="dense",
+            anchor_source_composition="pdf-only",
+        ).stages["retriever"]
+        if candidate.retriever == "dense"
+    )
+    r1 = generate_r1_candidate(_config())
+
+    baseline_result = run_complete_candidate(
+        baseline,
+        documents,
+        questions,
+        expected_paper_ids=("W1", "W2"),
+        expected_question_ids=("q-alpha", "q-beta", "q-diagnostic"),
+        embedder=_FakeEmbedder(),
+    )
+    r1_result = run_complete_candidate(
+        r1,
+        documents,
+        questions,
+        expected_paper_ids=("W1", "W2"),
+        expected_question_ids=("q-alpha", "q-beta", "q-diagnostic"),
+        embedder=_FakeEmbedder(),
+    )
+
+    baseline_rows = {
+        row.row_id: row for row in baseline_result.question_results
+    }
+    assert all(
+        row.ranked_item_ids[0]
+        == baseline_rows[row.row_id].ranked_item_ids[0]
+        for row in r1_result.question_results
+    )
+    assert r1_result.corpus_diagnostics["retriever_fusion"] == dict(
+        R1_RETRIEVER_FUSION_POLICY
     )
 
 

@@ -29,12 +29,14 @@ from benchmarks.researchqa_retrieval import (
     RERANKER_REVISION,
 )
 from benchmarks.researchqa_strategy import (
+    R1_RETRIEVER_FUSION_POLICY,
     RR1_RERANK_FUSION_POLICY,
     StrategyCandidate,
     audit_n1_note_route,
     generate_f2_candidate,
     generate_n1_candidate,
     generate_orthogonal_candidates,
+    generate_r1_candidate,
     generate_rr1_candidate,
     load_main_documents,
     normalize_paper_id,
@@ -425,6 +427,34 @@ def _rr1_candidates(
     return candidate, baselines[0]
 
 
+def _r1_candidates(
+    config: Mapping[str, Any],
+) -> tuple[StrategyCandidate, StrategyCandidate]:
+    candidate = generate_r1_candidate(config)
+    plan = generate_orthogonal_candidates(
+        config,
+        anchor_pdf_chunker="pdf-fixed-1200",
+        anchor_note_chunker="note-reviewer-concern",
+        anchor_retriever="dense",
+        anchor_source_composition="pdf-only",
+    )
+    baselines = tuple(
+        row
+        for row in plan.stages.get("retriever", ())
+        if (
+            row.pdf_chunker == "pdf-fixed-1200"
+            and row.retriever == "dense"
+            and row.source_composition == "pdf-only"
+            and row.reranker == "rerank-off"
+        )
+    )
+    if len(baselines) != 1:
+        raise ResearchQARuntimeError(
+            "R1 requires exactly one frozen dense rerank-off baseline"
+        )
+    return candidate, baselines[0]
+
+
 def _f2_prequality(
     documents: Mapping[str, object],
 ) -> Mapping[str, object]:
@@ -567,9 +597,10 @@ def run_researchqa_extension_runtime(
 ) -> ResearchQAExtensionRuntimeResult:
     """Run one approved extension with only its required model lifecycle."""
 
-    if extension_id not in {"F2", "RR1"}:
+    if extension_id not in {"F2", "R1", "RR1"}:
         raise ResearchQARuntimeError(
-            f"unsupported extension {extension_id!r}; expected F2 or RR1"
+            f"unsupported extension {extension_id!r}; "
+            "expected F2, R1, or RR1"
         )
 
     root = Path(run_root).resolve(strict=False)
@@ -688,10 +719,14 @@ def run_researchqa_extension_runtime(
             candidate, baseline = _f2_candidates(config)
             diagnostics = _f2_prequality(documents)
             diagnostic_key = "pdf_chunking"
-        else:
+        elif extension_id == "RR1":
             candidate, baseline = _rr1_candidates(config)
             diagnostics = dict(RR1_RERANK_FUSION_POLICY)
             diagnostic_key = "rerank_fusion"
+        else:
+            candidate, baseline = _r1_candidates(config)
+            diagnostics = dict(R1_RETRIEVER_FUSION_POLICY)
+            diagnostic_key = "retriever_fusion"
         _atomic_write_json(
             prequality_path,
             {

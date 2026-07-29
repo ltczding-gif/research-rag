@@ -23,6 +23,7 @@ from benchmarks.researchqa_retrieval import (
     note_to_pdf,
     pdf_note_rrf,
     pdf_only,
+    preserve_dense_top1_weighted_rrf,
     preserve_top1_rank_rrf,
     reciprocal_rank_fusion,
     rerank_hits,
@@ -161,6 +162,44 @@ def test_rr1_rank_fusion_protects_base_top1_and_keeps_rrf_order():
         left.score >= right.score
         for left, right in zip(fused, fused[1:])
     )
+
+
+def test_r1_weighted_rrf_protects_dense_top1_and_uses_two_to_one_weights():
+    dense = (
+        _hit("dense-top", 1.0),
+        _hit("shared", 0.9),
+        _hit("dense-only", 0.8),
+    )
+    bm25 = (
+        _hit("bm25-top", 5.0),
+        _hit("shared", 4.0),
+        _hit("dense-top", 3.0),
+    )
+
+    fused = preserve_dense_top1_weighted_rrf(
+        dense,
+        bm25,
+        dense_weight=2.0,
+        bm25_weight=1.0,
+        top_k=4,
+        k=60,
+    )
+    ordinary = reciprocal_rank_fusion(
+        (dense, bm25),
+        weights=(2.0, 1.0),
+        top_k=None,
+    )
+
+    assert fused[0].item_id == "dense-top"
+    assert fused[0].metadata["protected_dense_top1"] is True
+    assert fused[0].metadata["dense_weight"] == 2.0
+    assert fused[0].metadata["bm25_weight"] == 1.0
+    assert [hit.item_id for hit in fused[1:]] == [
+        hit.item_id
+        for hit in ordinary
+        if hit.item_id != "dense-top"
+    ][:3]
+    assert len({hit.item_id for hit in fused}) == len(fused)
 
 
 def test_pdf_only_and_note_to_pdf_compositions():
