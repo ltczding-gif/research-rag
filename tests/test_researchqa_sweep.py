@@ -29,7 +29,12 @@ from benchmarks.researchqa_sweep import (
     SweepCandidateRecord,
     SweepContractError,
     _candidate_input_fingerprint,
+    _candidate_progress_path,
+    _empty_candidate_progress,
+    _load_candidate_progress,
+    _pareto_frontier,
     _relative_guardrail_diagnostics,
+    _write_candidate_progress,
     run_strategy_sweep,
 )
 from service.pdf_ir import (
@@ -69,6 +74,41 @@ def _documents():
             pages=(page,),
         )
     }
+
+
+def _recoverable_documents_and_note():
+    page = DocumentPage.create(
+        paper_id="W1",
+        file_id="Main",
+        pdf_page_index=0,
+        text="Alpha evidence. " + ("Supporting context. " * 100),
+    )
+    documents = {
+        "W1": CanonicalDocument(
+            paper_id="W1",
+            file_id="Main",
+            file_hash=hash_text("long-source-W1"),
+            extractor_fingerprint=DEFAULT_EXTRACTOR_FINGERPRINT,
+            pages=(page,),
+        )
+    }
+    note = """# Frozen note
+
+## Evidence map
+| Evidence ID | Source |
+|---|---|
+| E1 | Alpha evidence [Main p.1] |
+
+## Findings
+### C1：Primary bounded claim
+Alpha evidence is supported by E1. [Main p.1]
+
+## Reviewer verdict
+| Claim | Verdict | Evidence | Alternative | Decisive evidence | Severity |
+|---|---|---|---|---|---|
+| C1 | supported | E1 [Main p.1] | none | replicated evidence | minor |
+"""
+    return documents, note
 
 
 QUESTIONS = (
@@ -389,6 +429,212 @@ def test_candidate_fingerprint_scopes_reranker_adapter_revision():
     assert enabled_v1 != enabled_v2
 
 
+def test_candidate_progress_is_atomic_hash_verified_and_fingerprint_bound(
+    tmp_path,
+):
+    candidate = generate_orthogonal_candidates(_config()).stages[
+        "pdf-chunker"
+    ][0]
+    input_fingerprint = "a" * 64
+    execution = _empty_candidate_progress()
+    root = tmp_path.resolve()
+
+    path = _write_candidate_progress(
+        root,
+        candidate=candidate,
+        input_fingerprint=input_fingerprint,
+        execution=execution,
+    )
+
+    assert path == _candidate_progress_path(
+        root,
+        candidate,
+        input_fingerprint,
+    )
+    assert _load_candidate_progress(
+        root,
+        candidate=candidate,
+        input_fingerprint=input_fingerprint,
+    ) == execution
+
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    envelope["payload"]["execution"]["phase"] = "quality"
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+    with pytest.raises(SweepContractError, match="progress contract failed"):
+        _load_candidate_progress(
+            root,
+            candidate=candidate,
+            input_fingerprint=input_fingerprint,
+        )
+
+    _write_candidate_progress(
+        root,
+        candidate=candidate,
+        input_fingerprint=input_fingerprint,
+        execution=execution,
+    )
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    envelope["payload"]["code_fingerprint"] = "c" * 64
+    envelope["payload_sha256"] = fingerprint_payload(envelope["payload"])
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+    with pytest.raises(SweepContractError, match="progress contract failed"):
+        _load_candidate_progress(
+            root,
+            candidate=candidate,
+            input_fingerprint=input_fingerprint,
+        )
+
+    _write_candidate_progress(
+        root,
+        candidate=candidate,
+        input_fingerprint=input_fingerprint,
+        execution=execution,
+    )
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    envelope["input_fingerprint"] = "b" * 64
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+    with pytest.raises(SweepContractError, match="progress contract failed"):
+        _load_candidate_progress(
+            root,
+            candidate=candidate,
+            input_fingerprint=input_fingerprint,
+        )
+
+
+def test_default_sweep_finalizes_only_completed_candidate_progress(tmp_path):
+    config = _config()
+    config["performance"] = {
+        "sample_question_count": 1,
+        "warmup_passes": 1,
+        "timed_passes": 1,
+    }
+    documents, note = _recoverable_documents_and_note()
+
+    result = run_strategy_sweep(
+        config,
+        tmp_path,
+        documents,
+        QUESTIONS,
+        {"W1": note},
+        _FakeEmbedder([]),
+        _FakeReranker([]),
+        before_rerank_stage=lambda: None,
+        assert_embedding_cache_only=lambda _candidate: None,
+    )
+
+    progress_paths = sorted(
+        (tmp_path / "sweep" / "progress").rglob("*.json")
+    )
+    assert len(progress_paths) == 35
+    progress_envelopes = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in progress_paths
+    ]
+    assert sum(
+        envelope["payload"]["finalized"]
+        for envelope in progress_envelopes
+    ) == sum(record.status == "completed" for record in result.records)
+    assert {
+        envelope["payload"]["execution"]["phase"]
+        for envelope in progress_envelopes
+        if envelope["payload"]["finalized"]
+    } == {"finalized"}
+    for failed in (
+        record for record in result.records if record.status == "failed"
+    ):
+        failed_progress = next(
+            envelope
+            for envelope in progress_envelopes
+            if envelope["config_id"] == failed.candidate.config_id
+        )
+        assert failed_progress["payload"]["finalized"] is False
+        assert failed.payload["failure_context"]["progress"]["sha256"]
+
+
+def test_default_sweep_resumes_after_transient_latency_interruption(tmp_path):
+    config = _config()
+    config["performance"] = {
+        "sample_question_count": 1,
+        "warmup_passes": 1,
+        "timed_passes": 1,
+    }
+    documents, note = _recoverable_documents_and_note()
+    events = []
+
+    class _InterruptibleReranker(_FakeReranker):
+        def __init__(self, values):
+            super().__init__(values)
+            self.attempts = 0
+            self.fail_at = 3
+
+        def score_pairs(self, query, passages, *, batch_size):
+            self.attempts += 1
+            if self.fail_at == self.attempts:
+                raise ModelTransportError("transient timed interruption")
+            return super().score_pairs(
+                query,
+                passages,
+                batch_size=batch_size,
+            )
+
+    reranker = _InterruptibleReranker(events)
+    embedder = _FakeEmbedder(events)
+    with pytest.raises(
+        ModelTransportError,
+        match="transient timed interruption",
+    ):
+        run_strategy_sweep(
+            config,
+            tmp_path,
+            documents,
+            QUESTIONS,
+            {"W1": note},
+            embedder,
+            reranker,
+            before_rerank_stage=lambda: None,
+            assert_embedding_cache_only=lambda _candidate: None,
+        )
+
+    partial_paths = [
+        path
+        for path in (tmp_path / "sweep" / "progress" / "reranker").rglob(
+            "*.json"
+        )
+        if json.loads(path.read_text(encoding="utf-8"))["payload"][
+            "execution"
+        ]["phase"]
+        == "latency-warmup"
+    ]
+    assert len(partial_paths) == 1
+    partial = json.loads(partial_paths[0].read_text(encoding="utf-8"))
+    assert partial["payload"]["execution"]["phase"] == "latency-warmup"
+    assert partial["payload"]["execution"]["warmup_completed_passes"] == 1
+    assert partial["payload"]["execution"]["timed_passes"] == []
+
+    reranker.attempts = 0
+    reranker.fail_at = None
+    events.clear()
+    result = run_strategy_sweep(
+        config,
+        tmp_path,
+        documents,
+        QUESTIONS,
+        {"W1": note},
+        embedder,
+        reranker,
+        before_rerank_stage=lambda: None,
+        assert_embedding_cache_only=lambda _candidate: None,
+    )
+
+    assert events.count("rerank") == 25
+    finalized = json.loads(
+        partial_paths[0].read_text(encoding="utf-8")
+    )
+    assert finalized["payload"]["finalized"] is True
+    assert finalized["payload"]["execution"]["phase"] == "finalized"
+    assert sum(record.status == "completed" for record in result.records) == 33
+
+
 def test_guardrail_pass_is_pending_until_diagnostics_are_finalized():
     candidate = generate_orthogonal_candidates(_config()).stages[
         "pdf-chunker"
@@ -450,6 +696,50 @@ def test_guardrail_pass_is_pending_until_diagnostics_are_finalized():
         },
     )
     assert truthy_mapping.mapping_passed is False
+
+
+def test_observed_only_latency_cannot_create_a_pareto_point():
+    candidate = generate_orthogonal_candidates(_config()).stages[
+        "pdf-chunker"
+    ][0]
+
+    def record(config_id, latency, index_bytes, validity):
+        current = replace(candidate, config_id=config_id)
+        return SweepCandidateRecord(
+            candidate=current,
+            status="completed",
+            input_fingerprint="input",
+            payload={
+                "primary_score": 1.0,
+                "p95_latency_ms": latency,
+                "latency_metrics": {"validity": validity},
+                "index_bytes": index_bytes,
+                "chunk_count": 1,
+                "guardrail_finalized": True,
+                "guardrails_passed": True,
+                "mapping": {"coverage": {"passed": True}},
+            },
+            result_path="candidate.json",
+        )
+
+    observed = _pareto_frontier(
+        (
+            record("slow-small", 20, 100, "observed-only"),
+            record("fast-large", 10, 200, "observed-only"),
+        )
+    )
+    decisive = _pareto_frontier(
+        (
+            record("slow-small", 20, 100, "decisive"),
+            record("fast-large", 10, 200, "decisive"),
+        )
+    )
+
+    assert [row["config_id"] for row in observed] == ["slow-small"]
+    assert {row["config_id"] for row in decisive} == {
+        "slow-small",
+        "fast-large",
+    }
 
 
 def test_record_completion_requires_explicit_execution_complete():
@@ -666,6 +956,7 @@ def test_interrupted_sweep_resumes_35_unique_candidates_and_orders_callbacks(
         "stage_id",
         "primary",
         "p95_latency_ms",
+        "latency_validity",
         "index_bytes",
         "chunk_count",
         "status",

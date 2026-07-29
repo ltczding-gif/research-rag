@@ -20,7 +20,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from benchmarks.overnight import canonical_json_bytes, fingerprint_payload
+from benchmarks.overnight import (
+    canonical_json_bytes,
+    fingerprint_payload,
+    sha256_path,
+)
 from benchmarks.researchqa_models import ModelAdapterError, ModelTransportError
 from benchmarks.researchqa_scoring import (
     CandidateSummary,
@@ -43,6 +47,16 @@ from service.pdf_ir import CanonicalDocument
 
 SWEEP_SCHEMA_VERSION = 1
 SWEEP_ENGINE_REVISION = "researchqa-sweep-v9"
+CANDIDATE_PROGRESS_SCHEMA_VERSION = 1
+CANDIDATE_PROGRESS_CODE_FINGERPRINT = fingerprint_payload(
+    {
+        "scoring": sha256_path(Path(rank_candidates.__code__.co_filename))[1],
+        "strategy": sha256_path(
+            Path(run_complete_candidate.__code__.co_filename)
+        )[1],
+        "sweep": sha256_path(Path(__file__))[1],
+    }
+)
 
 
 class SweepContractError(ValueError):
@@ -106,6 +120,16 @@ class SweepCandidateRecord:
     @property
     def p95_latency_ms(self) -> float:
         return float(self.payload.get("p95_latency_ms", math.inf))
+
+    @property
+    def latency_validity(self) -> str:
+        metrics = self.payload.get("latency_metrics")
+        if isinstance(metrics, Mapping) and metrics.get("validity") in {
+            "decisive",
+            "observed-only",
+        }:
+            return str(metrics["validity"])
+        return "observed-only"
 
     @property
     def index_bytes(self) -> int:
@@ -183,6 +207,7 @@ class SweepCandidateRecord:
                 and self.guardrails_passed
                 and self.candidate.rankable
             ),
+            latency_decisive=self.latency_validity == "decisive",
         )
 
 
@@ -301,6 +326,298 @@ def _result_path(run_root: Path, candidate: StrategyCandidate) -> Path:
         / candidate.stage_id
         / f"{candidate.config_id}.json"
     )
+
+
+def _candidate_progress_path(
+    run_root: Path,
+    candidate: StrategyCandidate,
+    input_fingerprint: str,
+) -> Path:
+    if (
+        not isinstance(input_fingerprint, str)
+        or len(input_fingerprint) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in input_fingerprint
+        )
+    ):
+        raise SweepContractError("candidate input fingerprint is invalid")
+    return (
+        run_root
+        / "sweep"
+        / "progress"
+        / candidate.stage_id
+        / candidate.config_id
+        / f"{input_fingerprint}.json"
+    )
+
+
+def _empty_candidate_progress() -> dict[str, object]:
+    return {
+        "progress_schema_version": CANDIDATE_PROGRESS_SCHEMA_VERSION,
+        "phase": "preparing",
+        "completed_paper_ids": [],
+        "completed_question_ids": [],
+        "question_results": [],
+        "performance_question_ids": [],
+        "warmup_completed_passes": 0,
+        "timed_passes": [],
+    }
+
+
+def _write_candidate_progress(
+    run_root: Path,
+    *,
+    candidate: StrategyCandidate,
+    input_fingerprint: str,
+    execution: Mapping[str, Any],
+    finalized: bool = False,
+    final_candidate: Mapping[str, str] | None = None,
+) -> Path:
+    question_results = execution.get("question_results")
+    if not isinstance(question_results, list):
+        raise SweepContractError(
+            "candidate progress question_results must be a list"
+        )
+    payload = {
+        "candidate": candidate.to_dict(),
+        "code_fingerprint": CANDIDATE_PROGRESS_CODE_FINGERPRINT,
+        "execution": dict(execution),
+        "question_results_sha256": fingerprint_payload(question_results),
+        "finalized": finalized,
+        "final_candidate": (
+            dict(final_candidate) if final_candidate is not None else None
+        ),
+    }
+    envelope = {
+        "schema_version": SWEEP_SCHEMA_VERSION,
+        "engine_revision": SWEEP_ENGINE_REVISION,
+        "progress_schema_version": CANDIDATE_PROGRESS_SCHEMA_VERSION,
+        "config_id": candidate.config_id,
+        "stage_id": candidate.stage_id,
+        "input_fingerprint": input_fingerprint,
+        "payload_sha256": fingerprint_payload(payload),
+        "payload": payload,
+    }
+    path = _candidate_progress_path(
+        run_root,
+        candidate,
+        input_fingerprint,
+    )
+    _atomic_write_json(path, envelope)
+    return path
+
+
+def _load_candidate_progress(
+    run_root: Path,
+    *,
+    candidate: StrategyCandidate,
+    input_fingerprint: str,
+) -> Mapping[str, Any] | None:
+    path = _candidate_progress_path(
+        run_root,
+        candidate,
+        input_fingerprint,
+    )
+    if not path.is_file():
+        return None
+    try:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SweepContractError(
+            f"candidate progress is unreadable: {candidate.config_id}"
+        ) from exc
+    payload = (
+        envelope.get("payload") if isinstance(envelope, Mapping) else None
+    )
+    execution = (
+        payload.get("execution") if isinstance(payload, Mapping) else None
+    )
+    question_results = (
+        execution.get("question_results")
+        if isinstance(execution, Mapping)
+        else None
+    )
+    if (
+        not isinstance(envelope, Mapping)
+        or envelope.get("schema_version") != SWEEP_SCHEMA_VERSION
+        or envelope.get("engine_revision") != SWEEP_ENGINE_REVISION
+        or envelope.get("progress_schema_version")
+        != CANDIDATE_PROGRESS_SCHEMA_VERSION
+        or envelope.get("config_id") != candidate.config_id
+        or envelope.get("stage_id") != candidate.stage_id
+        or envelope.get("input_fingerprint") != input_fingerprint
+        or not isinstance(payload, Mapping)
+        or envelope.get("payload_sha256") != fingerprint_payload(payload)
+        or payload.get("candidate") != candidate.to_dict()
+        or payload.get("code_fingerprint")
+        != CANDIDATE_PROGRESS_CODE_FINGERPRINT
+        or not isinstance(execution, Mapping)
+        or execution.get("progress_schema_version")
+        != CANDIDATE_PROGRESS_SCHEMA_VERSION
+        or not isinstance(question_results, list)
+        or payload.get("question_results_sha256")
+        != fingerprint_payload(question_results)
+        or not isinstance(payload.get("finalized"), bool)
+    ):
+        raise SweepContractError(
+            f"candidate progress contract failed: {candidate.config_id}"
+        )
+    if payload["finalized"]:
+        final_candidate = payload.get("final_candidate")
+        if not isinstance(final_candidate, Mapping):
+            raise SweepContractError(
+                f"finalized progress lacks candidate: {candidate.config_id}"
+            )
+        relative_path = final_candidate.get("path")
+        if not isinstance(relative_path, str) or not relative_path:
+            raise SweepContractError(
+                f"finalized progress path is invalid: {candidate.config_id}"
+            )
+        candidate_path = (run_root / relative_path).resolve(strict=False)
+        if run_root != candidate_path and run_root not in candidate_path.parents:
+            raise SweepContractError(
+                f"finalized progress path escapes run: {candidate.config_id}"
+            )
+        try:
+            candidate_envelope = json.loads(
+                candidate_path.read_text(encoding="utf-8")
+            )
+            _, actual_sha = sha256_path(candidate_path)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SweepContractError(
+                f"finalized candidate is unreadable: {candidate.config_id}"
+            ) from exc
+        candidate_payload = (
+            candidate_envelope.get("payload")
+            if isinstance(candidate_envelope, Mapping)
+            else None
+        )
+        if (
+            actual_sha != final_candidate.get("sha256")
+            or not isinstance(candidate_payload, Mapping)
+            or candidate_envelope.get("payload_sha256")
+            != fingerprint_payload(candidate_payload)
+            or candidate_envelope.get("payload_sha256")
+            != final_candidate.get("payload_sha256")
+            or candidate_envelope.get("config_id") != candidate.config_id
+            or candidate_envelope.get("stage_id") != candidate.stage_id
+            or candidate_envelope.get("input_fingerprint")
+            != input_fingerprint
+            or candidate_envelope.get("status") != "completed"
+            or candidate_payload.get("execution_complete") is not True
+            or candidate_payload.get("guardrail_finalized") is not True
+            or execution.get("phase") != "finalized"
+        ):
+            raise SweepContractError(
+                f"finalized progress candidate differs: {candidate.config_id}"
+            )
+    return dict(execution)
+
+
+def _finalize_candidate_progress(
+    run_root: Path,
+    *,
+    candidate: StrategyCandidate,
+    input_fingerprint: str,
+    candidate_path: Path,
+) -> Path:
+    execution = _load_candidate_progress(
+        run_root,
+        candidate=candidate,
+        input_fingerprint=input_fingerprint,
+    )
+    if execution is None:
+        raise SweepContractError(
+            f"candidate progress is missing: {candidate.config_id}"
+        )
+    resolved = candidate_path.resolve(strict=False)
+    if run_root != resolved and run_root not in resolved.parents:
+        raise SweepContractError(
+            f"candidate envelope escapes run: {candidate.config_id}"
+        )
+    try:
+        envelope = json.loads(resolved.read_text(encoding="utf-8"))
+        _, envelope_sha = sha256_path(resolved)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SweepContractError(
+            f"candidate envelope is unreadable: {candidate.config_id}"
+        ) from exc
+    payload = (
+        envelope.get("payload") if isinstance(envelope, Mapping) else None
+    )
+    if (
+        not isinstance(payload, Mapping)
+        or envelope.get("payload_sha256") != fingerprint_payload(payload)
+        or envelope.get("config_id") != candidate.config_id
+        or envelope.get("stage_id") != candidate.stage_id
+        or envelope.get("input_fingerprint") != input_fingerprint
+        or envelope.get("status") != "completed"
+        or payload.get("execution_complete") is not True
+        or payload.get("guardrail_finalized") is not True
+    ):
+        raise SweepContractError(
+            f"candidate envelope cannot finalize progress: "
+            f"{candidate.config_id}"
+        )
+    return _write_candidate_progress(
+        run_root,
+        candidate=candidate,
+        input_fingerprint=input_fingerprint,
+        execution={**execution, "phase": "finalized"},
+        finalized=True,
+        final_candidate={
+            "path": resolved.relative_to(run_root).as_posix(),
+            "sha256": envelope_sha,
+            "payload_sha256": str(envelope["payload_sha256"]),
+        },
+    )
+
+
+def _candidate_progress_reference(
+    run_root: Path,
+    *,
+    candidate: StrategyCandidate,
+    input_fingerprint: str,
+) -> Mapping[str, Any]:
+    execution = _load_candidate_progress(
+        run_root,
+        candidate=candidate,
+        input_fingerprint=input_fingerprint,
+    )
+    path = _candidate_progress_path(
+        run_root,
+        candidate,
+        input_fingerprint,
+    )
+    if execution is None or not path.is_file():
+        return {
+            "completed_paper_ids": [],
+            "completed_question_ids": [],
+        }
+    _, digest = sha256_path(path)
+    timed_passes = execution.get("timed_passes")
+    return {
+        "path": path.relative_to(run_root).as_posix(),
+        "sha256": digest,
+        "phase": execution.get("phase"),
+        "completed_paper_ids": list(
+            execution.get("completed_paper_ids", [])
+        ),
+        "completed_question_ids": list(
+            execution.get("completed_question_ids", [])
+        ),
+        "performance_question_ids": list(
+            execution.get("performance_question_ids", [])
+        ),
+        "warmup_completed_passes": execution.get(
+            "warmup_completed_passes",
+            0,
+        ),
+        "timed_completed_passes": (
+            len(timed_passes) if isinstance(timed_passes, list) else 0
+        ),
+    }
 
 
 _COMPACT_PAYLOAD_KEYS = (
@@ -1388,6 +1705,7 @@ def _pareto_frontier(
             "stage_id": record.candidate.stage_id,
             "primary": float(record.primary),
             "p95_latency_ms": record.p95_latency_ms,
+            "latency_validity": record.latency_validity,
             "index_bytes": record.index_bytes,
             "chunk_count": record.chunk_count,
             "status": record.status,
@@ -1396,16 +1714,25 @@ def _pareto_frontier(
         for record in records
         if record.primary is not None
     ]
+    use_latency = bool(points) and all(
+        point["latency_validity"] == "decisive" for point in points
+    )
     frontier = []
     for point in points:
         dominated = any(
             other["config_id"] != point["config_id"]
             and other["primary"] >= point["primary"]
-            and other["p95_latency_ms"] <= point["p95_latency_ms"]
+            and (
+                not use_latency
+                or other["p95_latency_ms"] <= point["p95_latency_ms"]
+            )
             and other["index_bytes"] <= point["index_bytes"]
             and (
                 other["primary"] > point["primary"]
-                or other["p95_latency_ms"] < point["p95_latency_ms"]
+                or (
+                    use_latency
+                    and other["p95_latency_ms"] < point["p95_latency_ms"]
+                )
                 or other["index_bytes"] < point["index_bytes"]
             )
             for other in points
@@ -1416,7 +1743,11 @@ def _pareto_frontier(
         frontier,
         key=lambda point: (
             -float(point["primary"]),
-            float(point["p95_latency_ms"]),
+            (
+                float(point["p95_latency_ms"])
+                if use_latency
+                else 0.0
+            ),
             int(point["index_bytes"]),
             str(point["config_id"]),
         ),
@@ -1601,6 +1932,7 @@ def _write_final_report_artifacts(
                     "" if record.primary is None else record.primary
                 ),
                 "p95_latency_ms": record.p95_latency_ms,
+                "latency_validity": record.latency_validity,
                 "index_bytes": record.index_bytes,
                 "chunk_count": record.chunk_count,
                 "pdf_chunker": candidate.pdf_chunker,
@@ -1746,8 +2078,9 @@ def _write_final_report_artifacts(
             f"- Paired delta: {bootstrap.observed_delta:+.6f} "
             f"(95% CI {bootstrap.lower:+.6f} to {bootstrap.upper:+.6f}; "
             f"{bootstrap.samples:,} domain-stratified paper resamples)",
-            f"- Winner p95 retrieval latency: "
-            f"{winner.p95_latency_ms:.3f} ms",
+            f"- Winner observed p95 retrieval latency: "
+            f"{winner.p95_latency_ms:.3f} ms "
+            f"(`{winner.latency_validity}`)",
             "",
             "| Stage | Winner | Primary |",
             "|---|---|---:|",
@@ -1845,6 +2178,7 @@ def run_strategy_sweep(
     artifact_paths: list[Path] = []
     evidence_mapping_cache: dict[str, EvidenceMappingBundle] = {}
     rerank_entered = False
+    progress_enabled = candidate_executor is run_complete_candidate
 
     def execute_stage(
         stage_id: str,
@@ -1873,12 +2207,58 @@ def run_strategy_sweep(
                 expected_question_ids=question_ids,
             )
             if record is None:
+                resume_progress = None
+                progress_callback = None
+                if progress_enabled:
+                    resume_progress = _load_candidate_progress(
+                        root,
+                        candidate=candidate,
+                        input_fingerprint=input_fingerprint,
+                    )
+                    if (
+                        resume_progress is not None
+                        and resume_progress.get("phase") == "finalized"
+                    ):
+                        raise SweepContractError(
+                            "finalized progress exists but the candidate "
+                            f"checkpoint is invalid: {candidate.config_id}"
+                        )
+                    if resume_progress is None:
+                        resume_progress = _empty_candidate_progress()
+                        _write_candidate_progress(
+                            root,
+                            candidate=candidate,
+                            input_fingerprint=input_fingerprint,
+                            execution=resume_progress,
+                        )
+
+                    def progress_callback(
+                        execution: Mapping[str, object],
+                        *,
+                        _candidate: StrategyCandidate = candidate,
+                        _input_fingerprint: str = input_fingerprint,
+                    ) -> None:
+                        _write_candidate_progress(
+                            root,
+                            candidate=_candidate,
+                            input_fingerprint=_input_fingerprint,
+                            execution=execution,
+                        )
+
                 if rerank_phase:
                     if not rerank_entered:
                         before_rerank_stage()
                         rerank_entered = True
                     assert_embedding_cache_only(candidate)
                 try:
+                    progress_kwargs = (
+                        {
+                            "resume_progress": resume_progress,
+                            "progress_callback": progress_callback,
+                        }
+                        if progress_enabled
+                        else {}
+                    )
                     result = candidate_executor(
                         candidate,
                         documents,
@@ -1900,6 +2280,7 @@ def run_strategy_sweep(
                             performance_timed_passes
                         ),
                         evidence_mapping_cache=evidence_mapping_cache,
+                        **progress_kwargs,
                     )
                     metric_bundle_complete = all(
                         (
@@ -1951,6 +2332,39 @@ def run_strategy_sweep(
                     # deterministic, permanently resumed checkpoint.
                     raise
                 except Exception as exc:
+                    failure_context = {
+                        "phase": "candidate-execution",
+                        "row_id": None,
+                        "pass_index": None,
+                        "progress": {
+                            "completed_paper_ids": [],
+                            "completed_question_ids": [],
+                        },
+                    }
+                    if progress_enabled:
+                        annotated = getattr(
+                            exc,
+                            "researchqa_failure_context",
+                            None,
+                        )
+                        failure_context = {
+                            **(
+                                dict(annotated)
+                                if isinstance(annotated, Mapping)
+                                else {
+                                    "phase": "candidate-execution",
+                                    "paper_id": None,
+                                    "row_id": None,
+                                    "pass_kind": None,
+                                    "pass_index": None,
+                                }
+                            ),
+                            "progress": _candidate_progress_reference(
+                                root,
+                                candidate=candidate,
+                                input_fingerprint=input_fingerprint,
+                            ),
+                        }
                     record = _write_candidate_record(
                         path,
                         candidate=candidate,
@@ -1962,15 +2376,7 @@ def run_strategy_sweep(
                             "failure_kind": _failure_kind(exc),
                             "error_type": type(exc).__name__,
                             "error": str(exc) or type(exc).__name__,
-                            "failure_context": {
-                                "phase": "candidate-execution",
-                                "row_id": None,
-                                "pass_index": None,
-                                "progress": {
-                                    "completed_paper_ids": [],
-                                    "completed_question_ids": [],
-                                },
-                            },
+                            "failure_context": failure_context,
                             "traceback": traceback.format_exc(),
                             "guardrail_finalized": False,
                         },
@@ -1978,6 +2384,14 @@ def run_strategy_sweep(
             gc.collect()
             stage_records.append(record)
             artifact_paths.append(Path(record.result_path))
+            if progress_enabled:
+                progress_path = _candidate_progress_path(
+                    root,
+                    candidate,
+                    input_fingerprint,
+                )
+                if progress_path.is_file():
+                    artifact_paths.append(progress_path)
 
         upstream_eligible_components = None
         if stage_id == "top2-confirmation":
@@ -2005,6 +2419,20 @@ def run_strategy_sweep(
                 ),
             )
         )
+        if progress_enabled:
+            for record in stage_records:
+                progress_path = _candidate_progress_path(
+                    root,
+                    record.candidate,
+                    record.input_fingerprint,
+                )
+                if record.status == "completed" and progress_path.is_file():
+                    _finalize_candidate_progress(
+                        root,
+                        candidate=record.candidate,
+                        input_fingerprint=record.input_fingerprint,
+                        candidate_path=Path(record.result_path),
+                    )
         all_records.extend(stage_records)
         ranking = _rank_stage(
             stage_id,
@@ -2143,6 +2571,7 @@ def run_strategy_sweep(
             "stage_id": record.candidate.stage_id,
             "primary": record.primary,
             "p95_latency_ms": record.p95_latency_ms,
+            "latency_validity": record.latency_validity,
             "index_bytes": record.index_bytes,
             "chunk_count": record.chunk_count,
             "status": record.status,

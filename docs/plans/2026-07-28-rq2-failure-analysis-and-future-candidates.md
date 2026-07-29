@@ -449,9 +449,9 @@ incomplete、pending、基础设施或未知失败会阻止 stage/final/public e
 S1 的冻结依赖顺序做扩展评测。现有 leaderboard、Pareto 和 decision summary 仍只是
 基线诊断产物，不能替代扩展策略完成后的最终报告。
 
-这只关闭了 fail-open 发布，还没有实现候选内部恢复。`run_complete_candidate` 当前先执行
+关闭 fail-open 发布时还没有实现候选内部恢复。旧 `run_complete_candidate` 会先执行
 全部 254 条 quality rows，再执行 warmup/timed latency passes，最后才返回完整结果；
-`execute_stage` 看不到内部进度。若中途抛异常，新失败 envelope 仍只能写
+旧 `execute_stage` 看不到内部进度。若中途抛异常，新失败 envelope 只能写
 `phase=candidate-execution`、`row_id=null`、`pass_index=null` 和空的已完成论文/问题列表。
 旧隔离区中的 depth-100 `SystemError` payload 甚至只有 `error/error_type`，6 个 CUDA
 失败也无法证明发生在 quality 还是 latency。因此，“字段存在”不能当作“原子 resume
@@ -495,6 +495,36 @@ thermal slowdown 已为 active，所以其 p95 只能解释为 observed cost，�
    到偶然有利。
 5. observed-only latency 不得支配 Pareto 点，也不得产生 winner 文案。只有完整受控 artifact
    通过相同输入、等样本和环境门后，p95 才能进入正式 tie-break。
+
+2026-07-29 已按上述合同实现恢复与安全排序：
+
+1. 每个新执行候选写入
+   `sweep/progress/<stage>/<config_id>/<input_fingerprint>.json`。envelope 同时绑定
+   candidate 身份、sweep engine、progress schema、input fingerprint 以及
+   strategy/sweep/scoring 源码 fingerprint，并校验整个 payload SHA 和独立的
+   question-results SHA；损坏或身份不符直接 fail closed。
+2. quality 只在完整论文结束后原子写入 question rows；resume 验证已完成论文恰好对应其
+   全部 row IDs，拒绝 partial paper，只执行未完成论文。latency 只在完整 warmup/timed
+   pass 后写入，保存固定 performance row IDs 和每个 pass 的 query/rerank/total samples；
+   中断 pass 不落盘，恢复时重新执行该 pass。
+3. quality/latency 异常会携带准确的 `paper_id`、`row_id`、pass kind/index；失败 envelope
+   引用最新 progress 的 run-relative path 和 SHA。`ModelTransportError` 仍交给外层有界
+   重试，但不会丢失已验证进度。
+4. progress 只有在 candidate envelope 完整、相对 guardrail finalized、payload SHA 与
+   文件 SHA 都复核后才标 `finalized`；确定性策略失败保持非 finalized，不能进入排名。
+5. 真实恢复回归在首个 rerank 候选 timed pass 中注入传输中断：第二次 sweep 只发生 25 次
+   rerank 调用，而完整重算应为 27 次，证明已完成 quality 和 warmup 没有重做；35 候选
+   fixture 也逐项验证 completed progress finalized、failed progress 保留证据。
+6. 串行初测和 external override 均显式标为 `observed-only` 并保存 pass-level samples。
+   一个 quality tie group 只有在全部候选均为 `decisive` 时才使用 p95；否则直接按 index
+   bytes、chunk count、config ID 决胜。Pareto 同样只有在全部比较点 latency decisive 时
+   才启用延迟维度，晨报不再把 observed p95 写成正式 winner latency。
+
+聚焦回归为 scoring `9 passed`、strategy `13 passed`、sweep `47 passed`；完整仓库为
+`466 passed, 2 skipped`，benchmark validator 通过。当前 35 项基线不因新增 progress
+能力而重跑；其缺少 validity 的历史 latency 在新排序合同下默认按 `observed-only`
+处理。尚未实现的是 finalist 间固定 seed 交错、硬件热状态门控的 decisive latency 复测；
+在最终报告前若出现质量 tie group，再只对该小组实现和执行，不能回头全量测延迟。
 
 Paper-scoped 结果还更新了三个后续判断：
 

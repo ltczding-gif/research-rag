@@ -17,6 +17,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import (
     Any,
+    Callable,
     Mapping,
     MutableMapping,
     Protocol,
@@ -1153,6 +1154,9 @@ class CandidateRunResult:
                 and self.mapping.coverage.passed
                 and self.candidate.rankable
             ),
+            latency_decisive=(
+                self.latency_metrics.get("validity") == "decisive"
+            ),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -1319,6 +1323,108 @@ class _SearchIndex:
     bm25: BM25Index | None
 
 
+CandidateProgressCallback = Callable[[Mapping[str, object]], None]
+
+
+def _question_result_from_progress(
+    value: Mapping[str, Any],
+) -> QuestionStrategyResult:
+    def text(key: str) -> str:
+        result = value.get(key)
+        if not isinstance(result, str) or not result:
+            raise StrategyContractError(
+                f"resume question result has invalid {key}"
+            )
+        return result
+
+    def texts(key: str) -> tuple[str, ...]:
+        result = value.get(key)
+        if not isinstance(result, list) or any(
+            not isinstance(item, str) or not item for item in result
+        ):
+            raise StrategyContractError(
+                f"resume question result has invalid {key}"
+            )
+        return tuple(result)
+
+    def scores(key: str) -> tuple[float, ...]:
+        result = value.get(key)
+        if not isinstance(result, list):
+            raise StrategyContractError(
+                f"resume question result has invalid {key}"
+            )
+        converted = tuple(float(item) for item in result)
+        if any(not math.isfinite(item) for item in converted):
+            raise StrategyContractError(
+                f"resume question result has non-finite {key}"
+            )
+        return converted
+
+    def metrics(key: str) -> dict[str, float | None]:
+        result = value.get(key)
+        if not isinstance(result, Mapping):
+            raise StrategyContractError(
+                f"resume question result has invalid {key}"
+            )
+        converted: dict[str, float | None] = {}
+        for name, item in result.items():
+            if not isinstance(name, str) or not name:
+                raise StrategyContractError(
+                    f"resume question result has invalid {key} name"
+                )
+            if item is None:
+                converted[name] = None
+                continue
+            number = float(item)
+            if not math.isfinite(number):
+                raise StrategyContractError(
+                    f"resume question result has non-finite {key}"
+                )
+            converted[name] = number
+        return converted
+
+    ranked_item_ids = texts("ranked_item_ids")
+    ranked_scores = scores("ranked_scores")
+    pre_rerank_item_ids = texts("pre_rerank_item_ids")
+    pre_rerank_scores = scores("pre_rerank_scores")
+    if len(ranked_item_ids) != len(ranked_scores) or len(
+        pre_rerank_item_ids
+    ) != len(pre_rerank_scores):
+        raise StrategyContractError(
+            "resume question result item/score lengths differ"
+        )
+    return QuestionStrategyResult(
+        row_id=text("row_id"),
+        paper_id=normalize_paper_id(text("paper_id")),
+        domain=text("domain"),
+        question_type=text("question_type"),
+        ranked_item_ids=ranked_item_ids,
+        ranked_scores=ranked_scores,
+        pre_rerank_item_ids=pre_rerank_item_ids,
+        pre_rerank_scores=pre_rerank_scores,
+        pre_rerank_metrics=metrics("pre_rerank_metrics"),
+        metrics=metrics("metrics"),
+    )
+
+
+def _annotate_candidate_failure(
+    exc: Exception,
+    *,
+    phase: str,
+    paper_id: str | None,
+    row_id: str | None,
+    pass_kind: str | None = None,
+    pass_index: int | None = None,
+) -> None:
+    exc.researchqa_failure_context = {
+        "phase": phase,
+        "paper_id": paper_id,
+        "row_id": row_id,
+        "pass_kind": pass_kind,
+        "pass_index": pass_index,
+    }
+
+
 def _make_search_index(
     passages: Mapping[str, str],
     *,
@@ -1449,6 +1555,8 @@ def run_complete_candidate(
         str, EvidenceMappingBundle
     ]
     | None = None,
+    resume_progress: Mapping[str, Any] | None = None,
+    progress_callback: CandidateProgressCallback | None = None,
 ) -> CandidateRunResult:
     """Run one candidate over the exact required paper/question sets."""
 
@@ -1513,6 +1621,149 @@ def run_complete_candidate(
             raise StrategyContractError(
                 f"{question.get('row_id')}: question paper has no document"
             )
+
+    sorted_questions = sorted(questions, key=lambda item: str(item["row_id"]))
+    question_by_row = {
+        _required_text(question, "row_id"): question
+        for question in sorted_questions
+    }
+    questions_by_paper: dict[str, list[Mapping[str, Any]]] = {
+        paper_id: [] for paper_id in normalized_expected_papers
+    }
+    for question in sorted_questions:
+        questions_by_paper[
+            normalize_paper_id(question.get("paper_id"))
+        ].append(question)
+
+    completed_papers: set[str] = set()
+    question_results_by_id: dict[str, QuestionStrategyResult] = {}
+    resume_warmup_completed = 0
+    resume_timed_passes: list[dict[str, object]] = []
+    resume_performance_question_ids: tuple[str, ...] = ()
+    if resume_progress is not None:
+        if (
+            resume_progress.get("progress_schema_version") != 1
+            or resume_progress.get("phase")
+            not in {
+                "preparing",
+                "quality",
+                "latency-warmup",
+                "latency-timed",
+                "aggregate",
+            }
+        ):
+            raise StrategyContractError(
+                "candidate resume progress schema/phase is invalid"
+            )
+        raw_papers = resume_progress.get("completed_paper_ids")
+        raw_question_ids = resume_progress.get("completed_question_ids")
+        raw_results = resume_progress.get("question_results")
+        if (
+            not isinstance(raw_papers, list)
+            or not isinstance(raw_question_ids, list)
+            or not isinstance(raw_results, list)
+            or any(not isinstance(item, str) for item in raw_papers)
+            or any(not isinstance(item, str) for item in raw_question_ids)
+            or any(not isinstance(item, Mapping) for item in raw_results)
+        ):
+            raise StrategyContractError(
+                "candidate resume quality progress is invalid"
+            )
+        completed_papers = {
+            normalize_paper_id(item) for item in raw_papers
+        }
+        if (
+            len(completed_papers) != len(raw_papers)
+            or not completed_papers <= expected_papers
+            or len(set(raw_question_ids)) != len(raw_question_ids)
+            or not set(raw_question_ids) <= expected_questions
+        ):
+            raise StrategyContractError(
+                "candidate resume completed ID sets are invalid"
+            )
+        for raw_result in raw_results:
+            result = _question_result_from_progress(raw_result)
+            if result.row_id in question_results_by_id:
+                raise StrategyContractError(
+                    "candidate resume question results contain duplicates"
+                )
+            question = question_by_row.get(result.row_id)
+            if (
+                question is None
+                or result.paper_id
+                != normalize_paper_id(question.get("paper_id"))
+                or result.domain != _required_text(question, "domain")
+                or result.question_type
+                != _required_text(question, "question_type")
+            ):
+                raise StrategyContractError(
+                    f"candidate resume row identity differs: {result.row_id}"
+                )
+            question_results_by_id[result.row_id] = result
+        expected_completed_rows = {
+            _required_text(question, "row_id")
+            for paper_id in completed_papers
+            for question in questions_by_paper[paper_id]
+        }
+        if (
+            set(raw_question_ids) != set(question_results_by_id)
+            or set(question_results_by_id) != expected_completed_rows
+        ):
+            raise StrategyContractError(
+                "candidate resume contains a partial paper boundary"
+            )
+        raw_performance_ids = resume_progress.get(
+            "performance_question_ids",
+            [],
+        )
+        raw_warmup = resume_progress.get("warmup_completed_passes", 0)
+        raw_timed = resume_progress.get("timed_passes", [])
+        if (
+            not isinstance(raw_performance_ids, list)
+            or any(
+                not isinstance(item, str) or not item
+                for item in raw_performance_ids
+            )
+            or not isinstance(raw_warmup, int)
+            or isinstance(raw_warmup, bool)
+            or raw_warmup < 0
+            or not isinstance(raw_timed, list)
+            or any(not isinstance(item, Mapping) for item in raw_timed)
+        ):
+            raise StrategyContractError(
+                "candidate resume latency progress is invalid"
+            )
+        resume_performance_question_ids = tuple(raw_performance_ids)
+        resume_warmup_completed = raw_warmup
+        resume_timed_passes = [dict(item) for item in raw_timed]
+
+    performance_question_ids: tuple[str, ...] = ()
+    warmup_completed_passes = resume_warmup_completed
+    timed_passes = list(resume_timed_passes)
+
+    def emit_progress(phase: str) -> None:
+        if progress_callback is None:
+            return
+        ordered_results = [
+            question_results_by_id[row_id].to_dict()
+            for row_id in sorted(question_results_by_id)
+        ]
+        progress_callback(
+            {
+                "progress_schema_version": 1,
+                "phase": phase,
+                "completed_paper_ids": sorted(completed_papers),
+                "completed_question_ids": [
+                    str(result["row_id"]) for result in ordered_results
+                ],
+                "question_results": ordered_results,
+                "performance_question_ids": list(
+                    performance_question_ids
+                ),
+                "warmup_completed_passes": warmup_completed_passes,
+                "timed_passes": [dict(item) for item in timed_passes],
+            }
+        )
 
     corpus = _prepare_candidate_corpus(candidate, documents, notes)
     mapping_cache_key = canonical_fingerprint(
@@ -1704,57 +1955,85 @@ def run_complete_candidate(
             pre_rerank_hits,
         )
 
-    sorted_questions = sorted(questions, key=lambda item: str(item["row_id"]))
-    question_results: list[QuestionStrategyResult] = []
-    for question in sorted_questions:
-        row_id = str(question["row_id"])
-        hits, _, _, pre_rerank_hits = retrieve(question)
-        evidence = mapping_by_row[row_id]
-        metrics = score_ranking(
-            [hit.item_id for hit in hits],
-            evidence.evaluable_groups,
-        )
-        if candidate.reranker != "rerank-off":
-            pre_rerank_ids = [
-                hit.item_id for hit in pre_rerank_hits
-            ]
-            pre_rerank_metrics = {
-                **score_ranking(
-                    pre_rerank_ids,
-                    evidence.evaluable_groups,
-                ).metrics,
-                **{
-                    f"recall_at_{cutoff}": evidence_group_recall_at_k(
+    for paper_id in normalized_expected_papers:
+        if paper_id in completed_papers:
+            continue
+        paper_results: list[QuestionStrategyResult] = []
+        for question in questions_by_paper[paper_id]:
+            row_id = str(question["row_id"])
+            try:
+                hits, _, _, pre_rerank_hits = retrieve(question)
+            except Exception as exc:
+                _annotate_candidate_failure(
+                    exc,
+                    phase="quality",
+                    paper_id=paper_id,
+                    row_id=row_id,
+                )
+                raise
+            evidence = mapping_by_row[row_id]
+            metrics = score_ranking(
+                [hit.item_id for hit in hits],
+                evidence.evaluable_groups,
+            )
+            if candidate.reranker != "rerank-off":
+                pre_rerank_ids = [
+                    hit.item_id for hit in pre_rerank_hits
+                ]
+                pre_rerank_metrics = {
+                    **score_ranking(
                         pre_rerank_ids,
                         evidence.evaluable_groups,
-                        cutoff,
-                    )
-                    for cutoff in (20, 50, 100)
-                },
-            }
-        else:
-            pre_rerank_metrics = {}
-        question_results.append(
-            QuestionStrategyResult(
-                row_id=row_id,
-                paper_id=evidence.paper_id,
-                domain=evidence.domain,
-                question_type=evidence.question_type,
-                ranked_item_ids=tuple(hit.item_id for hit in hits),
-                ranked_scores=tuple(float(hit.score) for hit in hits),
-                pre_rerank_item_ids=(
-                    tuple(hit.item_id for hit in pre_rerank_hits)
-                    if candidate.reranker != "rerank-off"
-                    else ()
-                ),
-                pre_rerank_scores=(
-                    tuple(float(hit.score) for hit in pre_rerank_hits)
-                    if candidate.reranker != "rerank-off"
-                    else ()
-                ),
-                pre_rerank_metrics=pre_rerank_metrics,
-                metrics=metrics.metrics,
+                    ).metrics,
+                    **{
+                        f"recall_at_{cutoff}": evidence_group_recall_at_k(
+                            pre_rerank_ids,
+                            evidence.evaluable_groups,
+                            cutoff,
+                        )
+                        for cutoff in (20, 50, 100)
+                    },
+                }
+            else:
+                pre_rerank_metrics = {}
+            paper_results.append(
+                QuestionStrategyResult(
+                    row_id=row_id,
+                    paper_id=evidence.paper_id,
+                    domain=evidence.domain,
+                    question_type=evidence.question_type,
+                    ranked_item_ids=tuple(hit.item_id for hit in hits),
+                    ranked_scores=tuple(float(hit.score) for hit in hits),
+                    pre_rerank_item_ids=(
+                        tuple(hit.item_id for hit in pre_rerank_hits)
+                        if candidate.reranker != "rerank-off"
+                        else ()
+                    ),
+                    pre_rerank_scores=(
+                        tuple(float(hit.score) for hit in pre_rerank_hits)
+                        if candidate.reranker != "rerank-off"
+                        else ()
+                    ),
+                    pre_rerank_metrics=pre_rerank_metrics,
+                    metrics=metrics.metrics,
+                )
             )
+        question_results_by_id.update(
+            {result.row_id: result for result in paper_results}
+        )
+        completed_papers.add(paper_id)
+        emit_progress("quality")
+
+    question_results = [
+        question_results_by_id[row_id]
+        for row_id in sorted(question_results_by_id)
+    ]
+    if (
+        set(question_results_by_id) != expected_questions
+        or completed_papers != expected_papers
+    ):
+        raise StrategyContractError(
+            "candidate quality progress did not complete the expected set"
         )
 
     latency_metrics: dict[str, object]
@@ -1792,21 +2071,171 @@ def run_complete_candidate(
                 f"found {len(performance_questions)}"
             )
 
-        for _ in range(performance_warmup_passes):
-            for question in performance_questions:
-                retrieve(question)
-        query_latency_samples_ms: list[float] = []
-        rerank_latency_samples_ms: list[float] = []
-        latency_samples_ms: list[float] = []
-        for _ in range(performance_timed_passes):
-            for question in performance_questions:
-                _, query_ms, rerank_ms, _ = retrieve(
-                    question,
-                    measure=True,
+        performance_question_ids = tuple(
+            _required_text(question, "row_id")
+            for question in performance_questions
+        )
+        if resume_performance_question_ids and (
+            resume_performance_question_ids != performance_question_ids
+        ):
+            raise StrategyContractError(
+                "candidate resume performance question set differs"
+            )
+        if (
+            not resume_performance_question_ids
+            and (resume_warmup_completed or resume_timed_passes)
+        ):
+            raise StrategyContractError(
+                "candidate resume latency samples lack question identity"
+            )
+        if warmup_completed_passes > performance_warmup_passes:
+            raise StrategyContractError(
+                "candidate resume has too many warmup passes"
+            )
+        if len(timed_passes) > performance_timed_passes:
+            raise StrategyContractError(
+                "candidate resume has too many timed passes"
+            )
+
+        def pass_samples(
+            value: Mapping[str, object],
+            key: str,
+        ) -> list[float]:
+            raw = value.get(key)
+            if not isinstance(raw, list):
+                raise StrategyContractError(
+                    f"candidate resume timed pass has invalid {key}"
                 )
-                query_latency_samples_ms.append(query_ms)
-                rerank_latency_samples_ms.append(rerank_ms)
-                latency_samples_ms.append(query_ms + rerank_ms)
+            converted = [float(item) for item in raw]
+            if (
+                len(converted) != len(performance_questions)
+                or any(
+                    not math.isfinite(item) or item < 0
+                    for item in converted
+                )
+            ):
+                raise StrategyContractError(
+                    f"candidate resume timed pass has invalid {key}"
+                )
+            return converted
+
+        normalized_timed_passes: list[dict[str, object]] = []
+        for expected_index, value in enumerate(timed_passes):
+            if (
+                value.get("pass_index") != expected_index
+                or value.get("question_ids")
+                != list(performance_question_ids)
+            ):
+                raise StrategyContractError(
+                    "candidate resume timed pass identity differs"
+                )
+            query_samples = pass_samples(value, "query_samples_ms")
+            rerank_samples = pass_samples(value, "rerank_samples_ms")
+            total_samples = pass_samples(value, "latency_samples_ms")
+            if any(
+                not math.isclose(
+                    total,
+                    query + rerank,
+                    rel_tol=1e-9,
+                    abs_tol=1e-9,
+                )
+                for total, query, rerank in zip(
+                    total_samples,
+                    query_samples,
+                    rerank_samples,
+                    strict=True,
+                )
+            ):
+                raise StrategyContractError(
+                    "candidate resume timed pass totals differ"
+                )
+            normalized_timed_passes.append(
+                {
+                    "pass_index": expected_index,
+                    "question_ids": list(performance_question_ids),
+                    "query_samples_ms": query_samples,
+                    "rerank_samples_ms": rerank_samples,
+                    "latency_samples_ms": total_samples,
+                }
+            )
+        timed_passes = normalized_timed_passes
+
+        for pass_index in range(
+            warmup_completed_passes,
+            performance_warmup_passes,
+        ):
+            for question in performance_questions:
+                row_id = _required_text(question, "row_id")
+                paper_id = normalize_paper_id(question.get("paper_id"))
+                try:
+                    retrieve(question)
+                except Exception as exc:
+                    _annotate_candidate_failure(
+                        exc,
+                        phase="latency",
+                        paper_id=paper_id,
+                        row_id=row_id,
+                        pass_kind="warmup",
+                        pass_index=pass_index,
+                    )
+                    raise
+            warmup_completed_passes = pass_index + 1
+            emit_progress("latency-warmup")
+
+        for pass_index in range(
+            len(timed_passes),
+            performance_timed_passes,
+        ):
+            query_pass_samples: list[float] = []
+            rerank_pass_samples: list[float] = []
+            latency_pass_samples: list[float] = []
+            for question in performance_questions:
+                row_id = _required_text(question, "row_id")
+                paper_id = normalize_paper_id(question.get("paper_id"))
+                try:
+                    _, query_ms, rerank_ms, _ = retrieve(
+                        question,
+                        measure=True,
+                    )
+                except Exception as exc:
+                    _annotate_candidate_failure(
+                        exc,
+                        phase="latency",
+                        paper_id=paper_id,
+                        row_id=row_id,
+                        pass_kind="timed",
+                        pass_index=pass_index,
+                    )
+                    raise
+                query_pass_samples.append(query_ms)
+                rerank_pass_samples.append(rerank_ms)
+                latency_pass_samples.append(query_ms + rerank_ms)
+            timed_passes.append(
+                {
+                    "pass_index": pass_index,
+                    "question_ids": list(performance_question_ids),
+                    "query_samples_ms": query_pass_samples,
+                    "rerank_samples_ms": rerank_pass_samples,
+                    "latency_samples_ms": latency_pass_samples,
+                }
+            )
+            emit_progress("latency-timed")
+
+        query_latency_samples_ms = [
+            float(sample)
+            for item in timed_passes
+            for sample in item["query_samples_ms"]
+        ]
+        rerank_latency_samples_ms = [
+            float(sample)
+            for item in timed_passes
+            for sample in item["rerank_samples_ms"]
+        ]
+        latency_samples_ms = [
+            float(sample)
+            for item in timed_passes
+            for sample in item["latency_samples_ms"]
+        ]
 
         def percentile(samples: Sequence[float], probability: float) -> float:
             ordered = sorted(samples)
@@ -1835,7 +2264,11 @@ def run_complete_candidate(
             "warmup_passes": performance_warmup_passes,
             "timed_passes": performance_timed_passes,
             "performance_question_count": len(performance_questions),
+            "performance_question_ids": list(performance_question_ids),
             "sample_count": len(latency_samples_ms),
+            "pass_samples": [dict(item) for item in timed_passes],
+            "validity": "observed-only",
+            "validity_reason": "serial-uncontrolled-environment",
             "query_p50_ms": percentile(query_latency_samples_ms, 0.50),
             "query_p95_ms": percentile(query_latency_samples_ms, 0.95),
             "rerank_p50_ms": percentile(rerank_latency_samples_ms, 0.50),
@@ -1848,8 +2281,11 @@ def run_complete_candidate(
         latency_metrics = {
             "measurement_revision": "external-override",
             "p95_latency_ms": measured_p95_latency_ms,
+            "validity": "observed-only",
+            "validity_reason": "external-override",
         }
 
+    emit_progress("aggregate")
     aggregate = macro_aggregate(
         [
             QuestionScore(

@@ -180,9 +180,30 @@ def test_paired_bootstrap_is_deterministic_and_domain_stratified():
 def test_practical_tie_uses_latency_then_size_chunk_count_and_id():
     ranked = rank_candidates(
         [
-            CandidateSummary("slow", 0.801, 20, 100, 10),
-            CandidateSummary("fast", 0.800, 10, 200, 20),
-            CandidateSummary("outside", 0.790, 1, 1, 1),
+            CandidateSummary(
+                "slow",
+                0.801,
+                20,
+                100,
+                10,
+                latency_decisive=True,
+            ),
+            CandidateSummary(
+                "fast",
+                0.800,
+                10,
+                200,
+                20,
+                latency_decisive=True,
+            ),
+            CandidateSummary(
+                "outside",
+                0.790,
+                1,
+                1,
+                1,
+                latency_decisive=True,
+            ),
             CandidateSummary(
                 "incomplete", 1.0, 0, 0, 0, complete=False
             ),
@@ -192,16 +213,44 @@ def test_practical_tie_uses_latency_then_size_chunk_count_and_id():
     assert [item.config_id for item in ranked] == ["fast", "slow", "outside"]
 
 
+def test_observed_only_latency_cannot_decide_a_quality_tie():
+    ranked = rank_candidates(
+        [
+            CandidateSummary("slow-small", 0.801, 20, 100, 10),
+            CandidateSummary("fast-large", 0.800, 10, 200, 20),
+        ]
+    )
+
+    assert [item.config_id for item in ranked] == [
+        "slow-small",
+        "fast-large",
+    ]
+
+
 def test_practical_tie_includes_exact_boundary_and_full_tiebreak_chain():
     ranked = rank_candidates(
         [
-            CandidateSummary("z-quality", 0.805, 50, 100, 10),
-            CandidateSummary("e-latency", 0.800, 10, 500, 50),
-            CandidateSummary("d-size", 0.8005, 10, 400, 50),
-            CandidateSummary("c-chunks", 0.801, 10, 400, 40),
-            CandidateSummary("b-id", 0.803, 10, 400, 40),
-            CandidateSummary("a-id", 0.802, 10, 400, 40),
-            CandidateSummary("outside", 0.7999, 1, 1, 1),
+            CandidateSummary(
+                "z-quality", 0.805, 50, 100, 10, latency_decisive=True
+            ),
+            CandidateSummary(
+                "e-latency", 0.800, 10, 500, 50, latency_decisive=True
+            ),
+            CandidateSummary(
+                "d-size", 0.8005, 10, 400, 50, latency_decisive=True
+            ),
+            CandidateSummary(
+                "c-chunks", 0.801, 10, 400, 40, latency_decisive=True
+            ),
+            CandidateSummary(
+                "b-id", 0.803, 10, 400, 40, latency_decisive=True
+            ),
+            CandidateSummary(
+                "a-id", 0.802, 10, 400, 40, latency_decisive=True
+            ),
+            CandidateSummary(
+                "outside", 0.7999, 1, 1, 1, latency_decisive=True
+            ),
         ],
         tie_threshold=0.005,
     )

@@ -509,6 +509,156 @@ def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path)
     assert reranked.mapping is result.mapping
 
 
+def test_complete_candidate_resumes_quality_at_complete_paper_boundary(tmp_path):
+    documents, questions = _fixture_corpus(tmp_path)
+    candidate = next(
+        item
+        for item in generate_orthogonal_candidates(_config()).stages[
+            "reranker"
+        ]
+        if item.reranker == "rerank-20-to-10"
+    )
+    expected_papers = ("W1", "W2")
+    expected_questions = ("q-alpha", "q-beta", "q-diagnostic")
+    snapshots = []
+
+    class _FailOnBeta(_FakeReranker):
+        def score_pairs(self, query, passages, *, batch_size):
+            if "Beta" in query:
+                raise RuntimeError("quality interruption")
+            return super().score_pairs(
+                query,
+                passages,
+                batch_size=batch_size,
+            )
+
+    with pytest.raises(RuntimeError, match="quality interruption") as raised:
+        run_complete_candidate(
+            candidate,
+            documents,
+            questions,
+            expected_paper_ids=expected_papers,
+            expected_question_ids=expected_questions,
+            embedder=_FakeEmbedder(),
+            reranker=_FailOnBeta(),
+            p95_latency_ms=1.0,
+            progress_callback=lambda value: snapshots.append(
+                json.loads(json.dumps(value))
+            ),
+        )
+
+    assert raised.value.researchqa_failure_context == {
+        "phase": "quality",
+        "paper_id": "W2",
+        "row_id": "q-beta",
+        "pass_kind": None,
+        "pass_index": None,
+    }
+    resume = snapshots[-1]
+    assert resume["phase"] == "quality"
+    assert resume["completed_paper_ids"] == ["W1"]
+    assert resume["completed_question_ids"] == [
+        "q-alpha",
+        "q-diagnostic",
+    ]
+
+    reranker = _FakeReranker()
+    result = run_complete_candidate(
+        candidate,
+        documents,
+        questions,
+        expected_paper_ids=expected_papers,
+        expected_question_ids=expected_questions,
+        embedder=_FakeEmbedder(),
+        reranker=reranker,
+        p95_latency_ms=1.0,
+        resume_progress=resume,
+        progress_callback=lambda value: snapshots.append(
+            json.loads(json.dumps(value))
+        ),
+    )
+
+    assert [call[0] for call in reranker.calls] == [
+        "What was the Beta result?"
+    ]
+    assert result.completed_paper_ids == expected_papers
+    assert result.completed_question_ids == tuple(sorted(expected_questions))
+    assert snapshots[-1]["phase"] == "aggregate"
+
+
+def test_complete_candidate_resumes_only_complete_latency_passes(tmp_path):
+    documents, questions = _fixture_corpus(tmp_path)
+    candidate = next(
+        item
+        for item in generate_orthogonal_candidates(_config()).stages[
+            "reranker"
+        ]
+        if item.reranker == "rerank-20-to-10"
+    )
+    expected_papers = ("W1", "W2")
+    expected_questions = ("q-alpha", "q-beta", "q-diagnostic")
+    snapshots = []
+
+    class _FailOnEighthCall(_FakeReranker):
+        def score_pairs(self, query, passages, *, batch_size):
+            if len(self.calls) == 7:
+                raise RuntimeError("timed pass interruption")
+            return super().score_pairs(
+                query,
+                passages,
+                batch_size=batch_size,
+            )
+
+    with pytest.raises(RuntimeError, match="timed pass interruption") as raised:
+        run_complete_candidate(
+            candidate,
+            documents,
+            questions,
+            expected_paper_ids=expected_papers,
+            expected_question_ids=expected_questions,
+            embedder=_FakeEmbedder(),
+            reranker=_FailOnEighthCall(),
+            performance_warmup_passes=1,
+            performance_timed_passes=2,
+            progress_callback=lambda value: snapshots.append(
+                json.loads(json.dumps(value))
+            ),
+        )
+
+    assert raised.value.researchqa_failure_context == {
+        "phase": "latency",
+        "paper_id": "W1",
+        "row_id": "q-alpha",
+        "pass_kind": "timed",
+        "pass_index": 0,
+    }
+    resume = snapshots[-1]
+    assert resume["warmup_completed_passes"] == 1
+    assert resume["timed_passes"] == []
+
+    reranker = _FakeReranker()
+    result = run_complete_candidate(
+        candidate,
+        documents,
+        questions,
+        expected_paper_ids=expected_papers,
+        expected_question_ids=expected_questions,
+        embedder=_FakeEmbedder(),
+        reranker=reranker,
+        performance_warmup_passes=1,
+        performance_timed_passes=2,
+        resume_progress=resume,
+        progress_callback=lambda value: snapshots.append(
+            json.loads(json.dumps(value))
+        ),
+    )
+
+    assert len(reranker.calls) == 6
+    assert result.latency_metrics["sample_count"] == 6
+    assert snapshots[-1]["phase"] == "aggregate"
+    assert len(snapshots[-1]["timed_passes"]) == 2
+
+
 def test_reviewer_concern_note_chunker_is_diagnostic_not_rankable():
     candidates = generate_orthogonal_candidates(_config()).stages["note-chunker"]
     reviewer = next(
@@ -560,10 +710,12 @@ def test_stage_ranking_excludes_incomplete_and_diagnostic_candidates(tmp_path):
     assert result.latency_metrics == {
         "measurement_revision": "external-override",
         "p95_latency_ms": 20.0,
+        "validity": "observed-only",
+        "validity_reason": "external-override",
     }
     fast = replace(
         result,
-        candidate=replace(candidate, config_id="fast"),
+        candidate=replace(candidate, config_id="zz-fast"),
         p95_latency_ms=10,
     )
     incomplete = replace(
@@ -588,8 +740,8 @@ def test_stage_ranking_excludes_incomplete_and_diagnostic_candidates(tmp_path):
     )
 
     assert [item.candidate.config_id for item in ranking.ranked] == [
-        "fast",
         candidate.config_id,
+        "zz-fast",
     ]
     assert ranking.incomplete_config_ids == ("incomplete",)
     assert ranking.ineligible_config_ids == ("diagnostic",)

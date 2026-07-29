@@ -767,6 +767,7 @@ class CandidateSummary:
     chunk_count: int
     complete: bool = True
     guardrails_passed: bool = True
+    latency_decisive: bool = False
 
 
 def rank_candidates(
@@ -801,9 +802,10 @@ def rank_candidates(
         )
     ]
     tied_ids = {candidate.config_id for candidate in tied}
+    use_latency = all(candidate.latency_decisive for candidate in tied)
     tied.sort(
         key=lambda candidate: (
-            candidate.p95_latency_ms,
+            candidate.p95_latency_ms if use_latency else 0.0,
             candidate.index_bytes,
             candidate.chunk_count,
             candidate.config_id,
