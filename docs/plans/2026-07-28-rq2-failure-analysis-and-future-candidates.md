@@ -1023,7 +1023,51 @@ evidence groups”的目标不完全一致，这是 adversarial 退化和多样�
 这些案例说明 cross-encoder 既能恢复语义相关但基础排序靠后的块，也能把正确的词法/语义
 首位结果整体挤出 top-10。直接替换 rank 是主要风险。
 
-### 7.3 后续候选
+### 7.3 RR1 正式评测
+
+2026-07-29 已完成冻结候选 `repair-rr1-093b3f922f8306f447ae` 的正式
+paper-scoped 评测。候选严格使用 depth-20、保留 base top-1、等权 rank-RRF
+（`k=60`），覆盖 20/20 papers、254/254 questions、239 evaluable questions 和
+380/380 mapped groups；`execution_complete=true`、`guardrail_finalized=true`、
+`guardrails_passed=true`。input fingerprint 为
+`e8a522b19c6312123271622b7d3455a72d6b8ea8b2f6059eaf7a62a623aa5942`，
+payload SHA-256 为
+`24081b092dd40d2a191529e55e2e6ac110dd3378ef857abfce9adb0f3408da29`。
+
+相对同 stage 的 `fixed-1200 + hybrid-rrf + pdf-only + rerank-off` 基线：
+
+| 指标 | rerank-off | RR1 | RR1 - baseline |
+|---|---:|---:|---:|
+| coverage-nDCG@10（primary） | 0.834526 | 0.848098 | +0.013572 |
+| MRR | 0.855759 | 0.864733 | +0.008973 |
+| Recall@5 | 0.930321 | 0.946440 | +0.016119 |
+| Recall@10 | 0.954020 | 0.967866 | +0.013846 |
+| all-required-groups success@5 | 0.892065 | 0.912956 | +0.020892 |
+| all-required-groups success@10 | 0.931449 | 0.951641 | +0.020192 |
+
+协议实现也由正式产物自证：254/254 个 base top-1 均被保留，RR1 的 254 组
+pre-rerank IDs、scores 和共同指标逐项等同冻结基线。239 个可评分问题中，
+coverage-nDCG@10 有 33 题改善、13 题退化、193 题不变；Recall@5 有 7 题改善、
+0 题退化，Recall@10 有 6 题改善、0 题退化。没有新增 Recall@10 hard failure，
+并救回 `W2792307011_chunk1_comprehension` 和 `W3096486083_multihop0` 两个原
+hard failure。旧直接重排的关键灾难案例 `W3096486083_adversarial0` 在 RR1 中保持
+top-1、Recall@10 和 nDCG 均为 1。
+
+增益不是只来自 lookup：multi-hop、adversarial、comprehension、lookup 的
+coverage-nDCG@10 分别变化 `+0.036248/+0.019691/+0.016221/+0.001140`。10 个领域中
+9 个改善，只有 mathematics 为 `-0.000520`，远低于 0.02 回归门。仍有 13 个纯排序
+退化行，最大两项是 `W2953303875_chunk2_lookup` 和
+`W3096486083_adversarial1`，二者首个相关块均从第 2 降到第 3、nDCG 从
+0.630930 降到 0.5，但 Recall@10 保持 1；这类局部损失没有形成 coverage 或 hard-failure
+回归。
+
+本次串行 observed-only latency 为 p50 `1.143 s`、p95 `1.331 s`，相对不重排基线的
+p95 比值约 54.1。运行期间 GPU 发生热降频，因此该值只说明部署成本显著，不用于质量
+决胜；RR1 与基线的 primary 差值超过 0.005 tie 门，本轮也不为延迟重新跑 controlled
+finalist。RR1 据此归类为 `valid-and-rankable`，进入最终候选集合，但是否成为产品默认值
+仍须在最终报告中结合约 1.1 秒级重排成本判断。
+
+### 7.4 后续候选
 
 | ID | 单变量候选 | 目的 | 验证要求 |
 |---|---|---|---|
@@ -1056,6 +1100,7 @@ depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50
 | `F2 pdf-structure-aware-fallback` | 20/254 正式评测完成；`valid-but-poor`，3 个新增 hard failures | 已关闭；不调阈值、不晋级组合 |
 | `N0 note-route-eligibility-gate` | 20/20 eligible，103/103 claim 基础块可回链，0 fallback；精确 PDF-only 回退测试通过 | 已关闭；后续 S1 复用，不得用 reviewer-only 建立资格 |
 | `N3 note-concern-parser-contract` | 20/20 严格解析；58 行=4 major+54 minor，7 个 multi-claim/range；4 个 reviewer chunks | 已关闭；reviewer-only 仍 diagnostic-only |
+| `RR1 preserve-top1 rank-RRF` | 20/254 正式评测完成；primary `+0.013572`，0 新 hard failure，`valid-and-rankable` | 已关闭；保留为最终候选，不扫描 depth、权重或 `k` |
 | controlled finalist latency | 已确认串行 p95 在热降频下只能 observed-only；合同已冻结 | 只交错复测质量 tie group；不可比时跳过 latency 决胜 |
 
 P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、失败可以局部降级、恢复不会混入
@@ -1063,9 +1108,9 @@ P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、�
 
 ### P1：最有证据的质量候选
 
-1. `RR1`：depth-20 + preserve base top-1 + equal-rank RRF
-2. `R1`：preserve dense top-1 + dense:BM25 `2:1` RRF (`k=60`)
-3. `S0 + N1 + S1`：仅在 N0/N3 和全论文 N1 claim+reviewer 路线完成后进入
+1. `RR1`：已完成；`valid-and-rankable`，进入最终候选集合
+2. `R1`：当前下一项；preserve dense top-1 + dense:BM25 `2:1` RRF (`k=60`)
+3. `S0 + N1 + S1`：N0/N3/N1 前置已满足；在 R1 后执行固定 0.9/0.1 候选
 4. `H1 hierarchical-parent-expand-direct-fallback`
 
 这些候选不得一次全叠加。先分别与 fixed-1200 + hybrid + PDF-only + rerank-off 基线做
@@ -1113,7 +1158,8 @@ rerank-enabled 候选已经在 fresh CUDA 路径取得可审计终态，不再�
 
 当前仍没有可发布 winner：真实性审计只证明“这些分数是真的”，不证明 26 个
 `valid-but-poor` 可以晋级，也没有关闭 outer task publication gate。F2 已取得
-`valid-but-poor` 终态；下一步按冻结依赖顺序执行 N0/N3、RR1、R1 和条件 S1；全部扩展
+`valid-but-poor` 终态，N0/N3/N1 前置合同已关闭，RR1 已取得
+`valid-and-rankable` 终态；下一步按冻结顺序执行 R1 和条件 S1。全部扩展
 取得终态后再做 outer-state reconciliation
 与最终报告，期间不得回到旧 35 项反复重跑。
 
