@@ -36,7 +36,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument(
         "--extension",
-        choices=("F2", "R1", "RR1"),
+        choices=("F2", "R1", "RR1", "S1"),
         required=True,
     )
     return parser.parse_args(argv)

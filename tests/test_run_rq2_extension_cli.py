@@ -6,17 +6,18 @@ from types import SimpleNamespace
 from benchmarks.scripts import run_rq2_extension as cli
 
 
-def test_extension_cli_accepts_r1(tmp_path) -> None:
-    args = cli._parse_args(
-        [
-            "--run-root",
-            str(tmp_path),
-            "--extension",
-            "R1",
-        ]
-    )
+def test_extension_cli_accepts_remaining_extensions(tmp_path) -> None:
+    for extension_id in ("R1", "S1"):
+        args = cli._parse_args(
+            [
+                "--run-root",
+                str(tmp_path),
+                "--extension",
+                extension_id,
+            ]
+        )
 
-    assert args.extension == "R1"
+        assert args.extension == extension_id
 
 
 def test_extension_cli_reports_completed_result(

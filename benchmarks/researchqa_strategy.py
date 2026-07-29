@@ -54,6 +54,7 @@ from benchmarks.researchqa_retrieval import (
     note_guided_pdf,
     note_to_pdf,
     pdf_note_rrf,
+    pdf_note_weighted_rrf,
     pdf_only,
     preserve_dense_top1_weighted_rrf,
     preserve_top1_rank_rrf,
@@ -119,6 +120,17 @@ R1_RETRIEVER_FUSION_POLICY: Mapping[str, object] = {
     "rrf_k": 60,
     "preserve_dense_top1": True,
     "output_k": 100,
+}
+S1_SOURCE_FUSION_ID = "pdf-note-weighted-0.9-0.1-rrf"
+S1_SOURCE_FUSION_POLICY: Mapping[str, object] = {
+    "revision": "rq2-s1-n1-weighted-pdf-note-rrf-v1",
+    "fusion": "weighted-rank-rrf",
+    "pdf_weight": 0.9,
+    "note_weight": 0.1,
+    "rrf_k": 60,
+    "output_k": 100,
+    "empty_note_projection_fallback": "direct-pdf-only",
+    "ineligible_paper_fallback": "direct-pdf-only",
 }
 RR1_RERANK_FUSION_ID = "preserve-base-top1-equal-rank-rrf"
 RR1_RERANK_FUSION_POLICY: Mapping[str, object] = {
@@ -743,6 +755,7 @@ class StrategyCandidate:
     reranker_keep: int = 10
     rankable: bool = True
     retriever_fusion: str | None = None
+    source_fusion: str | None = None
     rerank_fusion: str | None = None
 
     def __post_init__(self) -> None:
@@ -783,6 +796,20 @@ class StrategyCandidate:
             SOURCE_COMPOSITION_IDS,
             "source_composition",
         )
+        if (
+            self.source_fusion is not None
+            and self.source_fusion != S1_SOURCE_FUSION_ID
+        ):
+            raise StrategyContractError(
+                f"unsupported source fusion: {self.source_fusion}"
+            )
+        if self.source_fusion == S1_SOURCE_FUSION_ID and (
+            self.source_composition != "pdf-note-rrf"
+            or self.note_chunker != NOTE_CLAIM_PLUS_REVIEWER_ID
+        ):
+            raise StrategyContractError(
+                "S1 requires pdf-note-rrf with note-claim-plus-reviewer"
+            )
         _require_member(self.reranker, RERANKER_IDS, "reranker")
         if self.requires_notes and self.note_chunker is None:
             raise StrategyContractError(
@@ -848,6 +875,8 @@ class StrategyCandidate:
         }
         if self.retriever_fusion is not None:
             value["retriever_fusion"] = self.retriever_fusion
+        if self.source_fusion is not None:
+            value["source_fusion"] = self.source_fusion
         if self.rerank_fusion is not None:
             value["rerank_fusion"] = self.rerank_fusion
         return value
@@ -1224,6 +1253,45 @@ def generate_rr1_candidate(
     )
 
 
+def generate_s1_candidate(
+    config: Mapping[str, Any],
+) -> StrategyCandidate:
+    """Create the frozen S0+N1+S1 extension outside the baseline 35."""
+
+    stages = config.get("stages")
+    if not isinstance(stages, Mapping):
+        raise StrategyContractError("config.stages must be a mapping")
+    reranker_rows = _option_rows(stages, "rerankers")
+    reranker_options = {str(row["id"]): row for row in reranker_rows}
+    if set(reranker_options) != set(RERANKER_IDS):
+        raise StrategyContractError(
+            f"rerankers must be exactly {list(RERANKER_IDS)}"
+        )
+    components = {
+        "stage_id": "source-composition",
+        "pdf_chunker": "pdf-fixed-1200",
+        "note_chunker": NOTE_CLAIM_PLUS_REVIEWER_ID,
+        "retriever": "hybrid-rrf",
+        "source_composition": "pdf-note-rrf",
+        "reranker": "rerank-off",
+    }
+    identity = {
+        "repair_id": "S0-N1-S1",
+        "components": components,
+        "source_policy": dict(S1_SOURCE_FUSION_POLICY),
+        "eligibility_policy": dict(NOTE_ROUTE_ELIGIBILITY_POLICY),
+        "reviewer_parser_revision": REVIEWER_VERDICT_PARSER_REVISION,
+    }
+    option = reranker_options["rerank-off"]
+    return StrategyCandidate(
+        config_id=f"repair-s1-{canonical_fingerprint(identity)[:20]}",
+        reranker_depth=None,
+        reranker_keep=int(option.get("output_k", 10)),
+        source_fusion=S1_SOURCE_FUSION_ID,
+        **components,
+    )
+
+
 def generate_r1_candidate(
     config: Mapping[str, Any],
 ) -> StrategyCandidate:
@@ -1308,9 +1376,12 @@ class QuestionStrategyResult:
     pre_rerank_metrics: Mapping[str, float | None] = field(
         default_factory=dict
     )
+    retrieval_diagnostics: Mapping[str, object] = field(
+        default_factory=dict
+    )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        value = {
             "row_id": self.row_id,
             "paper_id": self.paper_id,
             "domain": self.domain,
@@ -1322,6 +1393,11 @@ class QuestionStrategyResult:
             "pre_rerank_metrics": dict(self.pre_rerank_metrics),
             "metrics": dict(self.metrics),
         }
+        if self.retrieval_diagnostics:
+            value["retrieval_diagnostics"] = dict(
+                self.retrieval_diagnostics
+            )
+        return value
 
 
 @dataclass(frozen=True)
@@ -1456,6 +1532,10 @@ def _prepare_candidate_corpus(
     if candidate.retriever_fusion == R1_RETRIEVER_FUSION_ID:
         corpus_diagnostics["retriever_fusion"] = dict(
             R1_RETRIEVER_FUSION_POLICY
+        )
+    if candidate.source_fusion == S1_SOURCE_FUSION_ID:
+        corpus_diagnostics["source_fusion"] = dict(
+            S1_SOURCE_FUSION_POLICY
         )
     if candidate.rerank_fusion == RR1_RERANK_FUSION_ID:
         corpus_diagnostics["rerank_fusion"] = dict(
@@ -1841,6 +1921,21 @@ def _question_result_from_progress(
             converted[name] = number
         return converted
 
+    def diagnostics(key: str) -> dict[str, object]:
+        result = value.get(key, {})
+        if not isinstance(result, Mapping):
+            raise StrategyContractError(
+                f"resume question result has invalid {key}"
+            )
+        if any(
+            not isinstance(name, str) or not name
+            for name in result
+        ):
+            raise StrategyContractError(
+                f"resume question result has invalid {key} name"
+            )
+        return dict(result)
+
     ranked_item_ids = texts("ranked_item_ids")
     ranked_scores = scores("ranked_scores")
     pre_rerank_item_ids = texts("pre_rerank_item_ids")
@@ -1862,6 +1957,7 @@ def _question_result_from_progress(
         pre_rerank_scores=pre_rerank_scores,
         pre_rerank_metrics=metrics("pre_rerank_metrics"),
         metrics=metrics("metrics"),
+        retrieval_diagnostics=diagnostics("retrieval_diagnostics"),
     )
 
 
@@ -2363,6 +2459,7 @@ def run_complete_candidate(
         float,
         float,
         tuple[RetrievalHit, ...],
+        Mapping[str, object],
     ]:
         row_id = str(question["row_id"])
         paper_id = normalize_paper_id(question.get("paper_id"))
@@ -2398,19 +2495,90 @@ def run_complete_candidate(
             query_embedding=query_vector,
             retriever_fusion=candidate.retriever_fusion,
         )
-        hits = (
-            pdf_only(pdf_hits, top_k=100)
-            if note_route_fallback
-            else _compose_hits(
-                candidate,
-                pdf_hits=pdf_hits,
-                note_hits=note_hits,
-                parent_hits=parent_hits,
-                note_backlinks=corpus.note_backlinks,
-                pdf_chunks=pdf_chunk_by_id,
-                top_k=100,
+        retrieval_diagnostics: Mapping[str, object] = {}
+        if candidate.source_fusion == S1_SOURCE_FUSION_ID:
+            direct_hits = pdf_only(pdf_hits, top_k=100)
+            projected = (
+                ()
+                if note_route_fallback
+                else note_to_pdf(
+                    note_hits,
+                    corpus.note_backlinks,
+                    top_k=100,
+                )
             )
-        )
+            if note_route_fallback:
+                hits = direct_hits
+                fallback_reason = "ineligible-paper"
+            else:
+                hits = pdf_note_weighted_rrf(
+                    pdf_hits,
+                    projected,
+                    pdf_weight=float(
+                        S1_SOURCE_FUSION_POLICY["pdf_weight"]
+                    ),
+                    note_weight=float(
+                        S1_SOURCE_FUSION_POLICY["note_weight"]
+                    ),
+                    top_k=100,
+                    k=int(S1_SOURCE_FUSION_POLICY["rrf_k"]),
+                )
+                fallback_reason = (
+                    None if projected else "empty-note-projection"
+                )
+            direct_top10 = tuple(
+                hit.item_id for hit in direct_hits[:10]
+            )
+            final_top10 = tuple(hit.item_id for hit in hits[:10])
+            projected_ids = {
+                hit.item_id for hit in projected
+            }
+            note_route = corpus.diagnostics.get("note_route", {})
+            per_paper = (
+                note_route.get("per_paper", {})
+                if isinstance(note_route, Mapping)
+                else {}
+            )
+            paper_note_route = (
+                per_paper.get(paper_id, {})
+                if isinstance(per_paper, Mapping)
+                else {}
+            )
+            reviewer_count = (
+                int(paper_note_route.get("reviewer_chunk_count", 0))
+                if isinstance(paper_note_route, Mapping)
+                else 0
+            )
+            retrieval_diagnostics = {
+                "revision": S1_SOURCE_FUSION_POLICY["revision"],
+                "note_projection_nonempty": bool(projected),
+                "note_projected_item_count": len(projected),
+                "fallback_reason": fallback_reason,
+                "ranking_changed": final_top10 != direct_top10,
+                "note_unique_top10_item_ids": [
+                    item_id
+                    for item_id in final_top10
+                    if (
+                        item_id in projected_ids
+                        and item_id not in direct_top10
+                    )
+                ],
+                "has_fatal_or_major_reviewer": reviewer_count > 0,
+            }
+        else:
+            hits = (
+                pdf_only(pdf_hits, top_k=100)
+                if note_route_fallback
+                else _compose_hits(
+                    candidate,
+                    pdf_hits=pdf_hits,
+                    note_hits=note_hits,
+                    parent_hits=parent_hits,
+                    note_backlinks=corpus.note_backlinks,
+                    pdf_chunks=pdf_chunk_by_id,
+                    top_k=100,
+                )
+            )
         pre_rerank_hits = tuple(hits)
         query_elapsed_ms = (
             (time.perf_counter_ns() - query_started_ns) / 1_000_000.0
@@ -2456,6 +2624,7 @@ def run_complete_candidate(
             query_elapsed_ms,
             rerank_elapsed_ms,
             pre_rerank_hits,
+            retrieval_diagnostics,
         )
 
     for paper_id in normalized_expected_papers:
@@ -2465,7 +2634,13 @@ def run_complete_candidate(
         for question in questions_by_paper[paper_id]:
             row_id = str(question["row_id"])
             try:
-                hits, _, _, pre_rerank_hits = retrieve(question)
+                (
+                    hits,
+                    _,
+                    _,
+                    pre_rerank_hits,
+                    retrieval_diagnostics,
+                ) = retrieve(question)
             except Exception as exc:
                 _annotate_candidate_failure(
                     exc,
@@ -2519,6 +2694,7 @@ def run_complete_candidate(
                     ),
                     pre_rerank_metrics=pre_rerank_metrics,
                     metrics=metrics.metrics,
+                    retrieval_diagnostics=retrieval_diagnostics,
                 )
             )
         question_results_by_id.update(
@@ -2696,7 +2872,7 @@ def run_complete_candidate(
                 row_id = _required_text(question, "row_id")
                 paper_id = normalize_paper_id(question.get("paper_id"))
                 try:
-                    _, query_ms, rerank_ms, _ = retrieve(
+                    _, query_ms, rerank_ms, _, _ = retrieve(
                         question,
                         measure=True,
                     )
@@ -2828,6 +3004,37 @@ def run_complete_candidate(
     index_bytes = sum(
         len(text.encode("utf-8")) for text in indexed_passages.values()
     ) + sum(4 * len(vector) for vector in indexed_vectors.values())
+    corpus_diagnostics = dict(corpus.diagnostics)
+    if candidate.source_fusion == S1_SOURCE_FUSION_ID:
+        source_rows = {
+            result.row_id: dict(result.retrieval_diagnostics)
+            for result in question_results
+        }
+        corpus_diagnostics["source_query_routes"] = {
+            "revision": S1_SOURCE_FUSION_POLICY["revision"],
+            "question_count": len(source_rows),
+            "nonempty_note_projection_count": sum(
+                bool(row.get("note_projection_nonempty"))
+                for row in source_rows.values()
+            ),
+            "ineligible_paper_fallback_count": sum(
+                row.get("fallback_reason") == "ineligible-paper"
+                for row in source_rows.values()
+            ),
+            "empty_note_projection_fallback_count": sum(
+                row.get("fallback_reason") == "empty-note-projection"
+                for row in source_rows.values()
+            ),
+            "ranking_changed_count": sum(
+                bool(row.get("ranking_changed"))
+                for row in source_rows.values()
+            ),
+            "note_unique_top10_item_count": sum(
+                len(row.get("note_unique_top10_item_ids", ()))
+                for row in source_rows.values()
+            ),
+            "rows": source_rows,
+        }
     return CandidateRunResult(
         candidate=candidate,
         question_results=tuple(question_results),
@@ -2840,7 +3047,7 @@ def run_complete_candidate(
         chunk_count=len(indexed_passages),
         guardrails_passed=bool(guardrails_passed),
         latency_metrics=latency_metrics,
-        corpus_diagnostics=corpus.diagnostics,
+        corpus_diagnostics=corpus_diagnostics,
     )
 
 
@@ -2944,6 +3151,8 @@ __all__ = [
     "R1_RETRIEVER_FUSION_POLICY",
     "RR1_RERANK_FUSION_ID",
     "RR1_RERANK_FUSION_POLICY",
+    "S1_SOURCE_FUSION_ID",
+    "S1_SOURCE_FUSION_POLICY",
     "StageRanking",
     "StrategyCandidate",
     "StrategyContractError",
@@ -2954,6 +3163,7 @@ __all__ = [
     "generate_n1_candidate",
     "generate_r1_candidate",
     "generate_rr1_candidate",
+    "generate_s1_candidate",
     "load_main_document",
     "load_main_documents",
     "map_all_references",

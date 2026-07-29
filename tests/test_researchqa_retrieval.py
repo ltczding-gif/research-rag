@@ -22,6 +22,7 @@ from benchmarks.researchqa_retrieval import (
     note_guided_pdf,
     note_to_pdf,
     pdf_note_rrf,
+    pdf_note_weighted_rrf,
     pdf_only,
     preserve_dense_top1_weighted_rrf,
     preserve_top1_rank_rrf,
@@ -233,6 +234,40 @@ def test_pdf_note_rrf_and_note_guided_pdf_compositions():
     assert all(hit.source == "pdf-note-rrf" for hit in fused)
     assert [hit.item_id for hit in guided] == ["p1", "p3"]
     assert all(hit.source == "note-guided-pdf" for hit in guided)
+
+
+def test_s1_weighted_pdf_note_rrf_is_exact_pdf_only_when_projection_is_empty():
+    direct = (
+        RetrievalHit(
+            "p1",
+            0.9,
+            source="dense",
+            metadata={"paper_id": "W1"},
+        ),
+        _hit("p2", 0.8, source="dense"),
+    )
+    expected = pdf_only(direct, top_k=2)
+
+    fallback = pdf_note_weighted_rrf(
+        direct,
+        (),
+        pdf_weight=0.9,
+        note_weight=0.1,
+        top_k=2,
+        k=60,
+    )
+    fused = pdf_note_weighted_rrf(
+        direct,
+        (_hit("p2", 1.0), _hit("p3", 0.5)),
+        pdf_weight=0.9,
+        note_weight=0.1,
+        top_k=3,
+        k=60,
+    )
+
+    assert fallback == expected
+    assert [hit.item_id for hit in fused] == ["p2", "p1", "p3"]
+    assert all(hit.source == "pdf-note-weighted-rrf" for hit in fused)
 
 
 def test_hierarchical_pdf_returns_children_of_ranked_parents():

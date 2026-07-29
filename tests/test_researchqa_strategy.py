@@ -31,12 +31,15 @@ from benchmarks.researchqa_strategy import (
     R1_RETRIEVER_FUSION_POLICY,
     RR1_RERANK_FUSION_ID,
     RR1_RERANK_FUSION_POLICY,
+    S1_SOURCE_FUSION_ID,
+    S1_SOURCE_FUSION_POLICY,
     StrategyContractError,
     generate_f2_candidate,
     generate_n1_candidate,
     generate_orthogonal_candidates,
     generate_r1_candidate,
     generate_rr1_candidate,
+    generate_s1_candidate,
     load_main_documents,
     map_all_references,
     rank_stage_results,
@@ -516,6 +519,30 @@ def test_r1_candidate_is_independent_and_policy_bound():
     )
 
 
+def test_s1_candidate_is_independent_and_binds_n1_and_source_policy():
+    original = generate_orthogonal_candidates(_config())
+    first = generate_s1_candidate(_config())
+    second = generate_s1_candidate(_config())
+
+    assert first == second
+    assert first.config_id.startswith("repair-s1-")
+    assert first.stage_id == "source-composition"
+    assert first.pdf_chunker == "pdf-fixed-1200"
+    assert first.note_chunker == NOTE_CLAIM_PLUS_REVIEWER_ID
+    assert first.retriever == "hybrid-rrf"
+    assert first.source_composition == "pdf-note-rrf"
+    assert first.reranker == "rerank-off"
+    assert first.source_fusion == S1_SOURCE_FUSION_ID
+    assert first.to_dict()["source_fusion"] == S1_SOURCE_FUSION_ID
+    assert S1_SOURCE_FUSION_POLICY["pdf_weight"] == 0.9
+    assert S1_SOURCE_FUSION_POLICY["note_weight"] == 0.1
+    assert S1_SOURCE_FUSION_POLICY["rrf_k"] == 60
+    assert all(
+        "source_fusion" not in candidate.to_dict()
+        for candidate in original.candidates
+    )
+
+
 def test_r1_pipeline_preserves_the_direct_dense_top1(tmp_path):
     documents, questions = _fixture_corpus(tmp_path)
     baseline = next(
@@ -737,6 +764,111 @@ def test_n0_fallback_is_exact_direct_pdf_even_with_reviewer_backlinks(
     assert n1_result.corpus_diagnostics["note_route"][
         "fallback_paper_ids"
     ] == ["W2"]
+
+
+def test_s1_ineligible_paper_fallback_is_exact_pdf_only(
+    tmp_path,
+    monkeypatch,
+):
+    documents, questions = _fixture_corpus(tmp_path)
+    documents = {"W2": documents["W2"]}
+    questions = [
+        question
+        for question in questions
+        if question["row_id"] == "q-beta"
+    ]
+    s1 = generate_s1_candidate(_config())
+    baseline = next(
+        candidate
+        for candidate in generate_orthogonal_candidates(
+            _config(),
+            anchor_pdf_chunker="pdf-fixed-1200",
+            anchor_note_chunker="note-reviewer-concern",
+            anchor_retriever="hybrid-rrf",
+            anchor_source_composition="pdf-only",
+        ).stages["source-composition"]
+        if candidate.source_composition == "pdf-only"
+    )
+    note = _n1_note(
+        "Beta",
+        base_citation="[SI p.1]",
+        reviewer_severity="major",
+        reviewer_citation="[Main p.1]",
+    )
+    common = {
+        "expected_paper_ids": ("W2",),
+        "expected_question_ids": ("q-beta",),
+        "embedder": _FakeEmbedder(),
+    }
+    baseline_result = run_complete_candidate(
+        baseline,
+        documents,
+        questions,
+        **common,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "pdf_note_weighted_rrf",
+        lambda *_args, **_kwargs: pytest.fail(
+            "S1 paper fallback must bypass weighted note RRF"
+        ),
+    )
+    s1_result = run_complete_candidate(
+        s1,
+        documents,
+        questions,
+        notes={"W2": note},
+        **common,
+    )
+
+    baseline_row = baseline_result.question_results[0]
+    s1_row = s1_result.question_results[0]
+    assert s1_row.ranked_item_ids == baseline_row.ranked_item_ids
+    assert s1_row.ranked_scores == baseline_row.ranked_scores
+    assert s1_row.metrics == baseline_row.metrics
+    assert s1_row.retrieval_diagnostics["fallback_reason"] == (
+        "ineligible-paper"
+    )
+    assert s1_row.retrieval_diagnostics["ranking_changed"] is False
+
+
+def test_s1_records_nonempty_note_projection_and_query_route_diagnostics(
+    tmp_path,
+):
+    documents, questions = _fixture_corpus(tmp_path)
+    documents = {"W1": documents["W1"]}
+    questions = [
+        question
+        for question in questions
+        if question["row_id"] == "q-alpha"
+    ]
+    result = run_complete_candidate(
+        generate_s1_candidate(_config()),
+        documents,
+        questions,
+        expected_paper_ids=("W1",),
+        expected_question_ids=("q-alpha",),
+        embedder=_FakeEmbedder(),
+        notes={
+            "W1": _n1_note(
+                "Alpha",
+                base_citation="[Main p.1]",
+                reviewer_severity="major",
+                reviewer_citation="[Main p.1]",
+            )
+        },
+    )
+
+    row = result.question_results[0]
+    assert row.retrieval_diagnostics["note_projection_nonempty"] is True
+    assert row.retrieval_diagnostics["fallback_reason"] is None
+    assert row.retrieval_diagnostics["has_fatal_or_major_reviewer"] is True
+    assert result.corpus_diagnostics["source_fusion"] == dict(
+        S1_SOURCE_FUSION_POLICY
+    )
+    assert result.corpus_diagnostics["source_query_routes"][
+        "nonempty_note_projection_count"
+    ] == 1
 
 
 def test_f2_corpus_records_global_diagnostics_and_fails_over_cost(
@@ -975,6 +1107,28 @@ def test_complete_candidate_resumes_quality_at_complete_paper_boundary(tmp_path)
     assert result.completed_paper_ids == expected_papers
     assert result.completed_question_ids == tuple(sorted(expected_questions))
     assert snapshots[-1]["phase"] == "aggregate"
+
+
+def test_resume_question_result_rejects_non_mapping_retrieval_diagnostics():
+    value = {
+        "row_id": "q-alpha",
+        "paper_id": "W1",
+        "domain": "biology",
+        "question_type": "lookup",
+        "ranked_item_ids": ["W1::page::1"],
+        "ranked_scores": [1.0],
+        "pre_rerank_item_ids": [],
+        "pre_rerank_scores": [],
+        "pre_rerank_metrics": {},
+        "metrics": {"coverage_ndcg_at_10": 1.0},
+        "retrieval_diagnostics": [["ranking_changed", False]],
+    }
+
+    with pytest.raises(
+        StrategyContractError,
+        match="invalid retrieval_diagnostics",
+    ):
+        strategy._question_result_from_progress(value)
 
 
 def test_complete_candidate_resumes_only_complete_latency_passes(tmp_path):

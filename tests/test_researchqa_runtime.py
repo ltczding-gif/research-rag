@@ -24,6 +24,8 @@ from benchmarks.researchqa_retrieval import (
 from benchmarks.researchqa_strategy import (
     R1_RETRIEVER_FUSION_POLICY,
     RR1_RERANK_FUSION_POLICY,
+    S1_SOURCE_FUSION_POLICY,
+    audit_n1_note_route,
 )
 from benchmarks.researchqa_runtime import (
     ResearchQARuntimeError,
@@ -275,9 +277,12 @@ def _extension_record(
     elif kwargs["extension_id"] == "RR1":
         diagnostic_key = "rerank_fusion"
         diagnostics = dict(RR1_RERANK_FUSION_POLICY)
-    else:
+    elif kwargs["extension_id"] == "R1":
         diagnostic_key = "retriever_fusion"
         diagnostics = dict(R1_RETRIEVER_FUSION_POLICY)
+    else:
+        diagnostic_key = "source_fusion"
+        diagnostics = dict(S1_SOURCE_FUSION_POLICY)
     candidate = kwargs["candidate"]
     questions = kwargs["questions"]
     question_ids = [str(question["row_id"]) for question in questions]
@@ -301,7 +306,20 @@ def _extension_record(
             "evaluable_set": evaluable_set,
         },
         "chunk_count": int(diagnostics.get("output_chunk_count", 20)),
-        "corpus_diagnostics": {diagnostic_key: diagnostics},
+        "corpus_diagnostics": {
+            diagnostic_key: diagnostics,
+            **(
+                {
+                    "note_route": audit_n1_note_route(
+                        candidate,
+                        documents,
+                        kwargs["frozen_notes"],
+                    )
+                }
+                if kwargs["extension_id"] == "S1"
+                else {}
+            ),
+        },
         "extension": {
             "extension_id": kwargs["extension_id"],
             "baseline_config_id": kwargs["baseline_candidate"].config_id,
@@ -812,6 +830,73 @@ def test_extension_runtime_runs_r1_without_loading_reranker(
     assert summary["result"]["corpus_diagnostics"] == {
         "retriever_fusion": dict(R1_RETRIEVER_FUSION_POLICY)
     }
+
+
+def test_extension_runtime_runs_s1_with_verified_n1_prequality(
+    tmp_path: Path,
+) -> None:
+    config, run_root = _runtime_fixture(tmp_path)
+    _add_extension_contract(config)
+    events: list[str] = []
+
+    class FakeEmbedding:
+        model_id = OLLAMA_EMBED_MODEL_ID
+        model_digest = OLLAMA_EMBED_MODEL_DIGEST
+        dimensions = OLLAMA_EMBED_DIMENSIONS
+        normalization_revision = "exact-text-utf8-v1"
+
+        def __init__(self, *, cache_dir: Path):
+            self.cache_dir = Path(cache_dir)
+            events.append("embedding:init")
+
+        def preflight(self) -> dict[str, object]:
+            events.append("embedding:preflight")
+            return {
+                "provider": "fake-ollama",
+                "model_id": self.model_id,
+                "fingerprint": "s1-embedding",
+            }
+
+        def release_model(self) -> bool:
+            events.append("embedding:release")
+            return True
+
+    def fake_extension(**kwargs: object) -> SweepCandidateRecord:
+        events.append("extension:run")
+        assert kwargs["extension_id"] == "S1"
+        assert kwargs["reranker"] is None
+        assert kwargs["candidate"].source_fusion is not None
+        assert kwargs["baseline_candidate"].source_composition == "pdf-only"
+        return _extension_record(kwargs)
+
+    result = run_researchqa_extension_runtime(
+        config,
+        run_root,
+        extension_id="S1",
+        embedding_factory=FakeEmbedding,
+        extension_runner=fake_extension,
+    )
+
+    assert events == [
+        "embedding:init",
+        "embedding:preflight",
+        "extension:run",
+        "embedding:release",
+    ]
+    prequality = json.loads(
+        Path(result.prequality_path).read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        Path(result.runtime_summary_path).read_text(encoding="utf-8")
+    )
+    assert prequality["note_route"]["fallback_paper_ids"] == []
+    assert len(prequality["note_route"]["eligible_paper_ids"]) == 20
+    assert summary["result"]["corpus_diagnostics"]["source_fusion"] == dict(
+        S1_SOURCE_FUSION_POLICY
+    )
+    assert summary["result"]["corpus_diagnostics"]["note_route"][
+        "fallback_paper_ids"
+    ] == []
 
 
 def test_extension_runtime_fails_closed_on_incomplete_record(

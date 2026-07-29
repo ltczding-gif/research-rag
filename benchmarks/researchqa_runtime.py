@@ -31,6 +31,7 @@ from benchmarks.researchqa_retrieval import (
 from benchmarks.researchqa_strategy import (
     R1_RETRIEVER_FUSION_POLICY,
     RR1_RERANK_FUSION_POLICY,
+    S1_SOURCE_FUSION_POLICY,
     StrategyCandidate,
     audit_n1_note_route,
     generate_f2_candidate,
@@ -38,6 +39,7 @@ from benchmarks.researchqa_strategy import (
     generate_orthogonal_candidates,
     generate_r1_candidate,
     generate_rr1_candidate,
+    generate_s1_candidate,
     load_main_documents,
     normalize_paper_id,
 )
@@ -455,6 +457,75 @@ def _r1_candidates(
     return candidate, baselines[0]
 
 
+def _s1_candidates(
+    config: Mapping[str, Any],
+) -> tuple[StrategyCandidate, StrategyCandidate]:
+    candidate = generate_s1_candidate(config)
+    plan = generate_orthogonal_candidates(
+        config,
+        anchor_pdf_chunker="pdf-fixed-1200",
+        anchor_note_chunker="note-reviewer-concern",
+        anchor_retriever="hybrid-rrf",
+        anchor_source_composition="pdf-only",
+    )
+    baselines = tuple(
+        row
+        for row in plan.stages.get("source-composition", ())
+        if (
+            row.pdf_chunker == "pdf-fixed-1200"
+            and row.note_chunker is None
+            and row.retriever == "hybrid-rrf"
+            and row.source_composition == "pdf-only"
+            and row.reranker == "rerank-off"
+        )
+    )
+    if len(baselines) != 1:
+        raise ResearchQARuntimeError(
+            "S1 requires exactly one frozen hybrid PDF-only baseline"
+        )
+    return candidate, baselines[0]
+
+
+def _s1_note_prequality(
+    candidate: StrategyCandidate,
+    documents: Mapping[str, object],
+    frozen_notes: Mapping[str, str],
+) -> Mapping[str, object]:
+    diagnostics = audit_n1_note_route(
+        candidate,
+        documents,
+        frozen_notes,
+    )
+    eligible_ids = diagnostics.get("eligible_paper_ids")
+    fallback_ids = diagnostics.get("fallback_paper_ids")
+    base_count = int(diagnostics.get("base_chunk_count", 0))
+    backlinkable_base_count = int(
+        diagnostics.get("backlinkable_base_chunk_count", 0)
+    )
+    reviewer_count = int(
+        diagnostics.get("reviewer_chunk_count", 0)
+    )
+    backlinkable_reviewer_count = int(
+        diagnostics.get("backlinkable_reviewer_chunk_count", 0)
+    )
+    if (
+        diagnostics.get("contract_status") != "passed"
+        or not isinstance(eligible_ids, list)
+        or len(eligible_ids) != EXPECTED_PAPER_COUNT
+        or fallback_ids != []
+        or base_count < EXPECTED_PAPER_COUNT
+        or backlinkable_base_count != base_count
+        or backlinkable_reviewer_count != reviewer_count
+    ):
+        raise ResearchQARuntimeError(
+            "S1 N0/N3 pre-quality contract failed: "
+            f"eligible={eligible_ids}, fallback={fallback_ids}, "
+            f"base={backlinkable_base_count}/{base_count}, "
+            f"reviewer={backlinkable_reviewer_count}/{reviewer_count}"
+        )
+    return diagnostics
+
+
 def _f2_prequality(
     documents: Mapping[str, object],
 ) -> Mapping[str, object]:
@@ -597,10 +668,10 @@ def run_researchqa_extension_runtime(
 ) -> ResearchQAExtensionRuntimeResult:
     """Run one approved extension with only its required model lifecycle."""
 
-    if extension_id not in {"F2", "R1", "RR1"}:
+    if extension_id not in {"F2", "R1", "RR1", "S1"}:
         raise ResearchQARuntimeError(
             f"unsupported extension {extension_id!r}; "
-            "expected F2, R1, or RR1"
+            "expected F2, R1, RR1, or S1"
         )
 
     root = Path(run_root).resolve(strict=False)
@@ -624,6 +695,7 @@ def run_researchqa_extension_runtime(
     baseline: StrategyCandidate | None = None
     diagnostics: Mapping[str, object] | None = None
     diagnostic_key: str | None = None
+    note_route_diagnostics: Mapping[str, object] | None = None
     input_summary: dict[str, Any] = {}
 
     def write_preflight(
@@ -723,10 +795,19 @@ def run_researchqa_extension_runtime(
             candidate, baseline = _rr1_candidates(config)
             diagnostics = dict(RR1_RERANK_FUSION_POLICY)
             diagnostic_key = "rerank_fusion"
-        else:
+        elif extension_id == "R1":
             candidate, baseline = _r1_candidates(config)
             diagnostics = dict(R1_RETRIEVER_FUSION_POLICY)
             diagnostic_key = "retriever_fusion"
+        else:
+            candidate, baseline = _s1_candidates(config)
+            diagnostics = dict(S1_SOURCE_FUSION_POLICY)
+            diagnostic_key = "source_fusion"
+            note_route_diagnostics = _s1_note_prequality(
+                candidate,
+                documents,
+                frozen_notes,
+            )
         _atomic_write_json(
             prequality_path,
             {
@@ -735,6 +816,11 @@ def run_researchqa_extension_runtime(
                 "candidate_config_id": candidate.config_id,
                 "status": "completed",
                 "diagnostics": diagnostics,
+                **(
+                    {"note_route": note_route_diagnostics}
+                    if note_route_diagnostics is not None
+                    else {}
+                ),
             },
         )
         input_summary = {
@@ -818,6 +904,14 @@ def run_researchqa_extension_runtime(
             raise ResearchQARuntimeError(
                 f"extension result diagnostics differ from {extension_id} "
                 "pre-quality"
+            )
+        if (
+            extension_id == "S1"
+            and corpus_diagnostics.get("note_route")
+            != note_route_diagnostics
+        ):
+            raise ResearchQARuntimeError(
+                "extension result note route differs from S1 pre-quality"
             )
     except BaseException as exc:
         failure = exc
@@ -919,9 +1013,9 @@ def run_researchqa_extension_runtime(
                 ),
                 "mapped_group_count": len(record.evaluable_set),
                 "chunk_count": record.chunk_count,
-                "corpus_diagnostics": {
-                    diagnostic_key: diagnostics,
-                },
+                "corpus_diagnostics": dict(
+                    record.payload["corpus_diagnostics"]
+                ),
             },
         },
     )

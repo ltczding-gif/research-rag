@@ -505,6 +505,28 @@ def pdf_note_rrf(
     )
 
 
+def pdf_note_weighted_rrf(
+    direct_pdf_hits: Sequence[RetrievalHit],
+    note_derived_pdf_hits: Sequence[RetrievalHit],
+    *,
+    pdf_weight: float,
+    note_weight: float,
+    top_k: int | None = None,
+    k: int = RRF_K,
+) -> tuple[RetrievalHit, ...]:
+    """Fuse PDF/note ranks, falling back exactly when note projection is empty."""
+
+    if not note_derived_pdf_hits:
+        return pdf_only(direct_pdf_hits, top_k=top_k)
+    return reciprocal_rank_fusion(
+        (direct_pdf_hits, note_derived_pdf_hits),
+        weights=(pdf_weight, note_weight),
+        k=k,
+        top_k=top_k,
+        source="pdf-note-weighted-rrf",
+    )
+
+
 def note_guided_pdf(
     note_hits: Sequence[RetrievalHit],
     pdf_hits: Sequence[RetrievalHit],
@@ -676,6 +698,7 @@ __all__ = [
     "note_guided_pdf",
     "note_to_pdf",
     "pdf_note_rrf",
+    "pdf_note_weighted_rrf",
     "pdf_only",
     "preserve_dense_top1_weighted_rrf",
     "preserve_top1_rank_rrf",
