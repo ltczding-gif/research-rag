@@ -632,6 +632,42 @@ def run_researchqa_extension_runtime(
             },
         )
 
+    def before_extension_rerank_stage() -> None:
+        nonlocal embedding_released
+        nonlocal embedding_cache_only
+        nonlocal reranker_preflight
+        if extension_id != "RR1" or embedding is None or reranker is None:
+            raise ResearchQARuntimeError(
+                "RR1 model lifecycle is not initialized"
+            )
+        if embedding_cache_only or reranker_preflight is not None:
+            raise ResearchQARuntimeError(
+                "RR1 model lifecycle may only enter once"
+            )
+        embedding.release_model()
+        embedding_released = True
+        embedding.enter_cache_only()
+        if getattr(embedding, "_cache_only", False) is not True:
+            raise ResearchQARuntimeError(
+                "RR1 requires the embedding client to enter cache-only"
+            )
+        embedding_cache_only = True
+        reranker_preflight = _preflight_payload(reranker.preflight())
+        write_preflight(status="models-preflighted")
+
+    def assert_extension_embedding_cache_only(
+        _candidate: object,
+    ) -> None:
+        if (
+            not embedding_cache_only
+            or embedding is None
+            or getattr(embedding, "_cache_only", False) is not True
+            or reranker_preflight is None
+        ):
+            raise ResearchQARuntimeError(
+                "RR1 reranking requires preflighted cache-only models"
+            )
+
     failure: BaseException | None = None
     try:
         _validate_model_config(config)
@@ -679,22 +715,10 @@ def run_researchqa_extension_runtime(
         embedding_preflight = _preflight_payload(embedding.preflight())
         write_preflight(status="embedding-preflighted")
         if extension_id == "RR1":
-            embedding.release_model()
-            embedding_released = True
-            embedding.enter_cache_only()
-            if getattr(embedding, "_cache_only", False) is not True:
-                raise ResearchQARuntimeError(
-                    "RR1 requires the embedding client to enter cache-only"
-                )
-            embedding_cache_only = True
             reranker = reranker_factory(
                 hf_home=hf_cache_dir,
                 device="cuda",
             )
-            reranker_preflight = _preflight_payload(
-                reranker.preflight()
-            )
-            write_preflight(status="models-preflighted")
 
         record = extension_runner(
             config=config,
@@ -707,6 +731,16 @@ def run_researchqa_extension_runtime(
             extension_id=extension_id,
             candidate=candidate,
             baseline_candidate=baseline,
+            before_rerank_stage=(
+                before_extension_rerank_stage
+                if extension_id == "RR1"
+                else None
+            ),
+            assert_embedding_cache_only=(
+                assert_extension_embedding_cache_only
+                if extension_id == "RR1"
+                else None
+            ),
         )
         if not isinstance(record, SweepCandidateRecord):
             raise ResearchQARuntimeError(

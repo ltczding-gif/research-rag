@@ -695,12 +695,14 @@ def test_extension_runtime_runs_rr1_in_embedding_cache_only_mode(
             return True
 
     def fake_extension(**kwargs: object) -> SweepCandidateRecord:
-        events.append("extension:run")
         assert kwargs["extension_id"] == "RR1"
         assert kwargs["reranker"].__class__ is FakeReranker
+        kwargs["before_rerank_stage"]()
+        kwargs["assert_embedding_cache_only"](kwargs["candidate"])
         assert kwargs["embedder"]._cache_only is True
         assert kwargs["candidate"].rerank_fusion is not None
         assert kwargs["baseline_candidate"].reranker == "rerank-off"
+        events.append("extension:run")
         return _extension_record(kwargs)
 
     result = run_researchqa_extension_runtime(
@@ -715,9 +717,9 @@ def test_extension_runtime_runs_rr1_in_embedding_cache_only_mode(
     assert events == [
         "embedding:init",
         "embedding:preflight",
+        "reranker:init",
         "embedding:release",
         "embedding:cache-only",
-        "reranker:init",
         "reranker:preflight",
         "extension:run",
         "reranker:release",
