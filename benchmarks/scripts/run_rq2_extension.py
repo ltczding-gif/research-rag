@@ -34,7 +34,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--schema", type=Path, default=DEFAULT_SCHEMA)
     parser.add_argument("--run-root", type=Path, required=True)
-    parser.add_argument("--extension", choices=("F2",), required=True)
+    parser.add_argument(
+        "--extension",
+        choices=("F2", "RR1"),
+        required=True,
+    )
     return parser.parse_args(argv)
 
 

@@ -55,6 +55,7 @@ from benchmarks.researchqa_retrieval import (
     note_to_pdf,
     pdf_note_rrf,
     pdf_only,
+    preserve_top1_rank_rrf,
     reciprocal_rank_fusion,
     rerank_hits,
 )
@@ -107,6 +108,16 @@ NOTE_ROUTE_ELIGIBILITY_POLICY: Mapping[str, object] = {
     "requires_pdf_backlink": True,
     "ineligible_fallback": "direct-pdf-only",
     "reviewer_route_can_establish_eligibility": False,
+}
+RR1_RERANK_FUSION_ID = "preserve-base-top1-equal-rank-rrf"
+RR1_RERANK_FUSION_POLICY: Mapping[str, object] = {
+    "revision": "rq2-rr1-preserve-top1-rank-rrf-v1",
+    "reranker": "rerank-20-to-10",
+    "depth": 20,
+    "output_k": 10,
+    "preserve_base_top1": True,
+    "fusion": "equal-rank-rrf",
+    "rrf_k": 60,
 }
 
 
@@ -720,6 +731,7 @@ class StrategyCandidate:
     reranker_depth: int | None
     reranker_keep: int = 10
     rankable: bool = True
+    rerank_fusion: str | None = None
 
     def __post_init__(self) -> None:
         if self.stage_id not in STAGE_IDS:
@@ -764,6 +776,21 @@ class StrategyCandidate:
             )
         if self.reranker_keep < 1:
             raise StrategyContractError("reranker_keep must be positive")
+        if (
+            self.rerank_fusion is not None
+            and self.rerank_fusion != RR1_RERANK_FUSION_ID
+        ):
+            raise StrategyContractError(
+                f"unsupported rerank fusion: {self.rerank_fusion}"
+            )
+        if self.rerank_fusion == RR1_RERANK_FUSION_ID and (
+            self.reranker != "rerank-20-to-10"
+            or self.reranker_depth != 20
+            or self.reranker_keep != 10
+        ):
+            raise StrategyContractError(
+                "RR1 requires rerank-20-to-10 with depth 20 and output 10"
+            )
 
     @property
     def requires_notes(self) -> bool:
@@ -781,7 +808,7 @@ class StrategyCandidate:
         return canonical_fingerprint(self.to_dict())
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        value = {
             "stage_id": self.stage_id,
             "config_id": self.config_id,
             "pdf_chunker": self.pdf_chunker,
@@ -793,6 +820,9 @@ class StrategyCandidate:
             "reranker_keep": self.reranker_keep,
             "rankable": self.rankable,
         }
+        if self.rerank_fusion is not None:
+            value["rerank_fusion"] = self.rerank_fusion
+        return value
 
 
 @dataclass(frozen=True)
@@ -1121,6 +1151,51 @@ def generate_n1_candidate(
     )
 
 
+def generate_rr1_candidate(
+    config: Mapping[str, Any],
+) -> StrategyCandidate:
+    """Create the frozen RR1 extension without changing baseline rerankers."""
+
+    stages = config.get("stages")
+    if not isinstance(stages, Mapping):
+        raise StrategyContractError("config.stages must be a mapping")
+    reranker_rows = _option_rows(stages, "rerankers")
+    reranker_options = {str(row["id"]): row for row in reranker_rows}
+    if set(reranker_options) != set(RERANKER_IDS):
+        raise StrategyContractError(
+            f"rerankers must be exactly {list(RERANKER_IDS)}"
+        )
+    option = reranker_options["rerank-20-to-10"]
+    if (
+        not bool(option.get("enabled"))
+        or int(option.get("input_k", 0)) != 20
+        or int(option.get("output_k", 0)) != 10
+    ):
+        raise StrategyContractError(
+            "RR1 requires the frozen rerank-20-to-10 option"
+        )
+    components = {
+        "stage_id": "reranker",
+        "pdf_chunker": "pdf-fixed-1200",
+        "note_chunker": None,
+        "retriever": "hybrid-rrf",
+        "source_composition": "pdf-only",
+        "reranker": "rerank-20-to-10",
+    }
+    identity = {
+        "repair_id": "RR1",
+        "components": components,
+        "policy": dict(RR1_RERANK_FUSION_POLICY),
+    }
+    return StrategyCandidate(
+        config_id=f"repair-rr1-{canonical_fingerprint(identity)[:20]}",
+        reranker_depth=20,
+        reranker_keep=10,
+        rerank_fusion=RR1_RERANK_FUSION_ID,
+        **components,
+    )
+
+
 def _option_rows(
     stages: Mapping[str, Any],
     key: str,
@@ -1314,6 +1389,10 @@ def _prepare_candidate_corpus(
         if candidate.pdf_chunker == PDF_STRUCTURE_FALLBACK_ID:
             pdf_chunking_results[paper_id] = result
     corpus_diagnostics: dict[str, object] = {}
+    if candidate.rerank_fusion == RR1_RERANK_FUSION_ID:
+        corpus_diagnostics["rerank_fusion"] = dict(
+            RR1_RERANK_FUSION_POLICY
+        )
     if candidate.pdf_chunker == PDF_STRUCTURE_FALLBACK_ID:
         f2_diagnostics = structure_fallback_corpus_diagnostics(
             pdf_chunking_results
@@ -2258,15 +2337,32 @@ def run_complete_candidate(
         if candidate.reranker != "rerank-off":
             assert reranker is not None and candidate.reranker_depth is not None
             rerank_started_ns = time.perf_counter_ns() if measure else 0
-            hits = rerank_hits(
+            reranked = rerank_hits(
                 query,
                 hits,
                 pdf_passages,
                 reranker,
                 depth=candidate.reranker_depth,
-                keep=candidate.reranker_keep,
+                keep=(
+                    candidate.reranker_depth
+                    if candidate.rerank_fusion
+                    == RR1_RERANK_FUSION_ID
+                    else candidate.reranker_keep
+                ),
                 batch_size=reranker_batch_size,
             ).hits
+            hits = (
+                preserve_top1_rank_rrf(
+                    pre_rerank_hits,
+                    reranked,
+                    depth=candidate.reranker_depth,
+                    top_k=candidate.reranker_keep,
+                    k=int(RR1_RERANK_FUSION_POLICY["rrf_k"]),
+                )
+                if candidate.rerank_fusion
+                == RR1_RERANK_FUSION_ID
+                else reranked
+            )
             if measure:
                 rerank_elapsed_ms = (
                     time.perf_counter_ns() - rerank_started_ns
@@ -2760,6 +2856,8 @@ __all__ = [
     "PAPER_SCOPED_RETRIEVAL",
     "QuestionStrategyResult",
     "REFERENCE_MATCH_REVISION",
+    "RR1_RERANK_FUSION_ID",
+    "RR1_RERANK_FUSION_POLICY",
     "StageRanking",
     "StrategyCandidate",
     "StrategyContractError",
@@ -2768,6 +2866,7 @@ __all__ = [
     "generate_orthogonal_candidates",
     "generate_f2_candidate",
     "generate_n1_candidate",
+    "generate_rr1_candidate",
     "load_main_document",
     "load_main_documents",
     "map_all_references",

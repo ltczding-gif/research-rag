@@ -27,10 +27,13 @@ from benchmarks.researchqa_strategy import (
     REFERENCE_MATCH_REVISION,
     REFERENCE_PAGE_HINT_METHOD,
     REFERENCE_SECTION_HINT_METHOD,
+    RR1_RERANK_FUSION_ID,
+    RR1_RERANK_FUSION_POLICY,
     StrategyContractError,
     generate_f2_candidate,
     generate_n1_candidate,
     generate_orthogonal_candidates,
+    generate_rr1_candidate,
     load_main_documents,
     map_all_references,
     rank_stage_results,
@@ -461,6 +464,106 @@ def test_n1_candidate_is_independent_and_policy_bound():
     assert first.reranker == "rerank-off"
     assert NOTE_ROUTE_ELIGIBILITY_POLICY["revision"] == (
         "rq2-n0-paper-note-route-eligibility-v1"
+    )
+
+
+def test_rr1_candidate_is_independent_and_policy_bound():
+    original = generate_orthogonal_candidates(_config())
+    first = generate_rr1_candidate(_config())
+    second = generate_rr1_candidate(_config())
+
+    assert first == second
+    assert first.config_id.startswith("repair-rr1-")
+    assert first.stage_id == "reranker"
+    assert first.pdf_chunker == "pdf-fixed-1200"
+    assert first.retriever == "hybrid-rrf"
+    assert first.source_composition == "pdf-only"
+    assert first.reranker == "rerank-20-to-10"
+    assert first.reranker_depth == 20
+    assert first.reranker_keep == 10
+    assert first.rerank_fusion == RR1_RERANK_FUSION_ID
+    assert first.to_dict()["rerank_fusion"] == RR1_RERANK_FUSION_ID
+    assert RR1_RERANK_FUSION_POLICY["rrf_k"] == 60
+    assert all(
+        "rerank_fusion" not in candidate.to_dict()
+        for candidate in original.candidates
+    )
+
+
+def test_rr1_pipeline_preserves_the_direct_base_top1(tmp_path):
+    target = (
+        "Alpha result was 42 units under the controlled condition. "
+        + "Alpha mechanism evidence remains stable. " * 30
+    )
+    distractor = "Unrelated control and background details. " * 45
+    _write_native_ir(
+        tmp_path,
+        "W1",
+        [target, distractor, distractor],
+    )
+    documents = load_main_documents(
+        tmp_path,
+        expected_paper_ids=("W1",),
+    )
+    questions = [
+        {
+            "row_id": "q-alpha",
+            "paper_id": "W1",
+            "domain": "domain-a",
+            "question_type": "lookup",
+            "question": "What was the Alpha result?",
+            "expected_references": [
+                {
+                    "alternatives": [
+                        "Alpha result was 42 units under the "
+                        "controlled condition."
+                    ]
+                }
+            ],
+        }
+    ]
+    baseline = next(
+        candidate
+        for candidate in generate_orthogonal_candidates(
+            _config(),
+            anchor_pdf_chunker="pdf-fixed-1200",
+            anchor_note_chunker="note-reviewer-concern",
+            anchor_retriever="hybrid-rrf",
+            anchor_source_composition="pdf-only",
+        ).stages["reranker"]
+        if candidate.reranker == "rerank-off"
+    )
+    rr1 = generate_rr1_candidate(_config())
+
+    class _ReverseReranker(_FakeReranker):
+        def score_pairs(self, query, passages, *, batch_size):
+            self.calls.append((query, tuple(passages), batch_size))
+            return list(range(len(passages)))
+
+    baseline_result = run_complete_candidate(
+        baseline,
+        documents,
+        questions,
+        expected_paper_ids=("W1",),
+        expected_question_ids=("q-alpha",),
+        embedder=_FakeEmbedder(),
+    )
+    rr1_result = run_complete_candidate(
+        rr1,
+        documents,
+        questions,
+        expected_paper_ids=("W1",),
+        expected_question_ids=("q-alpha",),
+        embedder=_FakeEmbedder(),
+        reranker=_ReverseReranker(),
+    )
+
+    baseline_row = baseline_result.question_results[0]
+    rr1_row = rr1_result.question_results[0]
+    assert rr1_row.ranked_item_ids[0] == baseline_row.ranked_item_ids[0]
+    assert rr1_row.pre_rerank_item_ids == baseline_row.ranked_item_ids
+    assert rr1_result.corpus_diagnostics["rerank_fusion"] == dict(
+        RR1_RERANK_FUSION_POLICY
     )
 
 

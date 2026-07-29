@@ -331,6 +331,54 @@ def reciprocal_rank_fusion(
     )
 
 
+def preserve_top1_rank_rrf(
+    base_hits: Sequence[RetrievalHit],
+    reranked_hits: Sequence[RetrievalHit],
+    *,
+    depth: int,
+    top_k: int,
+    k: int = RRF_K,
+) -> tuple[RetrievalHit, ...]:
+    """Fuse base/reranker ranks while deterministically protecting base top-1."""
+
+    if depth < 1 or top_k < 1:
+        raise ValueError("depth and top_k must be positive")
+    if not base_hits:
+        return ()
+    fused = reciprocal_rank_fusion(
+        (tuple(base_hits[:depth]), tuple(reranked_hits)),
+        k=k,
+        top_k=None,
+        source="rerank-base-rank-rrf",
+    )
+    protected_id = base_hits[0].item_id
+    fused_by_id = {hit.item_id: hit for hit in fused}
+    protected_fused = fused_by_id.get(protected_id)
+    remaining = tuple(
+        hit for hit in fused if hit.item_id != protected_id
+    )
+    maximum_score = max(
+        (hit.score for hit in fused),
+        default=0.0,
+    )
+    protected_score = math.nextafter(maximum_score, math.inf)
+    protected = RetrievalHit(
+        item_id=protected_id,
+        score=protected_score,
+        source="rerank-base-rank-rrf",
+        metadata={
+            **dict(base_hits[0].metadata),
+            "protected_base_top1": True,
+            "unprotected_rrf_score": (
+                protected_fused.score
+                if protected_fused is not None
+                else 0.0
+            ),
+        },
+    )
+    return (protected, *remaining[: max(0, top_k - 1)])
+
+
 def pdf_only(
     pdf_hits: Sequence[RetrievalHit],
     *,
@@ -578,6 +626,7 @@ __all__ = [
     "note_to_pdf",
     "pdf_note_rrf",
     "pdf_only",
+    "preserve_top1_rank_rrf",
     "reciprocal_rank_fusion",
     "rerank_hits",
     "text_sha256",

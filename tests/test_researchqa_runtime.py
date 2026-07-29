@@ -21,6 +21,7 @@ from benchmarks.researchqa_retrieval import (
     RERANKER_MODEL_ID,
     RERANKER_REVISION,
 )
+from benchmarks.researchqa_strategy import RR1_RERANK_FUSION_POLICY
 from benchmarks.researchqa_runtime import (
     ResearchQARuntimeError,
     run_n0_n3_prequality_runtime,
@@ -256,16 +257,21 @@ def _extension_record(
     status: str = "completed",
 ) -> SweepCandidateRecord:
     documents = kwargs["documents"]
-    diagnostics = structure_fallback_corpus_diagnostics(
-        {
-            paper_id: chunk_pdf(
-                document,
-                PDF_STRUCTURE_FALLBACK_ID,
-                is_main=True,
-            )
-            for paper_id, document in documents.items()
-        }
-    )
+    if kwargs["extension_id"] == "F2":
+        diagnostic_key = "pdf_chunking"
+        diagnostics = structure_fallback_corpus_diagnostics(
+            {
+                paper_id: chunk_pdf(
+                    document,
+                    PDF_STRUCTURE_FALLBACK_ID,
+                    is_main=True,
+                )
+                for paper_id, document in documents.items()
+            }
+        )
+    else:
+        diagnostic_key = "rerank_fusion"
+        diagnostics = dict(RR1_RERANK_FUSION_POLICY)
     candidate = kwargs["candidate"]
     questions = kwargs["questions"]
     question_ids = [str(question["row_id"]) for question in questions]
@@ -288,8 +294,8 @@ def _extension_record(
             "coverage": {"passed": status == "completed"},
             "evaluable_set": evaluable_set,
         },
-        "chunk_count": diagnostics["output_chunk_count"],
-        "corpus_diagnostics": {"pdf_chunking": diagnostics},
+        "chunk_count": int(diagnostics.get("output_chunk_count", 20)),
+        "corpus_diagnostics": {diagnostic_key: diagnostics},
         "extension": {
             "extension_id": kwargs["extension_id"],
             "baseline_config_id": kwargs["baseline_candidate"].config_id,
@@ -639,12 +645,100 @@ def test_extension_runtime_runs_f2_without_loading_reranker(
     assert summary["status"] == "completed"
     assert summary["lifecycle"] == {
         "embedding_released": True,
-        "reranker_loaded": False,
+        "embedding_cache_only": False,
+        "reranker_required": False,
+        "reranker_released": False,
     }
     assert summary["result"]["completed_paper_count"] == 20
     assert summary["result"]["completed_question_count"] == 254
     assert summary["result"]["evaluable_question_count"] == 239
     assert summary["result"]["mapped_group_count"] == 380
+
+
+def test_extension_runtime_runs_rr1_in_embedding_cache_only_mode(
+    tmp_path: Path,
+) -> None:
+    config, run_root = _runtime_fixture(tmp_path)
+    _add_extension_contract(config)
+    events: list[str] = []
+
+    class FakeEmbedding:
+        def __init__(self, *, cache_dir: Path):
+            self.cache_dir = Path(cache_dir)
+            self._cache_only = False
+            events.append("embedding:init")
+
+        def preflight(self) -> dict[str, str]:
+            events.append("embedding:preflight")
+            return {"fingerprint": "rr1-embedding"}
+
+        def release_model(self) -> bool:
+            events.append("embedding:release")
+            return True
+
+        def enter_cache_only(self) -> None:
+            self._cache_only = True
+            events.append("embedding:cache-only")
+
+    class FakeReranker:
+        def __init__(self, *, hf_home: Path, device: str):
+            assert Path(hf_home).name == "hf-cache"
+            assert device == "cuda"
+            events.append("reranker:init")
+
+        def preflight(self) -> dict[str, str]:
+            events.append("reranker:preflight")
+            return {"fingerprint": "rr1-reranker"}
+
+        def release_model(self) -> bool:
+            events.append("reranker:release")
+            return True
+
+    def fake_extension(**kwargs: object) -> SweepCandidateRecord:
+        events.append("extension:run")
+        assert kwargs["extension_id"] == "RR1"
+        assert kwargs["reranker"].__class__ is FakeReranker
+        assert kwargs["embedder"]._cache_only is True
+        assert kwargs["candidate"].rerank_fusion is not None
+        assert kwargs["baseline_candidate"].reranker == "rerank-off"
+        return _extension_record(kwargs)
+
+    result = run_researchqa_extension_runtime(
+        config,
+        run_root,
+        extension_id="RR1",
+        embedding_factory=FakeEmbedding,
+        reranker_factory=FakeReranker,
+        extension_runner=fake_extension,
+    )
+
+    assert events == [
+        "embedding:init",
+        "embedding:preflight",
+        "embedding:release",
+        "embedding:cache-only",
+        "reranker:init",
+        "reranker:preflight",
+        "extension:run",
+        "reranker:release",
+    ]
+    preflight = json.loads(
+        Path(result.model_preflight_path).read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        Path(result.runtime_summary_path).read_text(encoding="utf-8")
+    )
+    assert preflight["status"] == "completed"
+    assert preflight["reranker"]["fingerprint"] == "rr1-reranker"
+    assert summary["lifecycle"] == {
+        "embedding_released": True,
+        "embedding_cache_only": True,
+        "reranker_required": True,
+        "reranker_released": True,
+    }
+    assert summary["result"]["corpus_diagnostics"] == {
+        "rerank_fusion": dict(RR1_RERANK_FUSION_POLICY)
+    }
 
 
 def test_extension_runtime_fails_closed_on_incomplete_record(

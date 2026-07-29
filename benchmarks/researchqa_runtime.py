@@ -29,11 +29,13 @@ from benchmarks.researchqa_retrieval import (
     RERANKER_REVISION,
 )
 from benchmarks.researchqa_strategy import (
+    RR1_RERANK_FUSION_POLICY,
     StrategyCandidate,
     audit_n1_note_route,
     generate_f2_candidate,
     generate_n1_candidate,
     generate_orthogonal_candidates,
+    generate_rr1_candidate,
     load_main_documents,
     normalize_paper_id,
 )
@@ -395,6 +397,34 @@ def _f2_candidates(
     return candidate, baselines[0]
 
 
+def _rr1_candidates(
+    config: Mapping[str, Any],
+) -> tuple[StrategyCandidate, StrategyCandidate]:
+    candidate = generate_rr1_candidate(config)
+    plan = generate_orthogonal_candidates(
+        config,
+        anchor_pdf_chunker="pdf-fixed-1200",
+        anchor_note_chunker="note-reviewer-concern",
+        anchor_retriever="hybrid-rrf",
+        anchor_source_composition="pdf-only",
+    )
+    baselines = tuple(
+        row
+        for row in plan.stages.get("reranker", ())
+        if (
+            row.pdf_chunker == "pdf-fixed-1200"
+            and row.retriever == "hybrid-rrf"
+            and row.source_composition == "pdf-only"
+            and row.reranker == "rerank-off"
+        )
+    )
+    if len(baselines) != 1:
+        raise ResearchQARuntimeError(
+            "RR1 requires exactly one frozen hybrid rerank-off baseline"
+        )
+    return candidate, baselines[0]
+
+
 def _f2_prequality(
     documents: Mapping[str, object],
 ) -> Mapping[str, object]:
@@ -532,13 +562,14 @@ def run_researchqa_extension_runtime(
     *,
     extension_id: str,
     embedding_factory: EmbeddingFactory = OllamaBatchEmbeddingClient,
+    reranker_factory: RerankerFactory = Qwen3RerankerTransformersAdapter,
     extension_runner: ExtensionRunner = run_extension_candidate,
 ) -> ResearchQAExtensionRuntimeResult:
-    """Run one approved extension without loading an unused reranker."""
+    """Run one approved extension with only its required model lifecycle."""
 
-    if extension_id != "F2":
+    if extension_id not in {"F2", "RR1"}:
         raise ResearchQARuntimeError(
-            f"unsupported extension {extension_id!r}; currently expected 'F2'"
+            f"unsupported extension {extension_id!r}; expected F2 or RR1"
         )
 
     root = Path(run_root).resolve(strict=False)
@@ -548,14 +579,20 @@ def run_researchqa_extension_runtime(
     prequality_path = runtime_root / "prequality.json"
     summary_path = runtime_root / "runtime-summary.json"
     embedding_cache_dir = root / "model-cache" / "embeddings"
+    hf_cache_dir = root / "model-cache" / "hf-cache"
 
     embedding: object | None = None
+    reranker: object | None = None
     embedding_preflight: Mapping[str, Any] | None = None
+    reranker_preflight: Mapping[str, Any] | None = None
     embedding_released = False
+    embedding_cache_only = False
+    reranker_released = False
     record: SweepCandidateRecord | None = None
     candidate: StrategyCandidate | None = None
     baseline: StrategyCandidate | None = None
     diagnostics: Mapping[str, object] | None = None
+    diagnostic_key: str | None = None
     input_summary: dict[str, Any] = {}
 
     def write_preflight(
@@ -570,13 +607,19 @@ def run_researchqa_extension_runtime(
                 "extension_id": extension_id,
                 "status": status,
                 "embedding": embedding_preflight,
-                "reranker": {
-                    "required": False,
-                    "reason": "extension-candidate-rerank-off",
-                },
+                "reranker": (
+                    reranker_preflight
+                    if extension_id == "RR1"
+                    else {
+                        "required": False,
+                        "reason": "extension-candidate-rerank-off",
+                    }
+                ),
                 "lifecycle": {
                     "embedding_released": embedding_released,
-                    "reranker_loaded": False,
+                    "embedding_cache_only": embedding_cache_only,
+                    "reranker_required": extension_id == "RR1",
+                    "reranker_released": reranker_released,
                 },
                 "error": (
                     {
@@ -605,8 +648,14 @@ def run_researchqa_extension_runtime(
             raise ResearchQARuntimeError(
                 f"runtime requires exactly {EXPECTED_PAPER_COUNT} Main documents"
             )
-        candidate, baseline = _f2_candidates(config)
-        diagnostics = _f2_prequality(documents)
+        if extension_id == "F2":
+            candidate, baseline = _f2_candidates(config)
+            diagnostics = _f2_prequality(documents)
+            diagnostic_key = "pdf_chunking"
+        else:
+            candidate, baseline = _rr1_candidates(config)
+            diagnostics = dict(RR1_RERANK_FUSION_POLICY)
+            diagnostic_key = "rerank_fusion"
         _atomic_write_json(
             prequality_path,
             {
@@ -629,6 +678,23 @@ def run_researchqa_extension_runtime(
         embedding = embedding_factory(cache_dir=embedding_cache_dir)
         embedding_preflight = _preflight_payload(embedding.preflight())
         write_preflight(status="embedding-preflighted")
+        if extension_id == "RR1":
+            embedding.release_model()
+            embedding_released = True
+            embedding.enter_cache_only()
+            if getattr(embedding, "_cache_only", False) is not True:
+                raise ResearchQARuntimeError(
+                    "RR1 requires the embedding client to enter cache-only"
+                )
+            embedding_cache_only = True
+            reranker = reranker_factory(
+                hf_home=hf_cache_dir,
+                device="cuda",
+            )
+            reranker_preflight = _preflight_payload(
+                reranker.preflight()
+            )
+            write_preflight(status="models-preflighted")
 
         record = extension_runner(
             config=config,
@@ -637,7 +703,7 @@ def run_researchqa_extension_runtime(
             questions=questions,
             frozen_notes=frozen_notes,
             embedder=embedding,
-            reranker=None,
+            reranker=reranker,
             extension_id=extension_id,
             candidate=candidate,
             baseline_candidate=baseline,
@@ -677,18 +743,27 @@ def run_researchqa_extension_runtime(
         corpus_diagnostics = record.payload.get("corpus_diagnostics")
         if (
             not isinstance(corpus_diagnostics, Mapping)
-            or corpus_diagnostics.get("pdf_chunking") != diagnostics
+            or diagnostic_key is None
+            or corpus_diagnostics.get(diagnostic_key) != diagnostics
         ):
             raise ResearchQARuntimeError(
-                "extension result diagnostics differ from F2 pre-quality"
+                f"extension result diagnostics differ from {extension_id} "
+                "pre-quality"
             )
     except BaseException as exc:
         failure = exc
     finally:
-        if embedding is not None:
+        if embedding is not None and not embedding_released:
             try:
                 embedding.release_model()
                 embedding_released = True
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+        if reranker is not None:
+            try:
+                reranker.release_model()
+                reranker_released = True
             except BaseException as exc:
                 if failure is None:
                     failure = exc
@@ -729,6 +804,7 @@ def run_researchqa_extension_runtime(
     assert candidate is not None
     assert baseline is not None
     assert diagnostics is not None
+    assert diagnostic_key is not None
     write_preflight(status="completed")
     _atomic_write_json(
         summary_path,
@@ -742,10 +818,17 @@ def run_researchqa_extension_runtime(
             "baseline": baseline.to_dict(),
             "model_cache": {
                 "embeddings": str(embedding_cache_dir.resolve()),
+                "huggingface": (
+                    str(hf_cache_dir.resolve())
+                    if extension_id == "RR1"
+                    else None
+                ),
             },
             "lifecycle": {
                 "embedding_released": embedding_released,
-                "reranker_loaded": False,
+                "embedding_cache_only": embedding_cache_only,
+                "reranker_required": extension_id == "RR1",
+                "reranker_released": reranker_released,
             },
             "prequality_path": str(prequality_path.resolve()),
             "model_preflight_path": str(preflight_path.resolve()),
@@ -768,7 +851,7 @@ def run_researchqa_extension_runtime(
                 "mapped_group_count": len(record.evaluable_set),
                 "chunk_count": record.chunk_count,
                 "corpus_diagnostics": {
-                    "pdf_chunking": diagnostics,
+                    diagnostic_key: diagnostics,
                 },
             },
         },

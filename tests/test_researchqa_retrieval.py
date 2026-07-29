@@ -23,6 +23,7 @@ from benchmarks.researchqa_retrieval import (
     note_to_pdf,
     pdf_note_rrf,
     pdf_only,
+    preserve_top1_rank_rrf,
     reciprocal_rank_fusion,
     rerank_hits,
 )
@@ -118,6 +119,48 @@ def test_rrf_uses_k60_equal_weights_and_stable_ties():
     assert fused[0].score == pytest.approx(1 / 61 + 1 / 62)
     with pytest.raises(ValueError, match="duplicate"):
         reciprocal_rank_fusion((("a", "a"),))
+
+
+def test_rr1_rank_fusion_protects_base_top1_and_keeps_rrf_order():
+    base = tuple(
+        _hit(item_id, score)
+        for item_id, score in (
+            ("protected", 1.0),
+            ("b", 0.9),
+            ("c", 0.8),
+            ("d", 0.7),
+        )
+    )
+    reranked = (
+        _hit("d", 4.0),
+        _hit("c", 3.0),
+        _hit("b", 2.0),
+        _hit("protected", 1.0),
+    )
+
+    fused = preserve_top1_rank_rrf(
+        base,
+        reranked,
+        depth=4,
+        top_k=4,
+    )
+    ordinary = reciprocal_rank_fusion(
+        (base, reranked),
+        top_k=None,
+    )
+
+    assert fused[0].item_id == "protected"
+    assert fused[0].metadata["protected_base_top1"] is True
+    assert [hit.item_id for hit in fused[1:]] == [
+        hit.item_id
+        for hit in ordinary
+        if hit.item_id != "protected"
+    ]
+    assert len({hit.item_id for hit in fused}) == len(fused)
+    assert all(
+        left.score >= right.score
+        for left, right in zip(fused, fused[1:])
+    )
 
 
 def test_pdf_only_and_note_to_pdf_compositions():
