@@ -827,6 +827,26 @@ note 做受控消融。
 4. N1 使用新 config ID；现有 `note-claim-evidence` 和 diagnostic reviewer-only 结果继续
    保留，不能被覆盖或改写成 N1 分数。
 
+2026-07-29 已实现并执行上述 `N0/N3/N1` pre-quality gate。扩展候选为
+`repair-n1-87a991bd921180046c87`，独立产物写入
+`sweep/extensions/N0-N3/runtime/prequality.json`，不改变冻结的 35 项基线。生产结果为：
+
+- 20/20 篇通过逐论文 N0 eligibility，fallback 为空；
+- 103/103 个 `claim-evidence` 基础块非空且可回链；
+- 4/4 个 optional reviewer 块可回链，但它们不参与 eligibility 判定；
+- N3 严格解析 58 行 verdict：`fatal=0`、`major=4`、`minor=54`、`zero=0`，
+  其中 7 行为多 claim 或 range；
+- 只有 4 条 `major` 生成 reviewer chunks，54 条 `minor` 只保留为结构化诊断；
+- pre-quality diagnostic fingerprint 为
+  `9b9e197f122dc7709d477aa4b2413febcd9a939599ad4f397d397bf292117ec8`，
+  payload SHA-256 为
+  `83741450fe8d2d4fffb5080f144150b8ed870204b5de59d0b382b0f97f7f624f`。
+
+回归测试同时证明：reviewer 块即使可回链也不能救活没有可回链 claim 底座的论文；该论文
+会绕过 note RRF，命中 ID、顺序和分数逐项等同 direct PDF-only。N3 缺节、坏表头、
+未知 severity、逆序/未知 claim range 均 fail closed。由此 N0 与 N3 的 P0 有效性门已关闭；
+N1 只作为后续固定 `S0+N1+S1` 的输入路线，不单独据 pre-quality 宣称质量增益。
+
 ### 4.3 后续候选
 
 | ID | 单变量候选 | 目的 | 验证要求 |
@@ -1034,8 +1054,8 @@ depth-20、强制保留 base top-1，再以等权 rank-RRF 融合；不再把 50
 | 候选内部原子 progress | 逐论文 quality、完整 pass latency resume 与源码 fingerprint 已实现 | 已关闭；扩展候选直接复用 |
 | outer task publication state | 旧 CUDA failed task 仍留存，完整 public export fail closed | 扩展全部终态后做可验证 superseding reconciliation，禁止手改 |
 | `F2 pdf-structure-aware-fallback` | 20/254 正式评测完成；`valid-but-poor`，3 个新增 hard failures | 已关闭；不调阈值、不晋级组合 |
-| `N0 note-route-eligibility-gate` | 已冻结逐论文同一非空块须 backlinkable；失败逐论文 PDF-only fallback | paper-scoped 基线后实现并报告 fallback IDs/rate |
-| `N3 note-concern-parser-contract` | 已冻结 58 行生产分布、多 claim/range、四级 severity 与 fail-closed 边界 | 实现结构化 parser；reviewer-only 仍 diagnostic-only |
+| `N0 note-route-eligibility-gate` | 20/20 eligible，103/103 claim 基础块可回链，0 fallback；精确 PDF-only 回退测试通过 | 已关闭；后续 S1 复用，不得用 reviewer-only 建立资格 |
+| `N3 note-concern-parser-contract` | 20/20 严格解析；58 行=4 major+54 minor，7 个 multi-claim/range；4 个 reviewer chunks | 已关闭；reviewer-only 仍 diagnostic-only |
 | controlled finalist latency | 已确认串行 p95 在热降频下只能 observed-only；合同已冻结 | 只交错复测质量 tie group；不可比时跳过 latency 决胜 |
 
 P0 不以提升分数为目标，而是确保每个候选覆盖范围可比、失败可以局部降级、恢复不会混入

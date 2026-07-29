@@ -35,6 +35,14 @@ NOTE_CHUNKER_IDS = (
     "note-claim-evidence",
     "note-reviewer-concern",
 )
+NOTE_CLAIM_PLUS_REVIEWER_ID = "note-claim-plus-reviewer"
+NOTE_EXTENSION_CHUNKER_IDS = (NOTE_CLAIM_PLUS_REVIEWER_ID,)
+EXECUTABLE_NOTE_CHUNKER_IDS = (
+    NOTE_CHUNKER_IDS + NOTE_EXTENSION_CHUNKER_IDS
+)
+NOTE_ROUTE_ROLES = ("claim-evidence", "reviewer-concern")
+REVIEWER_VERDICT_PARSER_REVISION = "rq2-n3-reviewer-verdict-v1"
+REVIEWER_VERDICT_SEVERITIES = ("fatal", "major", "minor", "zero")
 PDF_STRUCTURE_FALLBACK_POLICY: Mapping[str, object] = {
     "revision": "rq2-f2-structure-quality-v1",
     "fallback_chunker": "pdf-fixed-1200",
@@ -75,10 +83,13 @@ _ANY_HEADING_RE = re.compile(r"(?m)^#{2,6}\s+.+$")
 _EVIDENCE_ROW_RE = re.compile(
     r"(?mi)^\|\s*(?P<id>E\d+)\s*\|[^\n]*$"
 )
-_VERDICT_ROW_RE = re.compile(
-    r"(?mi)^\|\s*(?P<claim>C\d+)"
-    r"(?:\s*[：:][^|\n]*)?\s*\|(?P<body>[^\n]*)$"
+_REVIEWER_SECTION_HEADING_RE = re.compile(
+    r"(?mi)^##\s*(?:"
+    r"审稿人视角\s*[（(]\s*Adaptive Red-Team Verdict\s*[）)]"
+    r"|Reviewer Verdict"
+    r")\s*$"
 )
+_LEVEL_TWO_HEADING_RE = re.compile(r"(?m)^##\s+.+$")
 _BRACKET_CITATION_RE = re.compile(r"\[(?P<body>[^\[\]\n]+)\]")
 _SOURCE_LABEL_RE = re.compile(r"^(Main|SI(?:-\d+)?)\s+(.+)$", re.IGNORECASE)
 
@@ -214,14 +225,33 @@ class NoteChunk:
     claim_ids: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
     concern_id: str | None = None
+    severity: str | None = None
+    route_role: str | None = None
 
     def __post_init__(self) -> None:
-        if self.config_id not in NOTE_CHUNKER_IDS:
+        if self.config_id not in EXECUTABLE_NOTE_CHUNKER_IDS:
             raise ValueError(f"unknown note chunker: {self.config_id}")
         if not self.note_spans:
             raise ValueError("note chunks require at least one note source span")
         if hash_text(self.text) != self.text_hash:
             raise ValueError("text_hash does not match note chunk text")
+        if (
+            self.severity is not None
+            and self.severity not in REVIEWER_VERDICT_SEVERITIES
+        ):
+            raise ValueError(f"invalid reviewer severity: {self.severity}")
+        if (
+            self.route_role is not None
+            and self.route_role not in NOTE_ROUTE_ROLES
+        ):
+            raise ValueError(f"invalid note route role: {self.route_role}")
+        if (
+            self.config_id == NOTE_CLAIM_PLUS_REVIEWER_ID
+            and self.route_role is None
+        ):
+            raise ValueError(
+                "note-claim-plus-reviewer chunks require route_role"
+            )
 
 
 @dataclass(frozen=True)
@@ -232,12 +262,63 @@ class NoteChunkingResult:
     status: str
     chunks: tuple[NoteChunk, ...]
     failure_reason: str | None = None
+    diagnostics: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if self.status not in {"completed", "failed"}:
             raise ValueError(f"invalid chunking status: {self.status}")
         if self.status == "failed" and not self.failure_reason:
             raise ValueError("failed chunking results require failure_reason")
+        if self.status == "completed" and self.failure_reason is not None:
+            raise ValueError(
+                "completed note chunking results cannot have failure_reason"
+            )
+
+
+@dataclass(frozen=True)
+class ReviewerVerdict:
+    """One strictly parsed row from the canonical reviewer verdict table."""
+
+    verdict_id: str
+    claim_ids: tuple[str, ...]
+    evidence_ids: tuple[str, ...]
+    severity: str
+    row_span: NoteSourceSpan
+
+    def __post_init__(self) -> None:
+        if not self.verdict_id or not self.claim_ids:
+            raise ValueError("reviewer verdict identity and claims are required")
+        if self.severity not in REVIEWER_VERDICT_SEVERITIES:
+            raise ValueError(f"invalid reviewer severity: {self.severity}")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "verdict_id": self.verdict_id,
+            "claim_ids": list(self.claim_ids),
+            "evidence_ids": list(self.evidence_ids),
+            "severity": self.severity,
+            "row_span": asdict(self.row_span),
+        }
+
+
+@dataclass(frozen=True)
+class ReviewerVerdictParseResult:
+    """Fail-closed N3 parser result with an explicit severity distribution."""
+
+    status: str
+    verdicts: tuple[ReviewerVerdict, ...]
+    failure_reason: str | None
+    diagnostics: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        if self.status not in {"completed", "failed"}:
+            raise ValueError(f"invalid reviewer parser status: {self.status}")
+        if self.status == "failed" and not self.failure_reason:
+            raise ValueError("failed reviewer parsing requires failure_reason")
+        if self.status == "completed" and self.failure_reason is not None:
+            raise ValueError(
+                "completed reviewer parsing cannot have failure_reason"
+            )
 
 
 def _joined_pages(
@@ -1170,6 +1251,8 @@ def _make_note_chunk(
     claim_ids: Sequence[str] = (),
     evidence_ids: Sequence[str] = (),
     concern_id: str | None = None,
+    severity: str | None = None,
+    route_role: str | None = None,
 ) -> NoteChunk:
     ordered_ranges = tuple(sorted(dict.fromkeys(ranges)))
     note_spans = tuple(NoteSourceSpan(start, end) for start, end in ordered_ranges)
@@ -1187,19 +1270,22 @@ def _make_note_chunk(
     )
     normalized_claim_ids = tuple(sorted(set(claim_ids)))
     normalized_evidence_ids = tuple(sorted(set(evidence_ids)))
-    chunk_id = "note-chunk-" + _stable_hash(
-        {
-            "revision": _CHUNKING_REVISION,
-            "config_id": config_id,
-            "paper_id": paper_id,
-            "note_sha256": note_hash,
-            "note_spans": [asdict(span) for span in note_spans],
-            "text_hash": text_hash,
-            "claim_ids": normalized_claim_ids,
-            "evidence_ids": normalized_evidence_ids,
-            "concern_id": concern_id,
-        }
-    )
+    identity = {
+        "revision": _CHUNKING_REVISION,
+        "config_id": config_id,
+        "paper_id": paper_id,
+        "note_sha256": note_hash,
+        "note_spans": [asdict(span) for span in note_spans],
+        "text_hash": text_hash,
+        "claim_ids": normalized_claim_ids,
+        "evidence_ids": normalized_evidence_ids,
+        "concern_id": concern_id,
+    }
+    if severity is not None:
+        identity["severity"] = severity
+    if route_role is not None:
+        identity["route_role"] = route_role
+    chunk_id = "note-chunk-" + _stable_hash(identity)
     return NoteChunk(
         chunk_id=chunk_id,
         config_id=config_id,
@@ -1214,6 +1300,8 @@ def _make_note_chunk(
         claim_ids=normalized_claim_ids,
         evidence_ids=normalized_evidence_ids,
         concern_id=concern_id,
+        severity=severity,
+        route_role=route_role,
     )
 
 
@@ -1254,6 +1342,250 @@ def _claim_blocks(note_text: str) -> dict[str, tuple[int, int]]:
         )
         for match in _CLAIM_HEADING_RE.finditer(note_text)
     }
+
+
+def _reviewer_parser_failure(
+    reason: str,
+    *,
+    diagnostics: Mapping[str, object] | None = None,
+) -> ReviewerVerdictParseResult:
+    return ReviewerVerdictParseResult(
+        status="failed",
+        verdicts=(),
+        failure_reason=reason,
+        diagnostics={
+            "revision": REVIEWER_VERDICT_PARSER_REVISION,
+            "severity_counts": {
+                severity: 0 for severity in REVIEWER_VERDICT_SEVERITIES
+            },
+            **dict(diagnostics or {}),
+        },
+    )
+
+
+def _markdown_table_cells(line: str) -> tuple[str, ...] | None:
+    stripped = line.strip()
+    if not stripped.startswith("|") or not stripped.endswith("|"):
+        return None
+    body = stripped[1:-1]
+    return tuple(
+        cell.strip().replace(r"\|", "|")
+        for cell in re.split(r"(?<!\\)\|", body)
+    )
+
+
+def _normalized_header_cell(value: str) -> str:
+    return re.sub(r"[\s_*`-]+", "", value).casefold()
+
+
+def _valid_reviewer_header(cells: Sequence[str]) -> bool:
+    aliases = (
+        {"claim", "主张"},
+        {"verdict", "裁决"},
+        {
+            "evidence",
+            "evidenceadequacy",
+            "evidencesufficiency",
+            "证据",
+            "证据充分度",
+        },
+        {"alternative", "strongestalternative", "最强替代解释"},
+        {
+            "decisiveevidence",
+            "decisivemissingevidence",
+            "missingdecisiveevidence",
+            "决定性证据",
+            "决定性缺失证据",
+        },
+        {"severity", "严重性"},
+    )
+    normalized = tuple(_normalized_header_cell(cell) for cell in cells)
+    return len(normalized) == len(aliases) and all(
+        value in allowed
+        for value, allowed in zip(normalized, aliases, strict=True)
+    )
+
+
+def _valid_separator_row(cells: Sequence[str]) -> bool:
+    return len(cells) == 6 and all(
+        re.fullmatch(r":?-{3,}:?", cell.strip()) is not None
+        for cell in cells
+    )
+
+
+def _parse_claim_cell(
+    value: str,
+    *,
+    available_claim_ids: frozenset[str],
+) -> tuple[str, ...] | None:
+    match = re.fullmatch(
+        r"\s*(?P<spec>C\d+(?:\s*(?:[/,，、]\s*C\d+|[–—-]\s*C?\d+))*)"
+        r"\s*(?:[：:].*)?",
+        value,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    normalized = (
+        match.group("spec")
+        .upper()
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+    claims: list[str] = []
+    for token in re.split(r"\s*[/,，、]\s*", normalized):
+        range_match = re.fullmatch(
+            r"C(?P<start>\d+)\s*-\s*C?(?P<end>\d+)",
+            token,
+        )
+        if range_match is not None:
+            start = int(range_match.group("start"))
+            end = int(range_match.group("end"))
+            if end < start or end - start > 100:
+                return None
+            claims.extend(f"C{index}" for index in range(start, end + 1))
+            continue
+        if re.fullmatch(r"C\d+", token) is None:
+            return None
+        claims.append(token)
+    ordered = _ordered_unique(claims)
+    if not ordered or any(item not in available_claim_ids for item in ordered):
+        return None
+    return ordered
+
+
+def parse_reviewer_verdicts(
+    note_text: str,
+) -> ReviewerVerdictParseResult:
+    """Parse the N3 verdict table and fail closed on every malformed row."""
+
+    section = _REVIEWER_SECTION_HEADING_RE.search(note_text)
+    if section is None:
+        return _reviewer_parser_failure("reviewer-section-missing")
+    following = _LEVEL_TWO_HEADING_RE.search(note_text, section.end())
+    section_end = following.start() if following is not None else len(note_text)
+    section_text = note_text[section.start() : section_end]
+    lines: list[tuple[str, int, int]] = []
+    cursor = section.start()
+    for raw_line in section_text.splitlines(keepends=True):
+        text = raw_line.rstrip("\r\n")
+        lines.append((text, cursor, cursor + len(text)))
+        cursor += len(raw_line)
+    if cursor < section_end:
+        lines.append((note_text[cursor:section_end], cursor, section_end))
+
+    header_index = None
+    for index, (line, _start, _end) in enumerate(lines):
+        cells = _markdown_table_cells(line)
+        if cells is not None and _valid_reviewer_header(cells):
+            header_index = index
+            break
+    if header_index is None:
+        return _reviewer_parser_failure("reviewer-table-header-invalid")
+
+    separator_index = header_index + 1
+    while (
+        separator_index < len(lines)
+        and not lines[separator_index][0].strip()
+    ):
+        separator_index += 1
+    if separator_index >= len(lines):
+        return _reviewer_parser_failure("reviewer-table-separator-missing")
+    separator = _markdown_table_cells(lines[separator_index][0])
+    if separator is None or not _valid_separator_row(separator):
+        return _reviewer_parser_failure("reviewer-table-separator-invalid")
+
+    claims = _claim_blocks(note_text)
+    available_claim_ids = frozenset(claims)
+    verdicts: list[ReviewerVerdict] = []
+    for line, start, end in lines[separator_index + 1 :]:
+        if not line.strip():
+            if verdicts:
+                break
+            continue
+        cells = _markdown_table_cells(line)
+        if cells is None:
+            if verdicts:
+                break
+            return _reviewer_parser_failure("reviewer-table-row-invalid")
+        if len(cells) != 6:
+            return _reviewer_parser_failure(
+                "reviewer-table-column-count-invalid"
+            )
+        claim_ids = _parse_claim_cell(
+            cells[0],
+            available_claim_ids=available_claim_ids,
+        )
+        if claim_ids is None:
+            return _reviewer_parser_failure(
+                "reviewer-claim-cell-invalid",
+                diagnostics={"invalid_row_span": [start, end]},
+            )
+        severity = re.sub(r"[*_`]+", "", cells[-1]).strip().casefold()
+        if severity not in REVIEWER_VERDICT_SEVERITIES:
+            return _reviewer_parser_failure(
+                "reviewer-severity-invalid",
+                diagnostics={
+                    "invalid_severity": cells[-1],
+                    "invalid_row_span": [start, end],
+                },
+            )
+        evidence_ids = tuple(
+            sorted(
+                set(
+                    match.upper()
+                    for match in re.findall(
+                        r"\bE\d+\b",
+                        "|".join(cells[1:-1]),
+                        re.IGNORECASE,
+                    )
+                )
+            )
+        )
+        verdicts.append(
+            ReviewerVerdict(
+                verdict_id="reviewer-verdict-"
+                + _stable_hash(
+                    {
+                        "revision": REVIEWER_VERDICT_PARSER_REVISION,
+                        "note_sha256": _note_sha256(note_text),
+                        "row_span": [start, end],
+                        "claim_ids": claim_ids,
+                        "evidence_ids": evidence_ids,
+                        "severity": severity,
+                    }
+                ),
+                claim_ids=claim_ids,
+                evidence_ids=evidence_ids,
+                severity=severity,
+                row_span=NoteSourceSpan(start, end),
+            )
+        )
+    if not verdicts:
+        return _reviewer_parser_failure("reviewer-verdict-table-empty")
+
+    severity_counts = {
+        severity: sum(
+            verdict.severity == severity for verdict in verdicts
+        )
+        for severity in REVIEWER_VERDICT_SEVERITIES
+    }
+    return ReviewerVerdictParseResult(
+        status="completed",
+        verdicts=tuple(verdicts),
+        failure_reason=None,
+        diagnostics={
+            "revision": REVIEWER_VERDICT_PARSER_REVISION,
+            "row_count": len(verdicts),
+            "severity_counts": severity_counts,
+            "multi_claim_row_count": sum(
+                len(verdict.claim_ids) > 1 for verdict in verdicts
+            ),
+            "surviving_concern_count": (
+                severity_counts["fatal"] + severity_counts["major"]
+            ),
+        },
+    )
 
 
 def _note_whole(
@@ -1322,11 +1654,13 @@ def _note_claim_evidence(
     *,
     paper_id: str,
     all_citations: Sequence[SourceCitation],
+    config_id: str = "note-claim-evidence",
+    route_role: str | None = None,
 ) -> NoteChunkingResult:
     claims = _claim_blocks(note_text)
     if not claims:
         return NoteChunkingResult(
-            config_id="note-claim-evidence",
+            config_id=config_id,
             status="failed",
             chunks=(),
             failure_reason="claim-detection-failed",
@@ -1344,15 +1678,16 @@ def _note_claim_evidence(
             _make_note_chunk(
                 note_text=note_text,
                 paper_id=paper_id,
-                config_id="note-claim-evidence",
+                config_id=config_id,
                 ranges=ranges,
                 all_citations=all_citations,
                 claim_ids=(claim_id,),
                 evidence_ids=evidence_ids,
+                route_role=route_role,
             )
         )
     return NoteChunkingResult(
-        config_id="note-claim-evidence",
+        config_id=config_id,
         status="completed",
         chunks=_link_note_chunks(chunks),
     )
@@ -1373,51 +1708,122 @@ def _note_reviewer_concerns(
     *,
     paper_id: str,
     all_citations: Sequence[SourceCitation],
+    config_id: str = "note-reviewer-concern",
+    route_role: str | None = None,
 ) -> NoteChunkingResult:
+    parsed = parse_reviewer_verdicts(note_text)
+    if parsed.status != "completed":
+        return NoteChunkingResult(
+            config_id=config_id,
+            status="failed",
+            chunks=(),
+            failure_reason=parsed.failure_reason,
+            diagnostics=parsed.diagnostics,
+        )
     claims = _claim_blocks(note_text)
     evidence = _evidence_rows(note_text)
     chunks = []
-    for row in _VERDICT_ROW_RE.finditer(note_text):
-        body = row.group("body")
-        if not re.search(r"\|\s*major\s*\|?\s*$", body, re.IGNORECASE):
+    for verdict in parsed.verdicts:
+        if verdict.severity not in {"fatal", "major"}:
             continue
-        claim_id = row.group("claim").upper()
-        evidence_ids = tuple(
-            sorted(set(match.upper() for match in re.findall(r"\bE\d+\b", body, re.IGNORECASE)))
-        )
-        ranges = [(row.start(), row.end())]
-        if claim_id in claims:
-            ranges.append(claims[claim_id])
-        ranges.extend(evidence[item] for item in evidence_ids if item in evidence)
-        claim_pattern = re.compile(
-            rf"(?mi)^(?!\|)[^\n]*\b{re.escape(claim_id)}\b[^\n]*$"
-        )
-        decisive_pattern = re.compile(
-            rf"(?mi)^\s*-\s*对\s*{re.escape(claim_id)}\s*[：:][^\n]*$"
-        )
-        candidate_lines = _line_ranges_matching(note_text, claim_pattern)
+        ranges = [
+            (
+                verdict.row_span.char_start,
+                verdict.row_span.char_end,
+            )
+        ]
         ranges.extend(
-            item
-            for item in candidate_lines
-            if item[0] >= row.end()
+            claims[claim_id]
+            for claim_id in verdict.claim_ids
+            if claim_id in claims
         )
-        ranges.extend(_line_ranges_matching(note_text, decisive_pattern))
+        ranges.extend(
+            evidence[item]
+            for item in verdict.evidence_ids
+            if item in evidence
+        )
+        for claim_id in verdict.claim_ids:
+            claim_pattern = re.compile(
+                rf"(?mi)^(?!\|)[^\n]*\b{re.escape(claim_id)}\b[^\n]*$"
+            )
+            decisive_pattern = re.compile(
+                rf"(?mi)^\s*-\s*对\s*{re.escape(claim_id)}"
+                r"\s*[：:][^\n]*$"
+            )
+            candidate_lines = _line_ranges_matching(note_text, claim_pattern)
+            ranges.extend(
+                item
+                for item in candidate_lines
+                if item[0] >= verdict.row_span.char_end
+            )
+            ranges.extend(
+                _line_ranges_matching(note_text, decisive_pattern)
+            )
         chunks.append(
             _make_note_chunk(
                 note_text=note_text,
                 paper_id=paper_id,
-                config_id="note-reviewer-concern",
+                config_id=config_id,
                 ranges=ranges,
                 all_citations=all_citations,
-                claim_ids=(claim_id,),
-                evidence_ids=evidence_ids,
-                concern_id=f"concern-{claim_id.lower()}",
+                claim_ids=verdict.claim_ids,
+                evidence_ids=verdict.evidence_ids,
+                concern_id=(
+                    "concern-" + verdict.verdict_id.removeprefix(
+                        "reviewer-verdict-"
+                    )
+                ),
+                severity=verdict.severity,
+                route_role=route_role,
             )
         )
     return NoteChunkingResult(
-        config_id="note-reviewer-concern",
+        config_id=config_id,
         status="completed",
         chunks=_link_note_chunks(chunks),
+        diagnostics=parsed.diagnostics,
+    )
+
+
+def _note_claim_plus_reviewer(
+    note_text: str,
+    *,
+    paper_id: str,
+    all_citations: Sequence[SourceCitation],
+) -> NoteChunkingResult:
+    reviewer = _note_reviewer_concerns(
+        note_text,
+        paper_id=paper_id,
+        all_citations=all_citations,
+        config_id=NOTE_CLAIM_PLUS_REVIEWER_ID,
+        route_role="reviewer-concern",
+    )
+    if reviewer.status != "completed":
+        return reviewer
+    base = _note_claim_evidence(
+        note_text,
+        paper_id=paper_id,
+        all_citations=all_citations,
+        config_id=NOTE_CLAIM_PLUS_REVIEWER_ID,
+        route_role="claim-evidence",
+    )
+    base_chunks = base.chunks if base.status == "completed" else ()
+    chunks = _link_note_chunks((*base_chunks, *reviewer.chunks))
+    return NoteChunkingResult(
+        config_id=NOTE_CLAIM_PLUS_REVIEWER_ID,
+        status="completed",
+        chunks=chunks,
+        diagnostics={
+            "base_status": base.status,
+            "base_failure_reason": base.failure_reason,
+            "base_chunk_count": len(base_chunks),
+            "reviewer_chunk_count": len(reviewer.chunks),
+            "route_role_counts": {
+                "claim-evidence": len(base_chunks),
+                "reviewer-concern": len(reviewer.chunks),
+            },
+            "reviewer": dict(reviewer.diagnostics or {}),
+        },
     )
 
 
@@ -1428,8 +1834,8 @@ def chunk_note(
     paper_id: str,
     source_file_ids: Mapping[str, str] | None = None,
 ) -> NoteChunkingResult:
-    """Run one of the four approved deterministic Markdown note chunkers."""
-    if config_id not in NOTE_CHUNKER_IDS:
+    """Run an approved baseline or explicitly versioned note chunker."""
+    if config_id not in EXECUTABLE_NOTE_CHUNKER_IDS:
         raise ValueError(f"unknown note chunker: {config_id}")
     if not paper_id or paper_id.strip() != paper_id:
         raise ValueError("paper_id must be a non-empty trimmed string")
@@ -1455,7 +1861,13 @@ def chunk_note(
             paper_id=paper_id,
             all_citations=citations,
         )
-    return _note_reviewer_concerns(
+    if config_id == "note-reviewer-concern":
+        return _note_reviewer_concerns(
+            note_text,
+            paper_id=paper_id,
+            all_citations=citations,
+        )
+    return _note_claim_plus_reviewer(
         note_text,
         paper_id=paper_id,
         all_citations=citations,
@@ -1492,15 +1904,25 @@ def note_chunk_pdf_backlinks(
 
 __all__ = [
     "ChunkingResult",
+    "EXECUTABLE_NOTE_CHUNKER_IDS",
+    "EXECUTABLE_PDF_CHUNKER_IDS",
+    "NOTE_CLAIM_PLUS_REVIEWER_ID",
     "NOTE_CHUNKER_IDS",
+    "NOTE_EXTENSION_CHUNKER_IDS",
+    "NOTE_ROUTE_ROLES",
     "NoteChunk",
     "NoteChunkingResult",
     "NoteSourceSpan",
     "PDF_CHUNKER_IDS",
     "ResearchQAChunk",
+    "REVIEWER_VERDICT_PARSER_REVISION",
+    "REVIEWER_VERDICT_SEVERITIES",
+    "ReviewerVerdict",
+    "ReviewerVerdictParseResult",
     "SourceCitation",
     "chunk_note",
     "chunk_pdf",
     "note_chunk_pdf_backlinks",
+    "parse_reviewer_verdicts",
     "parse_source_citations",
 ]

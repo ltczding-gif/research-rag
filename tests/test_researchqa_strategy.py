@@ -11,6 +11,7 @@ import yaml
 
 import benchmarks.researchqa_strategy as strategy
 from benchmarks.researchqa_chunking import (
+    NOTE_CLAIM_PLUS_REVIEWER_ID,
     PDF_STRUCTURE_FALLBACK_ID,
     PDF_STRUCTURE_FALLBACK_POLICY,
     chunk_pdf,
@@ -21,12 +22,14 @@ from benchmarks.researchqa_retrieval import (
 )
 from benchmarks.researchqa_strategy import (
     ConfirmationSelection,
+    NOTE_ROUTE_ELIGIBILITY_POLICY,
     REFERENCE_EXACT_METHOD,
     REFERENCE_MATCH_REVISION,
     REFERENCE_PAGE_HINT_METHOD,
     REFERENCE_SECTION_HINT_METHOD,
     StrategyContractError,
     generate_f2_candidate,
+    generate_n1_candidate,
     generate_orthogonal_candidates,
     load_main_documents,
     map_all_references,
@@ -134,6 +137,26 @@ def _fixture_corpus(tmp_path: Path):
         },
     ]
     return documents, questions
+
+
+def _n1_note(
+    label: str,
+    *,
+    base_citation: str,
+    reviewer_severity: str = "minor",
+    reviewer_citation: str = "[Main p.1]",
+) -> str:
+    return f"""# Frozen note
+
+## Findings
+### C1：{label} claim
+The evidence chain uses E1. {base_citation}
+
+## 审稿人视角（Adaptive Red-Team Verdict）
+| Claim | 裁决 | 证据充分度 | 最强替代解释 | 决定性缺失证据 | 严重性 |
+|---|---|---|---|---|---|
+| C1 | bounded | E1 {reviewer_citation} | alternative | test | {reviewer_severity} |
+"""
 
 
 class _FakeEmbedder:
@@ -415,6 +438,131 @@ def test_f2_candidate_is_independent_and_policy_bound():
         PDF_STRUCTURE_FALLBACK_POLICY["revision"]
         == "rq2-f2-structure-quality-v1"
     )
+
+
+def test_n1_candidate_is_independent_and_policy_bound():
+    config = _config()
+    original = generate_orthogonal_candidates(config)
+    first = generate_n1_candidate(config)
+    second = generate_n1_candidate(config)
+
+    assert len(original.candidates) == 23
+    assert all(
+        candidate.note_chunker != NOTE_CLAIM_PLUS_REVIEWER_ID
+        for candidate in original.candidates
+    )
+    assert first == second
+    assert first.config_id.startswith("repair-n1-")
+    assert first.stage_id == "note-chunker"
+    assert first.pdf_chunker == "pdf-fixed-1200"
+    assert first.note_chunker == NOTE_CLAIM_PLUS_REVIEWER_ID
+    assert first.retriever == "dense"
+    assert first.source_composition == "pdf-note-rrf"
+    assert first.reranker == "rerank-off"
+    assert NOTE_ROUTE_ELIGIBILITY_POLICY["revision"] == (
+        "rq2-n0-paper-note-route-eligibility-v1"
+    )
+
+
+def test_n0_eligibility_uses_only_backlinkable_claim_base_chunks(tmp_path):
+    documents, _questions = _fixture_corpus(tmp_path)
+    candidate = generate_n1_candidate(_config())
+    notes = {
+        "W1": _n1_note("Alpha", base_citation="[Main p.1]"),
+        "W2": _n1_note(
+            "Beta",
+            base_citation="[SI p.1]",
+            reviewer_severity="major",
+            reviewer_citation="[Main p.1]",
+        ),
+    }
+
+    corpus = strategy._prepare_candidate_corpus(
+        candidate,
+        documents,
+        notes,
+    )
+    diagnostics = corpus.diagnostics["note_route"]
+
+    assert corpus.eligible_note_paper_ids == ("W1",)
+    assert corpus.fallback_note_paper_ids == ("W2",)
+    assert diagnostics["eligible_paper_ids"] == ["W1"]
+    assert diagnostics["fallback_paper_ids"] == ["W2"]
+    assert diagnostics["base_chunk_count"] == 2
+    assert diagnostics["reviewer_chunk_count"] == 1
+    assert diagnostics["backlinkable_base_chunk_count"] == 1
+    assert diagnostics["backlinkable_reviewer_chunk_count"] == 1
+    assert diagnostics["per_paper"]["W2"]["eligible"] is False
+    assert (
+        diagnostics["per_paper"]["W2"][
+            "backlinkable_reviewer_chunk_count"
+        ]
+        == 1
+    )
+    assert len(diagnostics["diagnostic_fingerprint"]) == 64
+
+
+def test_n0_fallback_is_exact_direct_pdf_even_with_reviewer_backlinks(
+    tmp_path,
+    monkeypatch,
+):
+    documents, questions = _fixture_corpus(tmp_path)
+    documents = {"W2": documents["W2"]}
+    questions = [
+        question
+        for question in questions
+        if question["row_id"] == "q-beta"
+    ]
+    expected_papers = ("W2",)
+    expected_questions = ("q-beta",)
+    n1 = generate_n1_candidate(_config())
+    baseline = next(
+        candidate
+        for candidate in generate_orthogonal_candidates(_config()).stages[
+            "pdf-chunker"
+        ]
+        if candidate.pdf_chunker == "pdf-fixed-1200"
+    )
+    note = _n1_note(
+        "Beta",
+        base_citation="[SI p.1]",
+        reviewer_severity="major",
+        reviewer_citation="[Main p.1]",
+    )
+
+    baseline_result = run_complete_candidate(
+        baseline,
+        documents,
+        questions,
+        expected_paper_ids=expected_papers,
+        expected_question_ids=expected_questions,
+        embedder=_FakeEmbedder(),
+    )
+    monkeypatch.setattr(
+        strategy,
+        "pdf_note_rrf",
+        lambda *_args, **_kwargs: pytest.fail(
+            "N0 fallback must bypass note RRF"
+        ),
+    )
+    n1_result = run_complete_candidate(
+        n1,
+        documents,
+        questions,
+        expected_paper_ids=expected_papers,
+        expected_question_ids=expected_questions,
+        embedder=_FakeEmbedder(),
+        notes={"W2": note},
+    )
+
+    baseline_row = baseline_result.question_results[0]
+    n1_row = n1_result.question_results[0]
+    assert n1_row.ranked_item_ids == baseline_row.ranked_item_ids
+    assert n1_row.ranked_scores == baseline_row.ranked_scores
+    assert n1_row.metrics == baseline_row.metrics
+    assert n1_result.corpus_diagnostics["note_route"][
+        "fallback_paper_ids"
+    ] == ["W2"]
 
 
 def test_f2_corpus_records_global_diagnostics_and_fails_over_cost(

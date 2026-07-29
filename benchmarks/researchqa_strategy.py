@@ -27,11 +27,14 @@ from typing import (
 from urllib.parse import urlparse
 
 from benchmarks.researchqa_chunking import (
+    EXECUTABLE_NOTE_CHUNKER_IDS,
     EXECUTABLE_PDF_CHUNKER_IDS,
+    NOTE_CLAIM_PLUS_REVIEWER_ID,
     NOTE_CHUNKER_IDS,
     PDF_CHUNKER_IDS,
     PDF_STRUCTURE_FALLBACK_ID,
     PDF_STRUCTURE_FALLBACK_POLICY,
+    REVIEWER_VERDICT_PARSER_REVISION,
     NoteChunk,
     ResearchQAChunk,
     chunk_note,
@@ -96,6 +99,15 @@ STAGE_IDS = (
 NOTE_COMPOSITIONS = frozenset(
     {"note-to-pdf", "pdf-note-rrf", "note-guided-pdf"}
 )
+NOTE_ROUTE_ELIGIBILITY_POLICY: Mapping[str, object] = {
+    "revision": "rq2-n0-paper-note-route-eligibility-v1",
+    "eligibility_scope": "paper",
+    "required_route_role": "claim-evidence",
+    "requires_nonblank_chunk": True,
+    "requires_pdf_backlink": True,
+    "ineligible_fallback": "direct-pdf-only",
+    "reviewer_route_can_establish_eligibility": False,
+}
 
 
 class StrategyContractError(ValueError):
@@ -722,7 +734,11 @@ class StrategyCandidate:
             "pdf_chunker",
         )
         if self.note_chunker is not None:
-            _require_member(self.note_chunker, NOTE_CHUNKER_IDS, "note_chunker")
+            _require_member(
+                self.note_chunker,
+                EXECUTABLE_NOTE_CHUNKER_IDS,
+                "note_chunker",
+            )
         _require_member(self.retriever, RETRIEVER_IDS, "retriever")
         _require_member(
             self.source_composition,
@@ -1068,6 +1084,43 @@ def generate_f2_candidate(
     )
 
 
+def generate_n1_candidate(
+    config: Mapping[str, Any],
+) -> StrategyCandidate:
+    """Create the N0/N3-gated N1 extension without changing the baseline 35."""
+
+    stages = config.get("stages")
+    if not isinstance(stages, Mapping):
+        raise StrategyContractError("config.stages must be a mapping")
+    reranker_rows = _option_rows(stages, "rerankers")
+    reranker_options = {str(row["id"]): row for row in reranker_rows}
+    if set(reranker_options) != set(RERANKER_IDS):
+        raise StrategyContractError(
+            f"rerankers must be exactly {list(RERANKER_IDS)}"
+        )
+    components = {
+        "stage_id": "note-chunker",
+        "pdf_chunker": "pdf-fixed-1200",
+        "note_chunker": NOTE_CLAIM_PLUS_REVIEWER_ID,
+        "retriever": "dense",
+        "source_composition": "pdf-note-rrf",
+        "reranker": "rerank-off",
+    }
+    identity = {
+        "repair_id": "N0-N3-N1",
+        "components": components,
+        "eligibility_policy": dict(NOTE_ROUTE_ELIGIBILITY_POLICY),
+        "reviewer_parser_revision": REVIEWER_VERDICT_PARSER_REVISION,
+    }
+    reranker_option = reranker_options["rerank-off"]
+    return StrategyCandidate(
+        config_id=f"repair-n1-{canonical_fingerprint(identity)[:20]}",
+        reranker_depth=None,
+        reranker_keep=int(reranker_option.get("output_k", 10)),
+        **components,
+    )
+
+
 def _option_rows(
     stages: Mapping[str, Any],
     key: str,
@@ -1233,6 +1286,8 @@ class _CandidateCorpus:
     pdf_parents: tuple[ResearchQAChunk, ...]
     note_chunks: tuple[NoteChunk, ...]
     note_backlinks: Mapping[str, tuple[str, ...]]
+    eligible_note_paper_ids: tuple[str, ...] = ()
+    fallback_note_paper_ids: tuple[str, ...] = ()
     diagnostics: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -1276,6 +1331,7 @@ def _prepare_candidate_corpus(
         )
 
     note_chunks: list[NoteChunk] = []
+    note_results = {}
     if candidate.requires_notes:
         if candidate.note_chunker is None:
             raise StrategyContractError(
@@ -1309,11 +1365,16 @@ def _prepare_candidate_corpus(
                 )
             if (
                 not result.chunks
-                and candidate.note_chunker != "note-reviewer-concern"
+                and candidate.note_chunker
+                not in {
+                    "note-reviewer-concern",
+                    NOTE_CLAIM_PLUS_REVIEWER_ID,
+                }
             ):
                 raise StrategyContractError(
                     f"{paper_id}/{candidate.note_chunker}: no note chunks"
                 )
+            note_results[paper_id] = result
             note_chunks.extend(result.chunks)
 
     backlinks = {
@@ -1327,13 +1388,200 @@ def _prepare_candidate_corpus(
         )
         for note_chunk in note_chunks
     }
+    eligible_note_paper_ids: tuple[str, ...] = ()
+    fallback_note_paper_ids: tuple[str, ...] = ()
+    if candidate.note_chunker == NOTE_CLAIM_PLUS_REVIEWER_ID:
+        per_paper = {}
+        eligible = []
+        fallback = []
+        aggregate_severity_counts = {
+            severity: 0
+            for severity in ("fatal", "major", "minor", "zero")
+        }
+        aggregate_verdict_rows = 0
+        aggregate_multi_claim_rows = 0
+        for paper_id in sorted(documents):
+            chunks = tuple(
+                chunk
+                for chunk in note_chunks
+                if chunk.paper_id == paper_id
+            )
+            base_chunks = tuple(
+                chunk
+                for chunk in chunks
+                if chunk.route_role == "claim-evidence"
+            )
+            reviewer_chunks = tuple(
+                chunk
+                for chunk in chunks
+                if chunk.route_role == "reviewer-concern"
+            )
+            if len(base_chunks) + len(reviewer_chunks) != len(chunks):
+                raise StrategyContractError(
+                    f"{paper_id}/{candidate.note_chunker}: "
+                    "unknown note route role"
+                )
+            backlinkable_base = tuple(
+                chunk
+                for chunk in base_chunks
+                if chunk.text.strip() and backlinks.get(chunk.chunk_id)
+            )
+            backlinkable_reviewer = tuple(
+                chunk
+                for chunk in reviewer_chunks
+                if chunk.text.strip() and backlinks.get(chunk.chunk_id)
+            )
+            is_eligible = bool(backlinkable_base)
+            (eligible if is_eligible else fallback).append(paper_id)
+            chunk_rows = [
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "route_role": chunk.route_role,
+                    "severity": chunk.severity,
+                    "claim_ids": list(chunk.claim_ids),
+                    "evidence_ids": list(chunk.evidence_ids),
+                    "backlink_ids": list(backlinks.get(chunk.chunk_id, ())),
+                    "backlink_count": len(backlinks.get(chunk.chunk_id, ())),
+                    "nonblank": bool(chunk.text.strip()),
+                }
+                for chunk in chunks
+            ]
+            fanouts = [
+                int(row["backlink_count"])
+                for row in chunk_rows
+            ]
+            result_diagnostics = dict(
+                note_results[paper_id].diagnostics or {}
+            )
+            reviewer_diagnostics = result_diagnostics.get("reviewer", {})
+            if not isinstance(reviewer_diagnostics, Mapping):
+                raise StrategyContractError(
+                    f"{paper_id}/{candidate.note_chunker}: "
+                    "reviewer diagnostics are invalid"
+                )
+            severity_counts = reviewer_diagnostics.get(
+                "severity_counts", {}
+            )
+            if not isinstance(severity_counts, Mapping):
+                raise StrategyContractError(
+                    f"{paper_id}/{candidate.note_chunker}: "
+                    "reviewer severity diagnostics are invalid"
+                )
+            for severity in aggregate_severity_counts:
+                aggregate_severity_counts[severity] += int(
+                    severity_counts.get(severity, 0)
+                )
+            aggregate_verdict_rows += int(
+                reviewer_diagnostics.get("row_count", 0)
+            )
+            aggregate_multi_claim_rows += int(
+                reviewer_diagnostics.get("multi_claim_row_count", 0)
+            )
+            per_paper[paper_id] = {
+                "eligible": is_eligible,
+                "fallback": not is_eligible,
+                "total_chunk_count": len(chunks),
+                "base_chunk_count": len(base_chunks),
+                "reviewer_chunk_count": len(reviewer_chunks),
+                "backlinkable_base_chunk_count": len(backlinkable_base),
+                "backlinkable_reviewer_chunk_count": (
+                    len(backlinkable_reviewer)
+                ),
+                "backlink_fanout": {
+                    "minimum": min(fanouts, default=0),
+                    "maximum": max(fanouts, default=0),
+                    "total": sum(fanouts),
+                    "mean": (
+                        sum(fanouts) / len(fanouts)
+                        if fanouts
+                        else 0.0
+                    ),
+                },
+                "chunks": chunk_rows,
+                "chunker_diagnostics": result_diagnostics,
+            }
+        eligible_note_paper_ids = tuple(eligible)
+        fallback_note_paper_ids = tuple(fallback)
+        diagnostic_identity = {
+            "eligibility_policy": dict(NOTE_ROUTE_ELIGIBILITY_POLICY),
+            "reviewer_parser_revision": REVIEWER_VERDICT_PARSER_REVISION,
+            "papers": per_paper,
+        }
+        corpus_diagnostics["note_route"] = {
+            "contract_status": "passed",
+            "eligibility_policy": dict(NOTE_ROUTE_ELIGIBILITY_POLICY),
+            "reviewer_parser_revision": (
+                REVIEWER_VERDICT_PARSER_REVISION
+            ),
+            "paper_count": len(documents),
+            "eligible_paper_ids": list(eligible_note_paper_ids),
+            "fallback_paper_ids": list(fallback_note_paper_ids),
+            "eligible_paper_rate": (
+                len(eligible_note_paper_ids) / len(documents)
+                if documents
+                else 0.0
+            ),
+            "fallback_rate": (
+                len(fallback_note_paper_ids) / len(documents)
+                if documents
+                else 0.0
+            ),
+            "total_chunk_count": len(note_chunks),
+            "base_chunk_count": sum(
+                int(row["base_chunk_count"])
+                for row in per_paper.values()
+            ),
+            "reviewer_chunk_count": sum(
+                int(row["reviewer_chunk_count"])
+                for row in per_paper.values()
+            ),
+            "backlinkable_base_chunk_count": sum(
+                int(row["backlinkable_base_chunk_count"])
+                for row in per_paper.values()
+            ),
+            "backlinkable_reviewer_chunk_count": sum(
+                int(row["backlinkable_reviewer_chunk_count"])
+                for row in per_paper.values()
+            ),
+            "reviewer_verdict_row_count": aggregate_verdict_rows,
+            "reviewer_severity_counts": aggregate_severity_counts,
+            "reviewer_multi_claim_row_count": (
+                aggregate_multi_claim_rows
+            ),
+            "per_paper": per_paper,
+            "diagnostic_fingerprint": canonical_fingerprint(
+                diagnostic_identity
+            ),
+        }
     return _CandidateCorpus(
         pdf_chunks=tuple(pdf_chunks),
         pdf_parents=tuple(pdf_parents),
         note_chunks=tuple(note_chunks),
         note_backlinks=backlinks,
+        eligible_note_paper_ids=eligible_note_paper_ids,
+        fallback_note_paper_ids=fallback_note_paper_ids,
         diagnostics=corpus_diagnostics,
     )
+
+
+def audit_n1_note_route(
+    candidate: StrategyCandidate,
+    documents: Mapping[str, CanonicalDocument],
+    notes: Mapping[str, str],
+) -> Mapping[str, object]:
+    """Return the offline N0/N3 pre-quality diagnostics for an N1 candidate."""
+
+    if candidate.note_chunker != NOTE_CLAIM_PLUS_REVIEWER_ID:
+        raise StrategyContractError(
+            "N0/N3 pre-quality requires note-claim-plus-reviewer"
+        )
+    corpus = _prepare_candidate_corpus(candidate, documents, notes)
+    diagnostics = corpus.diagnostics.get("note_route")
+    if not isinstance(diagnostics, Mapping):
+        raise StrategyContractError(
+            "N0/N3 pre-quality diagnostics were not finalized"
+        )
+    return dict(diagnostics)
 
 
 def _embed_mapping(
@@ -1967,11 +2215,19 @@ def run_complete_candidate(
             query=query,
             query_embedding=query_vector,
         )
-        note_hits = _search(
-            note_indexes[paper_id],
-            retriever=candidate.retriever,
-            query=query,
-            query_embedding=query_vector,
+        note_route_fallback = (
+            candidate.note_chunker == NOTE_CLAIM_PLUS_REVIEWER_ID
+            and paper_id in corpus.fallback_note_paper_ids
+        )
+        note_hits = (
+            ()
+            if note_route_fallback
+            else _search(
+                note_indexes[paper_id],
+                retriever=candidate.retriever,
+                query=query,
+                query_embedding=query_vector,
+            )
         )
         parent_hits = _search(
             parent_indexes[paper_id],
@@ -1979,14 +2235,18 @@ def run_complete_candidate(
             query=query,
             query_embedding=query_vector,
         )
-        hits = _compose_hits(
-            candidate,
-            pdf_hits=pdf_hits,
-            note_hits=note_hits,
-            parent_hits=parent_hits,
-            note_backlinks=corpus.note_backlinks,
-            pdf_chunks=pdf_chunk_by_id,
-            top_k=100,
+        hits = (
+            pdf_only(pdf_hits, top_k=100)
+            if note_route_fallback
+            else _compose_hits(
+                candidate,
+                pdf_hits=pdf_hits,
+                note_hits=note_hits,
+                parent_hits=parent_hits,
+                note_backlinks=corpus.note_backlinks,
+                pdf_chunks=pdf_chunk_by_id,
+                top_k=100,
+            )
         )
         pre_rerank_hits = tuple(hits)
         query_elapsed_ms = (
@@ -2496,6 +2756,7 @@ __all__ = [
     "DEFAULT_FUZZY_THRESHOLD",
     "EmbedderAdapter",
     "EvidenceMappingBundle",
+    "NOTE_ROUTE_ELIGIBILITY_POLICY",
     "PAPER_SCOPED_RETRIEVAL",
     "QuestionStrategyResult",
     "REFERENCE_MATCH_REVISION",
@@ -2503,8 +2764,10 @@ __all__ = [
     "StrategyCandidate",
     "StrategyContractError",
     "UnmappedEvidenceGroup",
+    "audit_n1_note_route",
     "generate_orthogonal_candidates",
     "generate_f2_candidate",
+    "generate_n1_candidate",
     "load_main_document",
     "load_main_documents",
     "map_all_references",

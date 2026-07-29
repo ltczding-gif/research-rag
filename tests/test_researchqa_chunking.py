@@ -6,13 +6,16 @@ from dataclasses import replace
 import pytest
 
 from benchmarks.researchqa_chunking import (
+    EXECUTABLE_NOTE_CHUNKER_IDS,
     EXECUTABLE_PDF_CHUNKER_IDS,
+    NOTE_CLAIM_PLUS_REVIEWER_ID,
     NOTE_CHUNKER_IDS,
     PDF_CHUNKER_IDS,
     PDF_STRUCTURE_FALLBACK_ID,
     chunk_note,
     chunk_pdf,
     note_chunk_pdf_backlinks,
+    parse_reviewer_verdicts,
     parse_source_citations,
     structure_fallback_corpus_diagnostics,
 )
@@ -430,6 +433,19 @@ def test_all_note_chunkers_are_deterministic_and_keep_source_spans(config_id):
     )
 
 
+def test_n1_is_an_extension_without_changing_the_four_baseline_chunkers():
+    assert NOTE_CHUNKER_IDS == (
+        "note-whole",
+        "note-section",
+        "note-claim-evidence",
+        "note-reviewer-concern",
+    )
+    assert EXECUTABLE_NOTE_CHUNKER_IDS == (
+        *NOTE_CHUNKER_IDS,
+        NOTE_CLAIM_PLUS_REVIEWER_ID,
+    )
+
+
 def test_claim_evidence_and_reviewer_chunks_include_linked_records():
     claim_result = chunk_note(
         NOTE,
@@ -451,9 +467,10 @@ def test_claim_evidence_and_reviewer_chunks_include_linked_records():
     assert "| E2 | supplement" in claim_result.chunks[0].text
     assert len(reviewer_result.chunks) == 1
     concern = reviewer_result.chunks[0]
-    assert concern.concern_id == "concern-c1"
+    assert concern.concern_id.startswith("concern-")
     assert concern.claim_ids == ("C1",)
     assert concern.evidence_ids == ("E1", "E2")
+    assert concern.severity == "major"
     assert "surviving concern" in concern.text
     assert "Run the discriminating experiment" in concern.text
 
@@ -487,6 +504,10 @@ The evidence chain uses E3. [Main p.3]
 def test_reviewer_chunker_allows_no_surviving_major_concern():
     note = """# Frozen note
 
+## Findings
+### C1：Bounded claim
+The evidence chain uses E1. [Main p.1]
+
 ## 审稿人视角（Adaptive Red-Team Verdict）
 | Claim | 裁决 | 证据充分度 | 最强替代解释 | 决定性缺失证据 | 严重性 |
 |---|---|---|---|---|---|
@@ -501,6 +522,230 @@ def test_reviewer_chunker_allows_no_surviving_major_concern():
 
     assert result.status == "completed"
     assert result.chunks == ()
+    assert result.diagnostics["severity_counts"]["minor"] == 1
+    assert result.diagnostics["surviving_concern_count"] == 0
+
+
+def _strict_verdict_note(
+    rows: str,
+    *,
+    header: str = (
+        "| Claim | 裁决 | 证据充分度 | 最强替代解释 | "
+        "决定性缺失证据 | 严重性 |"
+    ),
+) -> str:
+    claims = "\n\n".join(
+        f"### C{index}：Claim {index}\nEvidence E{index}. [Main p.{index}]"
+        for index in range(1, 6)
+    )
+    return f"""# Frozen note
+
+## Findings
+{claims}
+
+## 审稿人视角（Adaptive Red-Team Verdict）
+{header}
+|---|---|---|---|---|---|
+{rows}
+"""
+
+
+def test_n3_parser_supports_all_severities_lists_and_ranges():
+    note = _strict_verdict_note(
+        "\n".join(
+            (
+                "| C1/C2 | open | E1/E2 | alt | test | fatal |",
+                "| C2–C5 | partial | E2-E5 | alt | test | major |",
+                "| C3 | supported | E3 | none | none | minor |",
+                "| C4 | resolved | E4 | none | none | zero |",
+            )
+        )
+    )
+
+    parsed = parse_reviewer_verdicts(note)
+    chunks = chunk_note(
+        note,
+        "note-reviewer-concern",
+        paper_id="paper-1",
+    )
+
+    assert parsed.status == "completed"
+    assert [item.claim_ids for item in parsed.verdicts] == [
+        ("C1", "C2"),
+        ("C2", "C3", "C4", "C5"),
+        ("C3",),
+        ("C4",),
+    ]
+    assert parsed.diagnostics["severity_counts"] == {
+        "fatal": 1,
+        "major": 1,
+        "minor": 1,
+        "zero": 1,
+    }
+    assert parsed.diagnostics["multi_claim_row_count"] == 2
+    assert chunks.status == "completed"
+    assert [chunk.severity for chunk in chunks.chunks] == [
+        "fatal",
+        "major",
+    ]
+    assert chunks.chunks[0].claim_ids == ("C1", "C2")
+    assert chunks.chunks[1].claim_ids == ("C2", "C3", "C4", "C5")
+
+
+def test_n1_combines_all_claims_with_only_fatal_or_major_concerns():
+    note = _strict_verdict_note(
+        "\n".join(
+            (
+                "| C1 | open | E1 | alt | test | major |",
+                "| C2 | bounded | E2 | alt | test | minor |",
+            )
+        )
+    )
+
+    result = chunk_note(
+        note,
+        NOTE_CLAIM_PLUS_REVIEWER_ID,
+        paper_id="paper-1",
+    )
+
+    assert result.status == "completed"
+    assert result.diagnostics["base_chunk_count"] == 5
+    assert result.diagnostics["reviewer_chunk_count"] == 1
+    assert [chunk.route_role for chunk in result.chunks] == [
+        "claim-evidence",
+        "claim-evidence",
+        "claim-evidence",
+        "claim-evidence",
+        "claim-evidence",
+        "reviewer-concern",
+    ]
+    reviewer = result.chunks[-1]
+    assert reviewer.severity == "major"
+    assert reviewer.claim_ids == ("C1",)
+
+
+def test_n1_minor_only_reduces_to_the_claim_evidence_route():
+    note = _strict_verdict_note(
+        "| C1 | bounded | E1 | alt | test | minor |"
+    )
+
+    base = chunk_note(
+        note,
+        "note-claim-evidence",
+        paper_id="paper-1",
+    )
+    combined = chunk_note(
+        note,
+        NOTE_CLAIM_PLUS_REVIEWER_ID,
+        paper_id="paper-1",
+    )
+
+    assert combined.status == "completed"
+    assert combined.diagnostics["reviewer_chunk_count"] == 0
+    assert [
+        (
+            chunk.text,
+            chunk.claim_ids,
+            chunk.evidence_ids,
+            chunk.citations,
+        )
+        for chunk in combined.chunks
+    ] == [
+        (
+            chunk.text,
+            chunk.claim_ids,
+            chunk.evidence_ids,
+            chunk.citations,
+        )
+        for chunk in base.chunks
+    ]
+    assert all(
+        chunk.route_role == "claim-evidence"
+        for chunk in combined.chunks
+    )
+
+
+def test_n3_parser_accepts_the_documented_english_header():
+    note = _strict_verdict_note(
+        "| C1 | open | E1 | alt | test | major |",
+        header=(
+            "| Claim | Verdict | Evidence adequacy | "
+            "Strongest alternative | Decisive missing evidence | Severity |"
+        ),
+    )
+
+    parsed = parse_reviewer_verdicts(note)
+
+    assert parsed.status == "completed"
+    assert parsed.diagnostics["severity_counts"]["major"] == 1
+
+
+@pytest.mark.parametrize(
+    ("note", "reason"),
+    (
+        (
+            _strict_verdict_note(
+                "| C1 | open | E1 | alt | test | critical |"
+            ),
+            "reviewer-severity-invalid",
+        ),
+        (
+            _strict_verdict_note(
+                "| C5-C2 | open | E1 | alt | test | major |"
+            ),
+            "reviewer-claim-cell-invalid",
+        ),
+        (
+            _strict_verdict_note(
+                "| C6 | open | E1 | alt | test | major |"
+            ),
+            "reviewer-claim-cell-invalid",
+        ),
+        (
+            _strict_verdict_note(
+                "| C1 | open | E1 | alt | test | major |",
+                header=(
+                    "| Claim | 裁决 | 证据充分度 | 最强替代解释 | "
+                    "决定性缺失证据 | Risk |"
+                ),
+            ),
+            "reviewer-table-header-invalid",
+        ),
+    ),
+)
+def test_n3_parser_fails_closed_on_malformed_verdicts(note, reason):
+    parsed = parse_reviewer_verdicts(note)
+    chunked = chunk_note(
+        note,
+        "note-reviewer-concern",
+        paper_id="paper-1",
+    )
+
+    assert parsed.status == "failed"
+    assert parsed.failure_reason == reason
+    assert chunked.status == "failed"
+    assert chunked.failure_reason == reason
+
+
+def test_n3_parser_fails_closed_when_reviewer_section_is_missing():
+    note = """# Frozen note
+
+## Findings
+### C1：Claim
+Evidence E1. [Main p.1]
+"""
+
+    parsed = parse_reviewer_verdicts(note)
+
+    assert parsed.status == "failed"
+    assert parsed.failure_reason == "reviewer-section-missing"
+    combined = chunk_note(
+        note,
+        NOTE_CLAIM_PLUS_REVIEWER_ID,
+        paper_id="paper-1",
+    )
+    assert combined.status == "failed"
+    assert combined.failure_reason == "reviewer-section-missing"
 
 
 def test_note_main_citations_backlink_to_pdf_chunks_only():

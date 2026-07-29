@@ -23,6 +23,7 @@ from benchmarks.researchqa_retrieval import (
 )
 from benchmarks.researchqa_runtime import (
     ResearchQARuntimeError,
+    run_n0_n3_prequality_runtime,
     run_researchqa_extension_runtime,
     run_researchqa_runtime,
 )
@@ -107,7 +108,17 @@ def _runtime_fixture(tmp_path: Path) -> tuple[dict[str, object], Path]:
     frozen_rows = []
     for paper_id in paper_ids:
         _write_native_ir(run_root, paper_id)
-        note = f"# {paper_id}\n\nAudited evidence note for {paper_id}.\n"
+        note = f"""# {paper_id}
+
+## Findings
+### C1：Bounded claim for {paper_id}
+Evidence E1 is retained. [Main p.1]
+
+## 审稿人视角（Adaptive Red-Team Verdict）
+| Claim | 裁决 | 证据充分度 | 最强替代解释 | 决定性缺失证据 | 严重性 |
+|---|---|---|---|---|---|
+| C1 | bounded | E1 [Main p.1] | alternative | test | minor |
+"""
         note_path = (
             run_root
             / "note-runs"
@@ -291,6 +302,37 @@ def _extension_record(
         payload=payload,
         result_path="synthetic-extension-result.json",
     )
+
+
+def test_n0_n3_prequality_runs_without_models_and_writes_diagnostics(
+    tmp_path: Path,
+) -> None:
+    config, run_root = _runtime_fixture(tmp_path)
+    _add_extension_contract(config)
+
+    result = run_n0_n3_prequality_runtime(config, run_root)
+
+    assert result.candidate_config_id.startswith("repair-n1-")
+    assert result.diagnostics["eligible_paper_ids"] == sorted(
+        f"W{index}" for index in range(1, 21)
+    )
+    assert result.diagnostics["fallback_paper_ids"] == []
+    assert result.diagnostics["base_chunk_count"] == 20
+    assert result.diagnostics["backlinkable_base_chunk_count"] == 20
+    assert result.diagnostics["reviewer_chunk_count"] == 0
+    assert result.diagnostics["reviewer_verdict_row_count"] == 20
+    assert result.diagnostics["reviewer_severity_counts"] == {
+        "fatal": 0,
+        "major": 0,
+        "minor": 20,
+        "zero": 0,
+    }
+    payload = json.loads(
+        Path(result.prequality_path).read_text(encoding="utf-8")
+    )
+    assert payload["status"] == "completed"
+    assert payload["inputs"]["paper_count"] == 20
+    assert payload["inputs"]["question_count"] == 254
 
 
 @pytest.mark.parametrize("failure_mode", ["missing", "sha-mismatch"])
