@@ -199,8 +199,11 @@ def _embedding_input_end(text):
     if EMBED_PROVIDER == "fastembed":
         tokenizer = _get_fastembed_model().model.tokenizer
         encoded = tokenizer.encode(text[:end])
-        if encoded.overflowing:
-            end = max((stop for start, stop in encoded.offsets if stop > start), default=0)
+        included_end = max((stop for start, stop in encoded.offsets if stop > start), default=0)
+        # Some tokenizer versions omit overflow records. Offsets still reveal
+        # a discarded non-whitespace tail; trailing whitespace needs no token.
+        if encoded.overflowing or text[included_end:end].strip():
+            end = included_end
     elif EMBED_PROVIDER == "ollama":
         # Qwen's byte-level tokenizer cannot consume more tokens than UTF-8
         # bytes, with a small allowance for special tokens. API truncation is

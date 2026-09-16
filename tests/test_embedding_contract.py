@@ -77,6 +77,18 @@ def test_fastembed_token_window_preserves_tail_in_separate_unit(client, monkeypa
     assert units[-1][2].endswith("six") and len(units) == 2
     assert all(client.embed_index_text(unit[2]) == [1.0, 0.5] for unit in units)
     assert units[0][0] == 0 and units[0][1] == units[1][0] and units[-1][1] == len(text)
+    assert client.embed_index_text("one two three   ") == [1.0, 0.5]
+
+
+def test_tokenizer_offsets_detect_truncation_without_overflow_records(client, monkeypatch):
+    tokenizer = SimpleNamespace(encode=lambda text: SimpleNamespace(
+        offsets=[(0, 3), (4, 7)], overflowing=[]))
+    monkeypatch.setattr(client, "EMBED_PROVIDER", "fastembed")
+    monkeypatch.setattr(client, "MAX_EMBED_CHARS", 100)
+    monkeypatch.setattr(client, "_get_fastembed_model",
+                        lambda: SimpleNamespace(model=SimpleNamespace(tokenizer=tokenizer)))
+    with pytest.raises(ValueError, match="truncated"):
+        client.embed_index_text("one two omitted")
 
 
 @pytest.mark.parametrize("vector", [[], [0.0, 0.0], [float("nan"), 1.0], [float("inf")]])
