@@ -45,12 +45,12 @@ from benchmarks.researchqa_chunking import (
 )
 from benchmarks.researchqa_retrieval import (
     BM25Index,
+    ExactCosineIndex,
     RERANKER_MODEL_ID,
     RERANKER_REVISION,
     SOURCE_COMPOSITION_IDS,
     RerankerAdapter,
     RetrievalHit,
-    exact_cosine_search,
     hierarchical_pdf,
     note_guided_pdf,
     note_to_pdf,
@@ -2238,8 +2238,9 @@ def _embed_mapping(
 @dataclass(frozen=True)
 class _SearchIndex:
     passages: Mapping[str, str]
-    embeddings: Mapping[str, tuple[float, ...]]
+    dense: ExactCosineIndex | None
     bm25: BM25Index | None
+    vector_bytes: Mapping[str, int]
 
 
 CandidateProgressCallback = Callable[[Mapping[str, object]], None]
@@ -2373,7 +2374,7 @@ def _make_search_index(
     embedding_batch_size: int,
 ) -> _SearchIndex:
     if not passages:
-        return _SearchIndex({}, {}, None)
+        return _SearchIndex({}, None, None, {})
     embeddings = (
         _embed_mapping(
             embedder,
@@ -2388,7 +2389,10 @@ def _make_search_index(
         if retriever in {"bm25", "hybrid-rrf"}
         else None
     )
-    return _SearchIndex(dict(passages), embeddings, bm25)
+    dense = ExactCosineIndex(embeddings) if embeddings else None
+    return _SearchIndex(dict(passages), dense, bm25, {
+        item_id: 4 * len(vector) for item_id, vector in embeddings.items()
+    })
 
 
 def _search(
@@ -2405,11 +2409,8 @@ def _search(
     if retriever == "dense":
         if query_embedding is None:
             raise StrategyContractError("dense retrieval requires query embedding")
-        return exact_cosine_search(
-            query_embedding,
-            index.embeddings,
-            top_k=top_k,
-        )
+        assert index.dense is not None
+        return index.dense.search(query_embedding, top_k=top_k)
     if retriever == "bm25":
         assert index.bm25 is not None
         return index.bm25.search(query, top_k=top_k)
@@ -2417,11 +2418,8 @@ def _search(
         if query_embedding is None:
             raise StrategyContractError("hybrid retrieval requires query embedding")
         assert index.bm25 is not None
-        dense_hits = exact_cosine_search(
-            query_embedding,
-            index.embeddings,
-            top_k=top_k,
-        )
+        assert index.dense is not None
+        dense_hits = index.dense.search(query_embedding, top_k=top_k)
         bm25_hits = index.bm25.search(query, top_k=top_k)
         if not bm25_hits:
             return dense_hits
@@ -3382,26 +3380,26 @@ def run_complete_candidate(
             parent_passages if candidate.requires_parents else {}
         ),
     }
-    indexed_vectors = {
+    indexed_vector_bytes = {
         **{
-            item_id: vector
+            item_id: size
             for index in pdf_indexes.values()
-            for item_id, vector in index.embeddings.items()
+            for item_id, size in index.vector_bytes.items()
         },
         **{
-            item_id: vector
+            item_id: size
             for index in note_indexes.values()
-            for item_id, vector in index.embeddings.items()
+            for item_id, size in index.vector_bytes.items()
         },
         **{
-            item_id: vector
+            item_id: size
             for index in parent_indexes.values()
-            for item_id, vector in index.embeddings.items()
+            for item_id, size in index.vector_bytes.items()
         },
     }
     index_bytes = sum(
         len(text.encode("utf-8")) for text in indexed_passages.values()
-    ) + sum(4 * len(vector) for vector in indexed_vectors.values())
+    ) + sum(indexed_vector_bytes.values())
     corpus_diagnostics = dict(corpus.diagnostics)
     if candidate.source_fusion == S1_SOURCE_FUSION_ID:
         source_rows = {

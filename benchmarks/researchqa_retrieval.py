@@ -79,6 +79,79 @@ def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
     return dot / math.sqrt(left_norm_sq * right_norm_sq)
 
 
+class ExactCosineIndex:
+    """Validated item matrix and norms reusable across exact-cosine queries."""
+
+    def __init__(self, item_embeddings: Mapping[str, Sequence[float]]) -> None:
+        self._empty = not item_embeddings
+        self._item_embeddings: Mapping[str, Sequence[float]] = {}
+        self.item_ids: tuple[str, ...] = ()
+        self._numpy = None
+        self._matrix = None
+        self._item_norms = None
+        if self._empty:
+            return
+        try:
+            import numpy as np
+        except ImportError:
+            self._item_embeddings = dict(item_embeddings)
+            return
+
+        self._numpy = np
+        self.item_ids = tuple(sorted(item_embeddings))
+        self._matrix = np.asarray(
+            [item_embeddings[item_id] for item_id in self.item_ids],
+            dtype=np.float32,
+        )
+        if self._matrix.ndim != 2:
+            raise ValueError("embedding dimensions must match")
+        if not np.isfinite(self._matrix).all():
+            raise ValueError("embedding vectors must contain only finite values")
+        self._item_norms = np.linalg.norm(self._matrix, axis=1)
+        if np.any(self._item_norms == 0):
+            raise ValueError("cosine similarity is undefined for zero vectors")
+
+    def search(
+        self,
+        query_embedding: Sequence[float],
+        *,
+        top_k: int | None = 10,
+    ) -> tuple[RetrievalHit, ...]:
+        if self._empty:
+            return ()
+        if self._numpy is None:
+            hits = [
+                RetrievalHit(
+                    item_id=item_id,
+                    score=cosine_similarity(query_embedding, embedding),
+                    source="dense",
+                )
+                for item_id, embedding in self._item_embeddings.items()
+            ]
+        else:
+            np = self._numpy
+            query = np.asarray(query_embedding, dtype=np.float32)
+            assert self._matrix is not None
+            assert self._item_norms is not None
+            if query.ndim != 1 or self._matrix.shape[1] != query.shape[0]:
+                raise ValueError("embedding dimensions must match")
+            if not np.isfinite(query).all():
+                raise ValueError("embedding vectors must contain only finite values")
+            query_norm = np.linalg.norm(query)
+            if query_norm == 0:
+                raise ValueError("cosine similarity is undefined for zero vectors")
+            scores = (self._matrix @ query) / (self._item_norms * query_norm)
+            hits = [
+                RetrievalHit(
+                    item_id=item_id,
+                    score=float(score),
+                    source="dense",
+                )
+                for item_id, score in zip(self.item_ids, scores, strict=True)
+            ]
+        return _rank_hits(hits, top_k)
+
+
 def exact_cosine_search(
     query_embedding: Sequence[float],
     item_embeddings: Mapping[str, Sequence[float]],
@@ -693,6 +766,7 @@ __all__ = [
     "BM25Index",
     "BM25_B",
     "BM25_K1",
+    "ExactCosineIndex",
     "RERANKER_MODEL_ID",
     "RERANKER_REVISION",
     "RRF_K",
