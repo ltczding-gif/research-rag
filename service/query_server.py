@@ -21,7 +21,10 @@ import os
 import re
 import yaml
 import urllib.request
+from time import perf_counter
 from datetime import datetime
+from pathlib import Path
+from threading import RLock
 from uuid import uuid4
 
 from config import (
@@ -41,93 +44,123 @@ from embedding_client import (
     get_chromadb_embedding_function,
     healthcheck as embedding_healthcheck,
     detect_dim_mismatch,
+    embedding_contract,
+    embed_index_text,
 )
+from index_generation import GenerationStore, atomic_write_json, atomic_write_text
+from generation_query import open_generation
 
 app = Flask(__name__)
 
-if SKIP_CHROMA_INIT:
-    client = None
-    ef = None
-    pdf_col = None
-    notes_col = None
-    chroma_ready = False
-    notes_ready = False
-    print("[INIT] Skipping ChromaDB initialization (LOCALRAG_SKIP_CHROMA_INIT=1)")
-else:
-    # Create the shared ChromaDB client FIRST, independent of whether any
-    # individual collection exists. A missing `papers` collection must not
-    # nil out the client that `notes` also needs: notes and papers are built
-    # by separate steps (build_notes_db.py / build_pdf_db.py), so a
-    # notes-only install (or a papers-only one) is a normal state. Folding
-    # client creation into the papers try-block meant an absent papers
-    # collection dragged the notes collection down with it.
+# Query-log persistence has a single-process writer contract.  This lock covers
+# each full read/check/write transaction, including recovery.  Deployments with
+# multiple worker processes must not share QUERY_LOG_ROOT without a future
+# cross-process transaction layer.
+_QUERY_LOG_WRITE_LOCK = RLock()
+
+# Each server process pins its active generation at startup. Restart after a
+# publication to adopt it; retained previous generations keep in-flight reads valid.
+client = None
+pdf_col = notes_col = ef = None
+pdf_generation = notes_generation = None
+chroma_ready = notes_ready = False
+_dim_warnings = []
+_index_errors = {}
+
+
+def _load_collection(logical_name, *, papers=False):
+    collection, reader = open_generation(client, CHROMA_PATH, logical_name, embedding_contract)
+    if reader is not None:
+        return collection, reader
+    # Legacy compatibility is explicitly unverified: it cannot supply canonical
+    # evidence or prove same-dimensional model identity.
+    legacy = client.get_collection(
+        name=logical_name,
+        embedding_function=get_chromadb_embedding_function() if papers else None,
+    )
+    if legacy.count() <= 0:
+        raise ValueError("Legacy collection is empty")
+    mismatch, message = detect_dim_mismatch(legacy)
+    if mismatch:
+        _dim_warnings.append(message)
+        raise ValueError(message)
+    return legacy, None
+
+
+if not SKIP_CHROMA_INIT:
     try:
         client = chromadb.PersistentClient(path=str(CHROMA_PATH))
-    except Exception as e:
-        print(f"[INIT ERROR] ChromaDB client failed: {e}")
-        client = None
-
-    try:
-        ef = get_chromadb_embedding_function()
-        pdf_col = (
-            client.get_collection(name=COLLECTION_NAME, embedding_function=ef)
-            if client else None
-        )
-        chroma_ready = pdf_col is not None
-        if chroma_ready:
-            print(f"[INIT] ChromaDB papers loaded: {pdf_col.count()} chunks")
-        else:
-            print("[INIT WARN] ChromaDB papers not available: client not initialized")
-    except Exception as e:
-        print(f"[INIT ERROR] ChromaDB papers failed: {e}")
-        pdf_col = None
-        chroma_ready = False
-        ef = None
-
-    try:
-        # notes collection doesn't bind ef (build_notes_db.py passes embeddings
-        # manually). Queries call get_embedding() directly.
-        notes_col = client.get_collection(name=NOTES_COLLECTION_NAME) if client else None
-        notes_ready = notes_col is not None
-        if notes_ready:
-            print(f"[INIT] ChromaDB notes loaded: {notes_col.count()} notes")
-        else:
-            print("[INIT WARN] ChromaDB notes not available: client not initialized")
-    except Exception as e:
-        print(f"[INIT WARN] ChromaDB notes not available: {e}")
-        notes_col = None
-        notes_ready = False
-
-if not SKIP_CHROMA_INIT and 'notes_col' not in globals():
-    notes_col = None
-    notes_ready = False
+    except Exception as exc:
+        _index_errors["client"] = str(exc)
+    if client is not None:
+        for _logical, _papers in ((COLLECTION_NAME, True), (NOTES_COLLECTION_NAME, False)):
+            try:
+                _collection, _reader = _load_collection(_logical, papers=_papers)
+                if _papers:
+                    pdf_col, pdf_generation, chroma_ready = _collection, _reader, True
+                else:
+                    notes_col, notes_generation, notes_ready = _collection, _reader, True
+            except Exception as exc:
+                _index_errors[_logical] = str(exc)
 
 
-# Dimension-mismatch guard: warn loudly if the configured embedding model
-# produces a different vector dim than what the collection was built with.
-# Most common cause: user changed LOCALRAG_EMBED_PROVIDER or OLLAMA_EMBED_MODEL
-# without rebuilding the chroma store. Without this guard, queries fail with
-# opaque chromadb / Rust-backend errors at request time.
-_dim_warnings: list[str] = []
-if not SKIP_CHROMA_INIT:
-    for _name, _col in (("papers", pdf_col if chroma_ready else None),
-                        ("notes", notes_col if notes_ready else None)):
-        if _col is None:
-            continue
+def index_state():
+    """Distinguish a usable active index from the latest build attempt."""
+    result = {}
+    for name, logical, collection, reader, ready in (
+        ("papers", COLLECTION_NAME, pdf_col, pdf_generation, chroma_ready),
+        ("notes", NOTES_COLLECTION_NAME, notes_col, notes_generation, notes_ready),
+    ):
+        item = {"ready": bool(ready and collection is not None), "logical_collection": logical,
+                "mode": "canonical" if reader else "legacy_unverified" if ready else "unavailable"}
         try:
-            _mismatch, _msg = detect_dim_mismatch(_col)
-        except Exception as _exc:
-            print(f"[INIT WARN] dim check failed for {_name}: {_exc}")
-            continue
-        if _mismatch:
-            warning = f"[INIT WARN] dim-mismatch on {_name}: {_msg}"
-            print(warning)
-            _dim_warnings.append(warning)
-        else:
-            print(f"[INIT] {_name} {_msg}")
-# We don't refuse to start the server — surface mismatches via /health
-# so an operator can see them and decide. /health returns 503 while
-# _dim_warnings is non-empty.
+            item["latest_attempt"] = GenerationStore(CHROMA_PATH, logical).latest_attempt()
+            if item["ready"]:
+                if reader:
+                    reader.store.validate_artifacts(reader.manifest)
+                    reader.check_embedding(embedding_contract)
+                    if collection.count() != reader.manifest["item_count"]:
+                        raise ValueError("Active collection count changed")
+                    item.update(generation_id=reader.manifest["generation_id"],
+                                collection=reader.manifest["collection_name"],
+                                previous_generation=reader.manifest.get("previous_generation"))
+                else:
+                    item["collection"] = logical
+                item["count"] = collection.count()
+        except Exception as exc:
+            item.update(ready=False, error=str(exc))
+        if logical in _index_errors:
+            item["error"] = _index_errors[logical]
+        result[name] = item
+    return result
+
+
+def _query_vector(query, reader):
+    if reader is None:
+        return get_embedding(query)
+    reader.check_embedding(embedding_contract)
+    vector = embed_index_text(query)
+    if len(vector) != reader.manifest["contract"]["embedding"]["dimensions"]:
+        raise ValueError("Query vector dimension differs from the active generation")
+    return vector
+
+
+def _where_and(**values):
+    filters = [{key: value} for key, value in values.items() if value is not None and value != ""]
+    return {"$and": filters} if len(filters) > 1 else filters[0] if filters else None
+
+
+def _with_timings(payload, started, embedding_seconds, retrieval_seconds):
+    # Measures JSON preparation separately; actual stdio/HTTP wire latency is
+    # measured by the client and must not be presented as this server duration.
+    serialize_started = perf_counter()
+    json.dumps(payload, ensure_ascii=False)
+    payload["timings_seconds"] = {
+        "query_embedding": embedding_seconds, "retrieval": retrieval_seconds,
+        "rerank": 0.0, "serialization": perf_counter() - serialize_started,
+        "total": perf_counter() - started,
+    }
+    return payload
 
 
 def parse_frontmatter(text):
@@ -193,21 +226,85 @@ def get_query_log_registry_path(root=None):
     return os.path.join(active_root, QUERY_LOG_REGISTRY_FILENAME)
 
 
+class QueryLogRegistryError(RuntimeError):
+    """Raised when registry state cannot be read or recovered safely."""
+
+
 def load_query_log_registry(root=None):
     path = get_query_log_registry_path(root)
-    if os.path.exists(path):
+    if not os.path.exists(path):
+        return {}
+    try:
         with open(path, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                return {}
-    return {}
+            registry = json.load(f)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise QueryLogRegistryError(
+            "Query-log registry is unreadable; refusing to discard idempotency state"
+        ) from exc
+    required_entry_fields = ("log_id", "log_path", "month", "created_at")
+    if not isinstance(registry, dict) or any(
+        not isinstance(key, str)
+        or not key.strip()
+        or not isinstance(entry, dict)
+        or any(
+            not isinstance(entry.get(field), str) or not entry[field].strip()
+            for field in required_entry_fields
+        )
+        for key, entry in registry.items()
+    ):
+        raise QueryLogRegistryError(
+            "Query-log registry has an invalid structure; refusing to write"
+        )
+    return registry
 
 
 def save_query_log_registry(registry, root=None):
     path = get_query_log_registry_path(root)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(registry, f, ensure_ascii=False, indent=2)
+    atomic_write_json(path, registry)
+
+
+def recover_query_log_registry_entry(idempotency_key, root=None):
+    """Recover one orphaned Markdown log after a registry-write interruption."""
+    active_root = Path(root or QUERY_LOG_ROOT)
+    if not active_root.exists():
+        return None
+    matches = []
+    try:
+        candidates = tuple(active_root.rglob("*.md"))
+    except OSError as exc:
+        raise QueryLogRegistryError(
+            "Could not scan query logs for idempotency recovery"
+        ) from exc
+    for path in candidates:
+        if not is_path_within_root(path, active_root):
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise QueryLogRegistryError(
+                "Could not read query logs for idempotency recovery"
+            ) from exc
+        frontmatter, _ = parse_frontmatter(content)
+        if str(frontmatter.get("idempotency_key") or "") != idempotency_key:
+            continue
+        log_id = str(frontmatter.get("log_id") or "").strip()
+        created_at = str(frontmatter.get("created_at") or "").strip()
+        month = str(frontmatter.get("month") or path.parent.name).strip()
+        if not log_id or not created_at or not month:
+            raise QueryLogRegistryError(
+                "Matching orphaned query log has incomplete frontmatter"
+            )
+        matches.append({
+            "log_id": log_id,
+            "log_path": str(path.resolve()),
+            "month": month,
+            "created_at": created_at,
+        })
+    if len(matches) > 1:
+        raise QueryLogRegistryError(
+            "Multiple query logs use the same idempotency key; refusing to guess"
+        )
+    return matches[0] if matches else None
 
 
 def ensure_nonempty_string(value, field_name):
@@ -518,108 +615,67 @@ def is_path_within_root(path, root):
 
 
 def search_notes_chroma(query, limit=5, dedupe=True, zotero_parent_key=None):
-    """Search notes collection in ChromaDB (整篇笔记入库，不切块)"""
+    """Search note sections, optionally keeping the best section per note."""
     if not notes_ready or notes_col is None:
         return {"error": "Notes collection not initialized. Run build_notes_db.py first."}
-
+    if not query or not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        return {"error": "query and positive integer n are required"}
+    started = perf_counter()
     try:
-        where = {}
-        if zotero_parent_key:
-            where["zotero_parent_key"] = zotero_parent_key
-
-        # 手动获取查询向量（notes_col 无绑定 ef）
-        query_emb = get_embedding(query)
-
-        # dedupe 对整篇入库无意义（每篇只有一条记录），直接取 top-n
-        results = notes_col.query(
-            query_embeddings=[query_emb],
-            n_results=limit,
-            where=where if where else None,
-        )
-
-        formatted = []
-        for i in range(len(results["documents"][0])):
-            doc = results["documents"][0][i]
-            meta = results["metadatas"][0][i]
-            dist = results["distances"][0][i] if "distances" in results else None
-
-            # 解析 frontmatter 补充缺失字段
-            fm, body = parse_frontmatter(doc)
-
-            metadata = {
-                "source_file": meta.get("source_file", ""),
-                "zotero_parent_key": meta.get("zotero_parent_key", ""),
-                "title_en": meta.get("title_en", fm.get("title_en", "")),
-                "title_zh": meta.get("title_zh", fm.get("title_zh", "")),
-                "year": meta.get("year", fm.get("year", "")),
-                "journal": meta.get("journal", fm.get("journal", "")),
-                "authors": meta.get("authors", fm.get("authors", "")),
-                "doi": meta.get("doi", fm.get("doi", "")),
-                "score": round(1 - dist, 4) if dist is not None else None,
-                "note_rank": i + 1,
-            }
-            metadata = {k: v for k, v in metadata.items() if v is not None and v != ""}
-
-            formatted.append({
-                "id": results["ids"][0][i],
-                "content": doc[:3000],  # 返回前 3000 字符，够看结论和摘要
-                "metadata": metadata,
-            })
-
-        return {"results": formatted}
-
-    except Exception as e:
-        return error_payload(e)
+        where = _where_and(zotero_parent_key=zotero_parent_key)
+        embedding_started = perf_counter()
+        query_emb = _query_vector(query, notes_generation)
+        embedding_seconds = perf_counter() - embedding_started
+        retrieval_started = perf_counter()
+        # Sections can occupy several ranks. Fetch in increasing prefixes until
+        # enough distinct notes are found, preserving the backend's ranking.
+        count = notes_col.count()
+        requested = min(count, limit)
+        while True:
+            results = notes_col.query(query_embeddings=[query_emb], n_results=max(1, requested), where=where)
+            formatted, seen = [], set()
+            for i, doc in enumerate(results["documents"][0]):
+                meta = results["metadatas"][0][i]
+                identity = meta.get("note_id", results["ids"][0][i])
+                if dedupe and identity in seen:
+                    continue
+                seen.add(identity)
+                if notes_generation:
+                    full_note = notes_generation.full_note(meta)
+                    if full_note[meta["start"]:meta["end"]] != doc:
+                        raise ValueError("Note section differs from stored full note")
+                    fm, _ = parse_frontmatter(full_note)
+                else:
+                    fm, _ = parse_frontmatter(doc)
+                distance = results.get("distances", [[None] * len(results["ids"][0])])[0][i]
+                metadata = {key: fm[key] for key in ("title_en", "title_zh", "year", "journal", "authors", "doi") if fm.get(key) is not None}
+                metadata.update(meta)
+                metadata.update(score=round(1 - distance, 4) if distance is not None else None,
+                                note_rank=len(formatted) + 1)
+                formatted.append({"id": results["ids"][0][i], "content": doc,
+                                  "metadata": metadata, "distance": distance})
+                if len(formatted) == limit:
+                    break
+            if (not dedupe or len(formatted) >= limit or requested >= count
+                    or len(results["ids"][0]) < requested):
+                break
+            requested = min(count, max(requested + 1, requested * 2))
+        payload = {"results": formatted, "filters": where,
+                   "index_mode": "canonical" if notes_generation else "legacy_unverified"}
+        return _with_timings(payload, started, embedding_seconds, perf_counter() - retrieval_started)
+    except Exception as exc:
+        return error_payload(exc)
 
 
 @app.route('/health', methods=['GET'])
 def health():
-    """Health check endpoint"""
-    status = {
-        "status": "ok",
-        "papers": {
-            "ready": chroma_ready,
-            "path": str(CHROMA_PATH),
-            "collection": COLLECTION_NAME,
-        },
-        "notes": {
-            "ready": notes_ready,
-            "collection": NOTES_COLLECTION_NAME,
-        },
-    }
-
-    if chroma_ready and pdf_col:
-        try:
-            status["papers"]["chunks"] = pdf_col.count()
-        except Exception as e:
-            status["papers"]["error"] = str(e)
-
-    if notes_ready and notes_col:
-        try:
-            status["notes"]["count"] = notes_col.count()
-        except Exception as e:
-            status["notes"]["error"] = str(e)
-    
-    # Check the configured embedding provider — branches automatically
-    # between Ollama and openai-compat. Field name is "embedding" rather
-    # than "ollama" so consumers don't assume a specific provider.
+    states = index_state()
     embed_status = embedding_healthcheck()
-    status["embedding"] = embed_status
-    # Backwards-compat: legacy clients keyed off "ollama". Mirror the
-    # boolean health into that field too when ollama is the active provider.
-    if embed_status.get("provider") == "ollama":
-        status["ollama"] = "ready" if embed_status.get("ok") else f"error: {embed_status.get('reason', 'unknown')}"
-
+    ready = any(item["ready"] for item in states.values()) and embed_status.get("ok", False)
+    payload = {"status": "ok" if ready else "unavailable", **states, "embedding": embed_status}
     if _dim_warnings:
-        status["dim_mismatch"] = _dim_warnings
-
-    http_code = 200 if (
-        status["papers"]["ready"]
-        and status["notes"]["ready"]
-        and embed_status.get("ok")
-        and not _dim_warnings
-    ) else 503
-    return jsonify(status), http_code
+        payload["dim_mismatch"] = _dim_warnings
+    return jsonify(payload), 200 if ready else 503
 
 
 @app.route('/search_notes', methods=['POST'])
@@ -658,24 +714,22 @@ def get_note_payload(source=None, zotero_parent_key=None, summary_only=False):
         return {"error": "Notes collection not initialized"}, 503
 
     try:
-        # 通过 zotero_parent_key 或 source_file 精确查找
-        where = {}
-        if zotero_parent_key:
-            where["zotero_parent_key"] = zotero_parent_key
-        elif source:
-            # source 可能是完整路径或文件名
-            filename = os.path.basename(source)
-            where["source_file"] = filename
-
-        results = notes_col.get(where=where if where else None, limit=5)
-
+        where = _where_and(zotero_parent_key=zotero_parent_key,
+                           source_file=os.path.basename(source) if source else None)
+        # All sections of a matching note are collapsed into its original entity.
+        results = notes_col.get(where=where)
         if not results["ids"]:
             return {"error": "笔记未找到"}, 404
-
-        note_list = []
+        note_list, seen = [], set()
         for i in range(len(results["ids"])):
             doc = results["documents"][i]
             meta = results["metadatas"][i]
+            identity = meta.get("note_id", results["ids"][i])
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if notes_generation:
+                doc = notes_generation.full_note(meta)
             fm, body = parse_frontmatter(doc)
             content = doc[:500] + "\n..." if summary_only else doc
             note_list.append({
@@ -726,88 +780,85 @@ def _neighbor_chunk_ids(hit_id: str, chunk_index: int) -> tuple[str | None, str]
 
 
 def search_papers_chroma(
-    query,
-    n=3,
-    zotero_parent_key=None,
-    paper_group=None,
-    pdf_filename=None,
-    second_query=None,
-    include_context=False,
+    query, n=3, zotero_parent_key=None, paper_group=None, pdf_filename=None,
+    second_query=None, include_context=False, zotero_attachment_key=None,
+    source_role=None, source_type=None,
 ):
-    """Transport-free /search_papers implementation. Returns (payload, status).
-
-    Shared by the Flask route below and service/mcp_server.py.
-    """
+    """Search one pinned generation; all supplied source filters are ANDed."""
     if not chroma_ready or pdf_col is None:
         return {"error": "ChromaDB not initialized"}, 503
-
-    effective_query = second_query if second_query else query
-
-    if not query:
-        return {"error": "Missing required field: query"}, 400
-
-    where = {}
-    if zotero_parent_key:
-        where["zotero_parent_key"] = zotero_parent_key
-    elif paper_group is not None:
-        where["paper_group"] = paper_group
-    elif pdf_filename:
-        where["pdf_filename"] = pdf_filename
-
+    if not query or not isinstance(n, int) or isinstance(n, bool) or n < 1:
+        return {"error": "query and positive integer n are required"}, 400
+    if source_role not in (None, "", "main", "si"):
+        return {"error": "source_role must be main or si"}, 400
+    if source_type not in (None, "", "pdf"):
+        return {"error": "source_type must be pdf; use source_role for main/si"}, 400
+    if pdf_generation and paper_group is not None:
+        return {"error": "paper_group is a legacy ordinal; use zotero_parent_key for canonical indexes"}, 400
+    if pdf_generation and zotero_attachment_key:
+        known_sources = [source for source in pdf_generation.manifest["sources"]
+                         if source.get("zotero_attachment_key") == zotero_attachment_key]
+        constraints = {"zotero_parent_key": zotero_parent_key,
+                       "source_role": source_role, "pdf_filename": pdf_filename}
+        if known_sources and not any(
+            all(not value or source.get(field) == value for field, value in constraints.items())
+            for source in known_sources
+        ):
+            return {"error": "Attachment identity conflicts with the supplied source filters"}, 400
+    effective_query = second_query or query
+    where = _where_and(zotero_parent_key=zotero_parent_key, paper_group=paper_group,
+                       pdf_filename=pdf_filename, zotero_attachment_key=zotero_attachment_key,
+                       source_role=source_role, source_type=source_type)
+    started = perf_counter()
     try:
-        results = pdf_col.query(
-            query_texts=[effective_query],
-            n_results=n,
-            where=where if where else None
-        )
-
+        embedding_started = perf_counter()
+        if pdf_generation:
+            query_args = {"query_embeddings": [_query_vector(effective_query, pdf_generation)]}
+        else:
+            # Preserve the embedding function bound to old unverified collections.
+            query_args = {"query_texts": [effective_query]}
+        embedding_seconds = perf_counter() - embedding_started
+        retrieval_started = perf_counter()
+        results = pdf_col.query(**query_args, n_results=n, where=where)
         formatted_results = []
-        for i in range(len(results['documents'][0])):
-            meta = results['metadatas'][0][i]
-            content = results['documents'][0][i]  # 原始匹配 chunk，约800字符
-
-            result_item = {
-                "content": content,           # 默认只返回匹配段
-                "metadata": meta,
-                "distance": results['distances'][0][i] if 'distances' in results else None
-            }
-
-            # 仅当 include_context=true 时才拼接前后 chunk
+        for i, content in enumerate(results["documents"][0]):
+            meta = results["metadatas"][0][i]
+            hit_id = results["ids"][0][i]
+            item = {"id": hit_id, "content": content, "metadata": meta,
+                    "distance": results["distances"][0][i] if "distances" in results else None}
+            if pdf_generation:
+                item["evidence"] = pdf_generation.evidence(meta, content, hit_id)
+            else:
+                item["evidence"] = {"verified": False, "reason": "legacy index has no canonical provenance"}
             if include_context:
-                try:
-                    chunk_idx = meta.get('chunk_index', 0)
-                    hit_id = results['ids'][0][i]
-                    prev_id, next_id = _neighbor_chunk_ids(hit_id, chunk_idx)
-                    neighbor_ids = [item for item in (prev_id, next_id) if item]
-
-                    neighbors = pdf_col.get(ids=neighbor_ids)
-                    neighbor_docs = {
-                        nid: ndoc for nid, ndoc in
-                        zip(neighbors['ids'], neighbors['documents'])
-                    }
-
-                    prev_text = neighbor_docs.get(prev_id, '') if prev_id else ''
-                    next_text = neighbor_docs.get(next_id, '')
-
-                    # 匹配段用标记包裹，agent 据此加粗展示
-                    marked = f"[MATCH]{content}[/MATCH]"
-                    context = ' '.join(filter(None, [prev_text, marked, next_text]))
-                    result_item["context"] = context
-
-                except Exception:
-                    result_item["context"] = content  # 拼接失败退回原始
-
-            formatted_results.append(result_item)
-
-        return {
-            "results": formatted_results,
-            "query": query,
-            "effective_query": effective_query,
-            "filters": where if where else None
-        }, 200
-
-    except Exception as e:
-        return error_payload(e), 500
+                if pdf_generation:
+                    previous, following = meta.get("previous_chunk_id"), meta.get("next_chunk_id")
+                else:
+                    previous, following = _neighbor_chunk_ids(hit_id, meta.get("chunk_index", 0))
+                neighbor_ids = [identifier for identifier in (previous, following) if identifier]
+                neighbors = pdf_col.get(ids=neighbor_ids) if neighbor_ids else {"ids": [], "documents": [], "metadatas": []}
+                neighbor_docs = dict(zip(neighbors["ids"], neighbors["documents"]))
+                if pdf_generation:
+                    context_evidence = []
+                    if set(neighbors["ids"]) != set(neighbor_ids):
+                        raise ValueError("Canonical neighboring chunk is missing")
+                    for neighbor_id, doc, neighbor_meta in zip(neighbors["ids"], neighbors["documents"], neighbors["metadatas"]):
+                        if neighbor_meta["file_id"] != meta["file_id"]:
+                            raise ValueError("Canonical neighbor belongs to another source")
+                        context_evidence.append(pdf_generation.evidence(neighbor_meta, doc, neighbor_id))
+                    item["context_evidence"] = context_evidence
+                item["context"] = " ".join(filter(None, [neighbor_docs.get(previous, ""),
+                                      f"[MATCH]{content}[/MATCH]", neighbor_docs.get(following, "")]))
+            formatted_results.append(item)
+        payload = {"results": formatted_results, "query": query, "effective_query": effective_query,
+                   "filters": where, "index_mode": "canonical" if pdf_generation else "legacy_unverified"}
+        if not pdf_generation:
+            payload["timing_note"] = "Legacy embedding is included in retrieval; stages are not separated."
+        return _with_timings(payload, started, embedding_seconds, perf_counter() - retrieval_started), 200
+    except ValueError as exc:
+        return error_payload(exc), 409
+    except Exception as exc:
+        return error_payload(exc), 500
 
 
 @app.route('/search_papers', methods=['POST'])
@@ -831,6 +882,9 @@ def search_papers():
         pdf_filename=data.get('pdf_filename'),
         second_query=data.get('second_query'),  # WF4：笔记结论的英文版
         include_context=data.get('include_context', False),
+        zotero_attachment_key=data.get('zotero_attachment_key'),
+        source_role=data.get('source_role'),
+        source_type=data.get('source_type'),
     )
     return jsonify(payload), status
 
@@ -869,92 +923,113 @@ def write_query_log():
         planned_angles = normalize_angle_list(ensure_nonempty_list(data.get("planned_angles"), "planned_angles"))
         executed_angles = normalize_angle_list(ensure_nonempty_list(data.get("executed_angles"), "executed_angles"))
         search_runs = ensure_nonempty_list(data.get("search_runs"), "search_runs")
-        registry = load_query_log_registry()
-        existing_entry = registry.get(idempotency_key)
-        if existing_entry:
-            existing_path = existing_entry.get("log_path")
-            existing_log_id = existing_entry.get("log_id")
-            if existing_path and os.path.exists(existing_path) and is_path_within_root(existing_path, QUERY_LOG_ROOT):
+        with _QUERY_LOG_WRITE_LOCK:
+            registry = load_query_log_registry()
+            existing_entry = registry.get(idempotency_key)
+            if existing_entry:
+                existing_path = existing_entry.get("log_path")
+                existing_log_id = existing_entry.get("log_id")
+                if (
+                    existing_path
+                    and existing_log_id
+                    and os.path.exists(existing_path)
+                    and is_path_within_root(existing_path, QUERY_LOG_ROOT)
+                ):
+                    return jsonify({
+                        "success": True,
+                        "created": False,
+                        "deduplicated": True,
+                        "log_id": existing_log_id,
+                        "log_path": existing_path,
+                        "month": existing_entry.get("month"),
+                    })
+
+            recovered_entry = recover_query_log_registry_entry(idempotency_key)
+            if recovered_entry:
+                registry[idempotency_key] = recovered_entry
+                save_query_log_registry(registry)
                 return jsonify({
                     "success": True,
                     "created": False,
                     "deduplicated": True,
-                    "log_id": existing_log_id,
-                    "log_path": existing_path,
-                    "month": existing_entry.get("month"),
+                    "recovered": True,
+                    "log_id": recovered_entry["log_id"],
+                    "log_path": recovered_entry["log_path"],
+                    "month": recovered_entry["month"],
                 })
 
-        short_id = data.get("short_id") or uuid4().hex[:4].upper()
-        month_dir = ensure_query_log_month_dir(created_at)
-        filename = build_query_log_filename(
-            created_at=created_at,
-            workflow_id=workflow_id,
-            query=query,
-            short_id=short_id,
-        )
-        log_path = os.path.join(month_dir, filename)
-        # workflow_id / short_id flow into the filename unsanitized — refuse
-        # anything that would escape QUERY_LOG_ROOT (path separators, "..").
-        if filename != os.path.basename(filename) or not is_path_within_root(log_path, QUERY_LOG_ROOT):
-            return jsonify({"error": "workflow_id/short_id produced an unsafe log filename"}), 400
-        notes = data.get("notes") or []
-        papers = data.get("papers") or []
-        payload = {
-            "log_id": data.get("log_id") or build_query_log_id(created_at, short_id),
-            "idempotency_key": idempotency_key,
-            "created_at": created_at,
-            "month": datetime.fromisoformat(created_at).strftime("%Y-%m"),
-            "workflow_id": workflow_id,
-            "workflow_name": workflow_name,
-            "workflow_reason": data.get("workflow_reason"),
-            "status": status,
-            "query": query,
-            "query_title": data.get("query_title") or slugify_query_title(query),
-            "session_summary_title": data.get("session_summary_title")
-            or infer_session_summary_title(final_response_snapshot, query),
-            "query_language": data.get("query_language") or detect_query_language(query),
-            "anchor_query": anchor_query,
-            "anchor_query_source": data.get("anchor_query_source", "original_user_query"),
-            "saved_by": data.get("saved_by", "search-literature"),
-            "planned_angles": planned_angles,
-            "executed_angles": executed_angles,
-            "expansion_reason": data.get("expansion_reason"),
-            "stop_reason": data.get("stop_reason"),
-            "search_runs": search_runs,
-            "notes": notes,
-            "papers": papers,
-            "zotero_parent_keys": collect_zotero_parent_keys(
-                notes, papers, data.get("zotero_parent_keys")
-            ),
-            "source_note_files": collect_source_note_files(
-                notes, data.get("source_note_files")
-            ),
-            "effective_queries": data.get("effective_queries") or {},
-            "second_queries": normalize_angle_list(data.get("second_queries")),
-            "result_summary": data.get("result_summary") or "No result summary recorded.",
-            "final_response_snapshot": final_response_snapshot,
-            "log_path": log_path,
-        }
+            short_id = data.get("short_id") or uuid4().hex[:4].upper()
+            month_dir = ensure_query_log_month_dir(created_at)
+            filename = build_query_log_filename(
+                created_at=created_at,
+                workflow_id=workflow_id,
+                query=query,
+                short_id=short_id,
+            )
+            log_path = os.path.join(month_dir, filename)
+            # workflow_id / short_id flow into the filename unsanitized — refuse
+            # anything that would escape QUERY_LOG_ROOT (path separators, "..").
+            if filename != os.path.basename(filename) or not is_path_within_root(log_path, QUERY_LOG_ROOT):
+                return jsonify({"error": "workflow_id/short_id produced an unsafe log filename"}), 400
+            if os.path.exists(log_path):
+                return jsonify({"error": "A different query log already owns this filename; use a different short_id"}), 409
+            notes = data.get("notes") or []
+            papers = data.get("papers") or []
+            payload = {
+                "log_id": data.get("log_id") or build_query_log_id(created_at, short_id),
+                "idempotency_key": idempotency_key,
+                "created_at": created_at,
+                "month": datetime.fromisoformat(created_at).strftime("%Y-%m"),
+                "workflow_id": workflow_id,
+                "workflow_name": workflow_name,
+                "workflow_reason": data.get("workflow_reason"),
+                "status": status,
+                "query": query,
+                "query_title": data.get("query_title") or slugify_query_title(query),
+                "session_summary_title": data.get("session_summary_title")
+                or infer_session_summary_title(final_response_snapshot, query),
+                "query_language": data.get("query_language") or detect_query_language(query),
+                "anchor_query": anchor_query,
+                "anchor_query_source": data.get("anchor_query_source", "original_user_query"),
+                "saved_by": data.get("saved_by", "search-literature"),
+                "planned_angles": planned_angles,
+                "executed_angles": executed_angles,
+                "expansion_reason": data.get("expansion_reason"),
+                "stop_reason": data.get("stop_reason"),
+                "search_runs": search_runs,
+                "notes": notes,
+                "papers": papers,
+                "zotero_parent_keys": collect_zotero_parent_keys(
+                    notes, papers, data.get("zotero_parent_keys")
+                ),
+                "source_note_files": collect_source_note_files(
+                    notes, data.get("source_note_files")
+                ),
+                "effective_queries": data.get("effective_queries") or {},
+                "second_queries": normalize_angle_list(data.get("second_queries")),
+                "result_summary": data.get("result_summary") or "No result summary recorded.",
+                "final_response_snapshot": final_response_snapshot,
+                "log_path": log_path,
+            }
 
-        markdown = render_query_log_markdown(payload)
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.write(markdown)
-        registry[idempotency_key] = {
-            "log_id": payload["log_id"],
-            "log_path": log_path,
-            "month": payload["month"],
-            "created_at": payload["created_at"],
-        }
-        save_query_log_registry(registry)
+            markdown = render_query_log_markdown(payload)
+            atomic_write_text(log_path, markdown)
+            registry[idempotency_key] = {
+                "log_id": payload["log_id"],
+                "log_path": log_path,
+                "month": payload["month"],
+                "created_at": payload["created_at"],
+            }
+            save_query_log_registry(registry)
 
-        return jsonify({
-            "success": True,
-            "created": True,
-            "deduplicated": False,
-            "log_id": payload["log_id"],
-            "log_path": log_path,
-            "month": payload["month"],
-        })
+            return jsonify({
+                "success": True,
+                "created": True,
+                "deduplicated": False,
+                "log_id": payload["log_id"],
+                "log_path": log_path,
+                "month": payload["month"],
+            })
 
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -976,34 +1051,32 @@ def append_query_log_action():
     if not log_path or not log_id or not action or not result:
         return jsonify({"error": "Missing required fields: log_path, log_id, action, result"}), 400
 
-    if not os.path.exists(log_path):
-        return jsonify({"error": f"Log file not found: {log_path}"}), 404
-
     if not is_path_within_root(log_path, QUERY_LOG_ROOT):
         return jsonify({"error": "Target log_path is outside QUERY_LOG_ROOT"}), 400
 
     try:
-        with open(log_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        frontmatter, _ = parse_frontmatter(content)
-        existing_log_id = frontmatter.get("log_id")
-        if existing_log_id != log_id:
-            return jsonify({
-                "error": f"log_id mismatch: expected {existing_log_id}, got {log_id}"
-            }), 400
+        with _QUERY_LOG_WRITE_LOCK:
+            if not os.path.exists(log_path):
+                return jsonify({"error": f"Log file not found: {log_path}"}), 404
+            with open(log_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            frontmatter, _ = parse_frontmatter(content)
+            existing_log_id = frontmatter.get("log_id")
+            if existing_log_id != log_id:
+                return jsonify({
+                    "error": f"log_id mismatch: expected {existing_log_id}, got {log_id}"
+                }), 400
 
-        content = ensure_followup_header(content)
-        block = render_followup_block({
-            "timestamp": data.get("timestamp") or iso_now(),
-            "action": action,
-            "result": result,
-            "details": data.get("details"),
-        })
+            content = ensure_followup_header(content)
+            block = render_followup_block({
+                "timestamp": data.get("timestamp") or iso_now(),
+                "action": action,
+                "result": result,
+                "details": data.get("details"),
+            })
+            atomic_write_text(log_path, content + block + "\n")
 
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.write(content + block + "\n")
-
-        return jsonify({"success": True, "log_path": log_path, "log_id": log_id})
+            return jsonify({"success": True, "log_path": log_path, "log_id": log_id})
 
     except Exception as e:
         return jsonify(error_payload(e)), 500

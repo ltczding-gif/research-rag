@@ -48,6 +48,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LAUNCHER = REPO_ROOT / "scripts" / "run_mcp_server.py"
 BUILD_NOTES_DB = REPO_ROOT / "service" / "build_notes_db.py"
+MCP_SERVER = REPO_ROOT / "service" / "mcp_server.py"
 
 # The Chinese query that must rank the OER note first. "氧析出反应" (oxygen
 # evolution) is deliberately close to the fuel-cell note's "氧还原反应"
@@ -63,7 +64,8 @@ E2E_EXPECT_TOP_SOURCE = "oer_iridium_review_note.md"
 
 _CORPUS: dict[str, str] = {
     "oer_iridium_review_note.md": """---
-zotero_parent_key: OER00001
+zotero_parent_key: SYNTH-OER-0001
+synthetic_fixture: true
 title_en: "Iridium Oxide Catalysts for the Oxygen Evolution Reaction in Acidic Water Electrolysis"
 title_zh: "酸性水电解中用于氧析出反应的氧化铱催化剂"
 year: 2023
@@ -83,7 +85,8 @@ Tafel 斜率，在 10 mA/cm² 电流密度下析氧过电位仅 260 mV，并保�
 关键词：析氧反应、氧化铱、酸性水电解、阳极过电位、催化剂稳定性。
 """,
     "co2rr_copper_review_note.md": """---
-zotero_parent_key: CO2R0002
+zotero_parent_key: SYNTH-CO2R-0002
+synthetic_fixture: true
 title_en: "Copper Catalysts for Electrochemical CO2 Reduction to Multi-carbon Products"
 title_zh: "用于电化学二氧化碳还原制多碳产物的铜催化剂"
 year: 2022
@@ -101,7 +104,8 @@ authors:
 关键词：二氧化碳还原、铜催化剂、多碳产物、乙烯、法拉第效率。
 """,
     "pemfc_ptco_review_note.md": """---
-zotero_parent_key: FCELL003
+zotero_parent_key: SYNTH-FCELL-0003
+synthetic_fixture: true
 title_en: "Platinum-Cobalt Alloy Cathode Catalysts for Proton-Exchange-Membrane Fuel Cells"
 title_zh: "质子交换膜燃料电池的铂钴合金阴极催化剂"
 year: 2021
@@ -240,7 +244,7 @@ def _tool_payload(result) -> dict:
     return {}
 
 
-async def _run_roundtrip(spawn_python: str) -> bool:
+async def _run_roundtrip(spawn_python: str, *, direct_server: bool = False) -> bool:
     from mcp import ClientSession
     try:
         from mcp import StdioServerParameters
@@ -249,14 +253,15 @@ async def _run_roundtrip(spawn_python: str) -> bool:
     from mcp.client.stdio import stdio_client
 
     server_env = os.environ.copy()  # carries the isolated LOCALRAG_* paths
+    server_entrypoint = MCP_SERVER if direct_server else LAUNCHER
     params = StdioServerParameters(
         command=spawn_python,
-        args=[str(LAUNCHER)],
+        args=[str(server_entrypoint)],
         cwd=str(REPO_ROOT),
         env=server_env,
     )
 
-    print(f"\n[e2e] spawning server: {spawn_python} {LAUNCHER}", flush=True)
+    print(f"\n[e2e] spawning server: {spawn_python} {server_entrypoint}", flush=True)
     print(f"[e2e] (client interpreter is {sys.executable})", flush=True)
 
     all_ok = True
@@ -349,6 +354,14 @@ def main() -> int:
         action="store_true",
         help="(Re)build the synthetic 3-note corpus + ChromaDB before verifying.",
     )
+    parser.add_argument(
+        "--direct-server",
+        action="store_true",
+        help=(
+            "Spawn service/mcp_server.py directly with the selected interpreter "
+            "instead of exercising the launcher re-exec path."
+        ),
+    )
     args = parser.parse_args()
 
     home, notes_dir = _require_isolated_env()
@@ -360,7 +373,12 @@ def main() -> int:
         _build_corpus(home, notes_dir)
 
     spawn_python = _resolve_spawn_python()
-    if str(Path(spawn_python).resolve()).lower() == str(Path(sys.executable).resolve()).lower():
+    if args.direct_server:
+        print(
+            "[e2e] direct-server mode: launcher re-exec is intentionally skipped.",
+            flush=True,
+        )
+    elif str(Path(spawn_python).resolve()).lower() == str(Path(sys.executable).resolve()).lower():
         print(
             "[e2e] WARNING: could not find a non-venv Python; spawning with the "
             "current interpreter. The launcher re-exec path will not be exercised.",
@@ -368,7 +386,9 @@ def main() -> int:
         )
 
     try:
-        all_ok = asyncio.run(_run_roundtrip(spawn_python))
+        all_ok = asyncio.run(
+            _run_roundtrip(spawn_python, direct_server=args.direct_server)
+        )
     except Exception as exc:  # a crashed server / transport error is itself a FAIL
         import traceback
         traceback.print_exc()

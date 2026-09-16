@@ -312,13 +312,13 @@ Run 目录以论文哈希为 key，因此一篇论文的输出不会被错误地
 
 | Collection | 发现方式 | 嵌入单元 | 稳定关联键 |
 |---|---|---|---|
-| `notes` | 顶层 `*_review_note.md` 文件 | 一篇完整 Markdown 笔记 | `zotero_parent_key` |
-| `papers` | 笔记 frontmatter 中的 `pdf_N_path` | 800 字符分块，步长 700 字符 | `zotero_parent_key` + 内容哈希 |
+| `notes` | 结构化 Markdown | 按标题分节并适配实际模型窗口，保留完整笔记 | note ID + 源内容哈希 |
+| `papers` | 声明的 `pdf_N_path` 附件 | canonical 页码/span 分块，必要时按模型窗口继续拆分 | 精确 parent + attachment 身份 |
 
-如果检测到最后一个 References、Bibliography 或 Acknowledgements 标题，论文构建器会
-移除其后的文本。分块 ID 同时包含组哈希和文件内容哈希，因此增加另一篇笔记或改变 PDF
-顺序不会修改现有 ID。论文内容发生变化时，同一 `pdf_path` 的旧分块会先被删除，再写入
-替代内容。
+构建器先生成完整候选，通过验证后原子切换 active 指针；失败保留上一版。
+撤回来源需要显式 `--allow-removals`。末尾参考文献截断策略仍保留，其实现也进入指纹。
+同维度更换模型同样会阻止不兼容查询。迁移、精确附件身份、引用校验、仅笔记安装和
+离线回滚见 [索引 generation 合同](docs/INDEX_GENERATIONS.md)。
 
 查询时，终端 Agent 启动 `scripts/run_mcp_server.py`。Launcher 切换到仓库内具备 service
 依赖的 venv，然后启动 stdio MCP server。正常路径不需要 Flask 进程；
@@ -326,10 +326,10 @@ Run 目录以论文哈希为 key，因此一篇论文的输出不会被错误地
 
 | MCP 工具 | 用途 |
 |---|---|
-| `search_notes` | 在完整结构化笔记上做宽范围语义发现 |
-| `search_papers` | 在源 PDF 分块中查找证据，可按 Zotero parent key 过滤 |
+| `search_notes` | 按笔记分节检索，默认每篇返回最佳片段 |
+| `search_papers` | 返回验证过的页码/span；parent、附件、MAIN/SI、文件名组合过滤 |
 | `get_note` | 根据文件名或 Zotero parent key 取得完整索引笔记 |
-| `index_status` | 检查就绪状态、数量、嵌入提供方/模型与维度问题 |
+| `index_status` | 分别检查 active 版本、最近构建尝试、数量与嵌入合同 |
 
 典型检索策略是先宽后窄：先发现相关笔记，提取它们的 `zotero_parent_key`，再搜索对应的
 源 PDF，只在需要时取得完整笔记。
@@ -342,8 +342,8 @@ Run 目录以论文哈希为 key，因此一篇论文的输出不会被错误地
 | Subagent run 产物 | 配置的笔记/progress 区域下 | 可恢复的阶段 A/B manifest 与 JSON |
 | 生成 ledger | `scanner/processed_history.txt`，除非显式覆盖 | 防止重复生成笔记 |
 | ChromaDB | `LOCALRAG_HOME/chroma` | 派生的 `notes` 与 `papers` collection |
-| 笔记入库 ledger | `LOCALRAG_HOME/processed_notes.txt` | 增量全文笔记索引 |
-| 论文入库 ledger | `LOCALRAG_HOME/processed_groups.txt` | 增量 PDF 组索引 |
+| 索引 generation | `LOCALRAG_HOME/chroma/.research-rag` | 来源清单、原文工件、active 指针和构建尝试 |
+| 历史入库 ledger | `processed_notes.txt`、`processed_groups.txt` | 兼容旧工具；新构建使用 generation manifest |
 | 查询日志 | `LOCALRAG_QUERY_LOG_ROOT` | 工作流结果与诊断信息 |
 
 `combined_hash` 标识用于生成与恢复的 PDF 组。`zotero_parent_key` 把可读笔记与所有源 PDF
@@ -420,8 +420,9 @@ PowerShell 使用相同参数，并把解释器替换为 `.\.venv\Scripts\python
 | 怀疑 ledger 漂移 | 先用 `scanner/verify_and_clean.py` 预览；确认后才使用 `--clean` |
 | 旧笔记缺少稳定哈希 | 先用 `scanner/backfill_hash.py` 预览；确认后才使用 `--write` |
 
-更改嵌入提供方或模型时，必须同时重建受影响的 collection 和入库 ledger。请先备份
-`LOCALRAG_HOME`。不要把 Zotero PDF 或生成的 Markdown 笔记当作缓存删除。
+更改嵌入提供方或模型后，运行 `scripts/build_indexes.py`（或 `--notes-only`）构建完整候选。
+成功发布前保留旧 active；发布后重启 MCP/query 进程。无需删除或重建历史入库 ledger。
+保留 Zotero PDF 和生成的 Markdown 笔记。
 
 ## 高级安装
 

@@ -1,44 +1,53 @@
-"""
-Build Notes Vector DB
+"""Build an immutable, full-snapshot notes index generation."""
 
-Ingest review notes from LOCALRAG_NOTES_DIR into the ChromaDB `notes` collection.
-Each note is stored as a single record (no chunking); metadata is taken from
-the note's YAML frontmatter.
+from __future__ import annotations
 
-Configure via environment variables — see service/config.py and .env.example.
-"""
-
-import os
+import argparse
+import hashlib
+import math
 import re
 import sys
-import yaml
-import hashlib
-import chromadb
-import json
-import urllib.request
 from pathlib import Path
+from typing import Callable, Mapping, Sequence
+
+import chromadb
+import yaml
 
 from config import (
-    NOTES_DIR,
     CHROMA_PATH,
     NOTES_COLLECTION_NAME as COLLECTION_NAME,
+    NOTES_DIR,
     NOTES_LEDGER as LEDGER_PATH,
     NOTE_SUFFIX,
 )
-from config import EMBED_PROVIDER
-from embedding_client import active_model_id, get_embedding  # noqa: F401  (re-exported)
+from embedding_client import (
+    embed_index_text,
+    embedding_contract,
+    get_embedding,  # noqa: F401 - retained as a legacy re-export
+    split_embedding_text,
+)
+from index_generation import GenerationStore, implementation_contract
+
+
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+_HEADING_RE = re.compile(r"(?m)^#{1,6}[ \t]+(.+?)[ \t]*$")
+_PIPELINE_SCHEMA = "notes-heading-sections-v1"
+
+
+class NotesBuildError(RuntimeError):
+    """Raised when a candidate notes generation cannot be published."""
 
 
 def parse_frontmatter(text):
-    """解析 YAML frontmatter，返回 (metadata_dict, body_text)"""
-    m = re.match(r'^---\s*\n(.*?)\n---\s*\n', text, re.DOTALL)
-    if m:
+    """Parse YAML frontmatter and return ``(metadata, body)``."""
+
+    match = _FRONTMATTER_RE.match(text)
+    if match:
         try:
-            fm = yaml.safe_load(m.group(1)) or {}
+            metadata = yaml.safe_load(match.group(1)) or {}
         except yaml.YAMLError:
-            fm = {}
-        body = text[m.end():]
-        return fm, body
+            metadata = {}
+        return metadata, text[match.end() :]
     return {}, text
 
 
@@ -47,17 +56,14 @@ def _file_sha256(path):
 
 
 def note_document_id(filename):
-    """Stable ID for one note filename (content changes are handled by upsert)."""
+    """Stable legacy-compatible ID derived from one note filename."""
+
     return hashlib.md5(filename.encode("utf-8")).hexdigest()
 
 
 def plan_note_ingest(all_notes, processed, existing_ids, notes_dir):
-    """Return (files_to_process, legacy_ledger_upgrades).
+    """Legacy pure planner retained for compatibility with existing callers."""
 
-    A ledger hit is not enough to skip: the corresponding record must still
-    exist in Chroma. This self-heals deleted/rebuilt collections and partial
-    legacy migrations instead of permanently hiding missing notes.
-    """
     to_process = []
     upgrades = []
     for filename in all_notes:
@@ -73,146 +79,328 @@ def plan_note_ingest(all_notes, processed, existing_ids, notes_dir):
 
 
 def load_ledger():
-    """加载已处理笔记列表 -> {filename: content_hash}
+    """Load the legacy append-only ledger without using it for new builds."""
 
-    新格式每行 "filename\\thash"，旧格式只有 filename（hash 记为 ""）。
-    重复行后写覆盖先写（last-wins），所以更新时直接追加新行即可。
-    """
     entries = {}
     if LEDGER_PATH.exists():
-        with open(LEDGER_PATH, "r", encoding="utf-8") as f:
-            for line in f:
+        with LEDGER_PATH.open("r", encoding="utf-8") as handle:
+            for line in handle:
                 line = line.strip()
                 if not line:
                     continue
-                name, sep, digest = line.partition("\t")
-                entries[name] = digest if sep else ""
+                name, separator, digest = line.partition("\t")
+                entries[name] = digest if separator else ""
     return entries
 
 
 def append_ledger(filename, content_hash=""):
-    """追加一条到 ledger（含内容 hash，编辑过的笔记才能被重新入库）"""
+    """Legacy helper retained for compatibility; generation builds do not call it."""
+
     LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(LEDGER_PATH, "a", encoding="utf-8") as f:
-        f.write(f"{filename}\t{content_hash}\n")
+    with LEDGER_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(f"{filename}\t{content_hash}\n")
 
 
-def main():
-    print("[INIT] Building notes vector DB...")
+def _validated_parent_key(metadata: Mapping[str, object], source_file: str) -> str:
+    value = metadata.get("zotero_parent_key")
+    if not isinstance(value, str) or not value.strip():
+        raise NotesBuildError(
+            f"{source_file}: non-empty zotero_parent_key is required"
+        )
+    return value.strip()
+
+
+def _scan_notes(notes_dir: Path, note_suffix: str):
+    notes_dir = Path(notes_dir)
+    if not notes_dir.is_dir():
+        raise NotesBuildError(f"NOTES_DIR does not exist: {notes_dir}")
+    try:
+        paths = sorted(
+            path
+            for path in notes_dir.iterdir()
+            if path.is_file() and path.name.endswith(note_suffix)
+        )
+    except OSError as exc:
+        raise NotesBuildError(f"Cannot scan NOTES_DIR: {notes_dir}") from exc
+    if not paths:
+        raise NotesBuildError("No note files found; refusing an empty snapshot")
+
+    notes = []
+    for path in paths:
+        try:
+            raw = path.read_bytes()
+            text = raw.decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise NotesBuildError(f"Cannot read UTF-8 note: {path.name}") from exc
+        metadata, _body = parse_frontmatter(text)
+        if not isinstance(metadata, Mapping):
+            raise NotesBuildError(f"{path.name}: frontmatter must be an object")
+        notes.append(
+            {
+                "note_id": note_document_id(path.name),
+                "path": path.resolve(),
+                "raw": raw,
+                "text": text,
+                "zotero_parent_key": _validated_parent_key(metadata, path.name),
+                "content_hash": hashlib.sha256(raw).hexdigest(),
+            }
+        )
+    return notes
+
+
+def _section_ranges(text: str):
+    """Return contiguous heading-based ranges covering the complete note."""
+
+    frontmatter = _FRONTMATTER_RE.match(text)
+    body_start = frontmatter.end() if frontmatter else 0
+    headings = list(_HEADING_RE.finditer(text, body_start))
+    if not headings:
+        return ((0, len(text), "document"),)
+
+    ranges = []
+    if headings[0].start() > 0:
+        ranges.append((0, headings[0].start(), "frontmatter"))
+    for index, heading in enumerate(headings):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        ranges.append((heading.start(), end, heading.group(1).strip()))
+    return tuple(ranges)
+
+
+def _validated_splits(
+    section_text: str,
+    split_fn: Callable[[str], Sequence[tuple[int, int, str]]],
+):
+    pieces = tuple(split_fn(section_text))
+    if not pieces:
+        raise NotesBuildError("Embedding splitter returned no text")
+    cursor = 0
+    for piece in pieces:
+        if not isinstance(piece, (tuple, list)) or len(piece) != 3:
+            raise NotesBuildError("Embedding splitter returned an invalid record")
+        start, end, text = piece
+        if (
+            not isinstance(start, int)
+            or not isinstance(end, int)
+            or not isinstance(text, str)
+            or start != cursor
+            or end <= start
+            or section_text[start:end] != text
+        ):
+            raise NotesBuildError(
+                "Embedding splitter did not preserve contiguous source coverage"
+            )
+        cursor = end
+    if cursor != len(section_text):
+        raise NotesBuildError(
+            "Embedding splitter did not preserve contiguous source coverage"
+        )
+    return pieces
+
+
+def _sources(notes):
+    return [
+        {
+            "source_id": note["note_id"],
+            "content_hash": note["content_hash"],
+            "status": "success",
+            "path": str(note["path"]),
+        }
+        for note in notes
+    ]
+
+
+def _pipeline_contract(note_suffix: str, embedding):
+    return {
+        "embedding": embedding,
+        "pipeline": implementation_contract(
+            [Path(__file__), Path(__file__).with_name("index_generation.py")],
+            {
+                "schema": _PIPELINE_SCHEMA,
+                "note_suffix": note_suffix,
+                "identity": "filename-md5-v1",
+                "artifact": "verbatim-utf8-note-v1",
+                "distance": "cosine",
+            },
+        ),
+    }
+
+
+def _collection_count(client, collection_name: str) -> int:
+    try:
+        return int(client.get_collection(collection_name).count())
+    except Exception as exc:
+        raise NotesBuildError(
+            f"Cannot verify collection {collection_name}"
+        ) from exc
+
+
+def build_notes_generation(
+    *,
+    notes_dir: Path = NOTES_DIR,
+    chroma_path: Path = CHROMA_PATH,
+    collection_name: str = COLLECTION_NAME,
+    note_suffix: str = NOTE_SUFFIX,
+    allow_removals: bool = False,
+    client_factory=chromadb.PersistentClient,
+    embed_fn: Callable[[str], Sequence[float]] = embed_index_text,
+    split_fn: Callable[[str], Sequence[tuple[int, int, str]]] = split_embedding_text,
+    embedding_contract_fn: Callable[[], Mapping[str, object]] = embedding_contract,
+):
+    """Build and atomically publish one complete notes generation."""
+
+    store = GenerationStore(Path(chroma_path), collection_name)
+    sources = []
+    contract = {
+        "preflight": {"schema": _PIPELINE_SCHEMA, "note_suffix": note_suffix}
+    }
+    generation = None
+
+    with store.writer_lock():
+        try:
+            notes = _scan_notes(Path(notes_dir), note_suffix)
+            sources = _sources(notes)
+            contract = _pipeline_contract(
+                note_suffix, dict(embedding_contract_fn())
+            )
+            embedding_metadata = contract["embedding"]
+            dimensions = embedding_metadata.get("dimensions")
+            if (
+                not isinstance(dimensions, int)
+                or isinstance(dimensions, bool)
+                or dimensions <= 0
+            ):
+                raise NotesBuildError(
+                    "Embedding contract requires positive dimensions"
+                )
+            provider = embedding_metadata.get("provider")
+            model = embedding_metadata.get("model")
+            if not isinstance(provider, str) or not provider.strip():
+                raise NotesBuildError("Embedding contract requires a provider")
+            if not isinstance(model, str) or not model.strip():
+                raise NotesBuildError("Embedding contract requires a model")
+
+            client = client_factory(path=str(chroma_path))
+            active = store.load_active()
+            if store.same_inputs(active, contract, sources):
+                count = _collection_count(client, active["collection_name"])
+                if count <= 0 or count != active["item_count"]:
+                    raise NotesBuildError(
+                        "Active collection count does not match its manifest"
+                    )
+                try:
+                    store.validate_artifacts(active)
+                except ValueError:
+                    pass  # Rebuild missing or changed artifacts from current sources.
+                else:
+                    return active, True
+
+            generation = store.begin(contract, sources)
+            generation_dir = store.generation_path(generation)
+            notes_artifact_dir = generation_dir / "notes"
+            notes_artifact_dir.mkdir(parents=True, exist_ok=False)
+            collection = client.get_or_create_collection(
+                name=generation["collection_name"],
+                metadata={
+                    "hnsw:space": "cosine",
+                    "embed_provider": provider,
+                    "embed_model": model,
+                    "generation_id": generation["generation_id"],
+                },
+            )
+
+            artifacts = {"notes": {}}
+            item_count = 0
+            for note in notes:
+                artifact_relative = f"notes/{note['note_id']}.md"
+                artifact_path = generation_dir / artifact_relative
+                artifact_path.write_bytes(note["raw"])
+                artifacts["notes"][note["note_id"]] = artifact_relative
+
+                for section_start, section_end, title in _section_ranges(note["text"]):
+                    section_text = note["text"][section_start:section_end]
+                    for local_start, local_end, chunk_text in _validated_splits(
+                        section_text, split_fn
+                    ):
+                        start = section_start + local_start
+                        end = section_start + local_end
+                        embedding = [float(value) for value in embed_fn(chunk_text)]
+                        if (
+                            len(embedding) != dimensions
+                            or not all(math.isfinite(value) for value in embedding)
+                            or not any(embedding)
+                        ):
+                            raise NotesBuildError(
+                                "Embedding does not match the declared dimensions"
+                            )
+                        record_id = f"{note['note_id']}:{start}:{end}"
+                        collection.upsert(
+                            ids=[record_id],
+                            documents=[chunk_text],
+                            embeddings=[embedding],
+                            metadatas=[
+                                {
+                                    "note_id": note["note_id"],
+                                    "source_file": note["path"].name,
+                                    "zotero_parent_key": note["zotero_parent_key"],
+                                    "start": start,
+                                    "end": end,
+                                    "section_title": title,
+                                    "generation_id": generation["generation_id"],
+                                    "embedding_truncated": False,
+                                }
+                            ],
+                        )
+                        item_count += 1
+
+            actual_count = int(collection.count())
+            if item_count <= 0 or actual_count != item_count:
+                raise NotesBuildError(
+                    f"Candidate collection count mismatch: {actual_count} != {item_count}"
+                )
+            published = store.publish(
+                generation,
+                item_count=item_count,
+                artifacts=artifacts,
+                allow_removals=allow_removals,
+            )
+            return published, False
+        except BaseException as exc:
+            if generation is None:
+                generation = store.begin(contract, sources)
+            store.fail(
+                generation,
+                "interrupted" if isinstance(exc, KeyboardInterrupt) else exc,
+            )
+            raise
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--allow-removals",
+        action="store_true",
+        help="Allow sources absent from the full current snapshot to be withdrawn.",
+    )
+    args = parser.parse_args(argv)
+    print("[INIT] Building immutable notes index generation...")
     print(f"  Notes dir:  {NOTES_DIR}")
     print(f"  ChromaDB:   {CHROMA_PATH}")
     print(f"  Collection: {COLLECTION_NAME}")
-    print(f"  Ledger:     {LEDGER_PATH}")
-
-    # 检查嵌入服务（provider-neutral：默认 fastembed，无 daemon）
     try:
-        test_emb = get_embedding("test")
-        dim = len(test_emb)
-        print(f"  Embedding OK ({EMBED_PROVIDER}:{active_model_id()}), dim = {dim}")
-    except Exception as e:
-        print(f"[FATAL] Embedding provider '{EMBED_PROVIDER}' not available: {e}")
-        sys.exit(1)
-
-    # 扫描笔记文件
-    if not NOTES_DIR.exists():
-        print(f"[FATAL] NOTES_DIR does not exist: {NOTES_DIR}")
-        sys.exit(1)
-    all_notes = sorted(
-        f for f in os.listdir(NOTES_DIR)
-        if f.endswith(NOTE_SUFFIX) and (NOTES_DIR / f).is_file()
+        manifest, reused = build_notes_generation(allow_removals=args.allow_removals)
+    except KeyboardInterrupt:
+        print("[INTERRUPTED] Notes index build left the active generation unchanged.")
+        return 130
+    except Exception as exc:
+        print(f"[FATAL] Notes index build failed: {exc}", file=sys.stderr)
+        return 1
+    action = "Reused" if reused else "Published"
+    print(
+        f"[DONE] {action} generation {manifest['generation_id']} "
+        f"({manifest['item_count']} sections)."
     )
-    print(f"  Found {len(all_notes)} note files")
-
-    # Initialize Chroma before consulting the ledger. Ledger entries are only
-    # valid skips when the matching collection record still exists.
-    CHROMA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(CHROMA_PATH))
-    col = client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        metadata={
-            "hnsw:space": "cosine",
-            "embed_provider": EMBED_PROVIDER,
-            "embed_model": active_model_id(),
-        },
-    )
-    existing_ids = set(col.get(include=[]).get("ids", []))
-    print(f"  Collection '{COLLECTION_NAME}' count before: {col.count()}")
-
-    # 加载 ledger。四种情况需要处理：
-    #   1. ledger 里没有 → 新笔记
-    #   2. 新格式且 hash 变了 → 笔记被编辑过，重新入库（col.upsert 覆盖）
-    #   3. ledger 有记录但 collection ID 丢失 → 自愈，重新入库
-    #   4. 旧格式（无 hash）且 collection ID 存在 → 只升级 ledger hash
-    processed = load_ledger()
-    to_process, upgrades = plan_note_ingest(all_notes, processed, existing_ids, NOTES_DIR)
-    for filename, content_hash in upgrades:
-        append_ledger(filename, content_hash)
-    print(f"  Already processed: {len(processed)}, new/changed: {len(to_process)}")
-
-    if not to_process:
-        print("[DONE] No new notes to process.")
-        return
-
-    success = 0
-    failed = 0
-
-    for i, filename in enumerate(to_process, 1):
-        filepath = NOTES_DIR / filename
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                text = f.read()
-
-            fm, body = parse_frontmatter(text)
-
-            # 必须有 zotero_parent_key
-            zpk = fm.get("zotero_parent_key", "")
-            if not zpk:
-                print(f"  [{i}/{len(to_process)}] SKIP (no zotero_parent_key): {filename}")
-                # 标记为已处理，避免重复尝试；带 hash，笔记补上 key 后会重试
-                append_ledger(filename, _file_sha256(filepath))
-                continue
-
-            # 生成 embedding（用完整笔记文本，超长则截断）
-            emb = get_embedding(text)
-
-            # 构建 metadata（ChromaDB metadata 只支持 str/int/float/bool）
-            metadata = {
-                "source_file": filename,
-                "zotero_parent_key": str(zpk),
-            }
-            # 可选字段
-            for key in ["year", "journal", "title_en", "title_zh", "doi", "authors"]:
-                val = fm.get(key)
-                if val is not None:
-                    if key == "authors" and isinstance(val, list):
-                        metadata[key] = ", ".join(str(a) for a in val)
-                    else:
-                        metadata[key] = str(val)
-
-            # Filename-derived stable ID; content changes overwrite via upsert.
-            doc_id = note_document_id(filename)
-
-            col.upsert(
-                ids=[doc_id],
-                documents=[text],  # 存完整笔记文本，检索时直接返回
-                embeddings=[emb],
-                metadatas=[metadata],
-            )
-
-            success += 1
-            append_ledger(filename, _file_sha256(filepath))
-
-            if i % 50 == 0 or i == len(to_process):
-                print(f"  [{i}/{len(to_process)}] Processed {success} OK, {failed} failed")
-
-        except Exception as e:
-            failed += 1
-            print(f"  [{i}/{len(to_process)}] ERROR: {filename}: {e}")
-
-    print(f"\n[DONE] Notes DB build complete.")
-    print(f"  Processed: {success} OK, {failed} failed")
-    print(f"  Collection '{COLLECTION_NAME}' count after: {col.count()}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
