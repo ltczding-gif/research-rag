@@ -1,21 +1,21 @@
 schema_version: 1
 config_id: baseline-fixed-800-dense
-description: Current fixed-character C0 and dense-only baseline.
+description: ResearchQA C0 fixed-character and dense-only quality baseline.
 extractor:
-  id: legacy-pdfplumber
-  revision: pending-wave-1a
+  id: canonical-pdfplumber
+  revision: pdf-ir-schema-v1
 chunker:
   id: fixed-char
   size: 800
   step: 700
   min_length: 100
 embedding:
-  provider: fastembed
-  model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
-  revision: pending-lock
+  provider: ollama
+  model: qwen3-embedding:4b
+  revision: sha256-df5bd2e3c74cd8d069d21dc038f1b359fcdc9458fce1c99bd43c9eb1518ff907
 retriever:
   mode: dense
-  distance_metric: pending-baseline-measurement
+  distance_metric: cosine
   top_k: 10
 reranker:
   enabled: false

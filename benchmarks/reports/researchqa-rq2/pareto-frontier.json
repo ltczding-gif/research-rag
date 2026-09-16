@@ -1,0 +1,1 @@
+{"rows":[{"chunk_count":2153,"config_id":"repair-rr1-093b3f922f8306f447ae","guardrails_passed":true,"index_bytes":24631314,"p95_latency_ms":1331.1532550000002,"primary":0.8480978421565275,"rank":1,"stage_id":"reranker","status":"completed"}],"schema_version":1}

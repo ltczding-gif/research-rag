@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/native-ir-unit.schema.json",
+  "title": "ResearchQA source-native IR unit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "unit_id",
+    "paper_id",
+    "file_id",
+    "source_role",
+    "media_type",
+    "source_sha256",
+    "parser_fingerprint",
+    "ordinal",
+    "coordinate",
+    "citation",
+    "text",
+    "text_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "unit_id": {"type": "string", "pattern": "^native-[a-f0-9]{64}$"},
+    "paper_id": {"type": "string", "minLength": 1},
+    "file_id": {
+      "type": "string",
+      "pattern": "^(Main|SI-[0-9]{2,}|AUX-[0-9]{2,})$"
+    },
+    "source_role": {
+      "enum": [
+        "benchmark_pdf",
+        "bundled_supplement",
+        "external_si",
+        "auxiliary_reporting_file"
+      ]
+    },
+    "media_type": {
+      "enum": [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv"
+      ]
+    },
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "parser_fingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "ordinal": {"type": "integer", "minimum": 1},
+    "coordinate": {
+      "$ref": "native-coordinate.schema.json"
+    },
+    "citation": {"type": "string", "minLength": 1},
+    "text": {"type": "string"},
+    "text_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

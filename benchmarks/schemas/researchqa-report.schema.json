@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/researchqa-report.schema.json",
+  "title": "ResearchQA overnight machine-readable report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "status",
+    "created_at",
+    "updated_at",
+    "budget_seconds",
+    "elapsed_seconds",
+    "fingerprints",
+    "hardware_fingerprints",
+    "task_counts",
+    "mapping_coverage",
+    "candidates",
+    "bootstrap",
+    "pareto_frontier",
+    "provisional_winner",
+    "completed",
+    "partial",
+    "blocked",
+    "failed"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"$ref": "#/$defs/id"},
+    "status": {
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "partial",
+        "failed",
+        "blocked",
+        "budget-exhausted",
+        "interrupted"
+      ]
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "budget_seconds": {"type": "number", "exclusiveMinimum": 0},
+    "elapsed_seconds": {"type": "number", "minimum": 0},
+    "fingerprints": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "hardware_fingerprints": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "task_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pending", "running", "completed", "failed", "blocked"],
+      "properties": {
+        "pending": {"type": "integer", "minimum": 0},
+        "running": {"type": "integer", "minimum": 0},
+        "completed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "blocked": {"type": "integer", "minimum": 0}
+      }
+    },
+    "mapping_coverage": {"type": ["object", "null"]},
+    "candidates": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "bootstrap": {"type": ["object", "null"]},
+    "pareto_frontier": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "provisional_winner": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "completed": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/id"},
+      "uniqueItems": true
+    },
+    "partial": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/id"},
+      "uniqueItems": true
+    },
+    "blocked": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "failed": {
+      "type": "array",
+      "items": {"type": "object"}
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    }
+  }
+}

@@ -100,6 +100,7 @@ class SubagentBackend(ProcessorBackend):
         self._resume_dir = Path(resume_dir) if resume_dir else None
         self._run_dir: Path | None = self._resume_dir
         self._resume_cli_args = tuple(str(arg) for arg in (resume_cli_args or ()))
+        self._source_artifact_paths: list[Path] = []
 
     def attach_pdfs(self, pdf_paths, *, combined_hash="", profiler_pdf_paths=None):
         super().attach_pdfs(
@@ -116,6 +117,15 @@ class SubagentBackend(ProcessorBackend):
             base = Path.cwd() / "subagent_runs"
             self._run_dir = base / (combined_hash or "default")
         self._run_dir.mkdir(parents=True, exist_ok=True)
+
+    def attach_source_artifacts(self, source_artifact_paths) -> None:
+        resolved = []
+        for raw_path in source_artifact_paths:
+            path = Path(raw_path).expanduser().resolve()
+            if not path.is_file():
+                raise FileNotFoundError(f"Source artifact does not exist: {path}")
+            resolved.append(path)
+        self._source_artifact_paths = resolved
 
     def call_model(
         self,
@@ -152,6 +162,9 @@ class SubagentBackend(ProcessorBackend):
             pdf_paths_for_manifest = self._profiler_pdf_paths
         else:
             pdf_paths_for_manifest = self._pdf_paths
+        source_artifacts_for_manifest = (
+            [] if stage == "profiler" else self._source_artifact_paths
+        )
         # (quarantine_invalid_output below relies on the same
         # _STAGE_OUTPUT_FILE mapping used here.)
 
@@ -213,6 +226,9 @@ class SubagentBackend(ProcessorBackend):
             "temperature": temperature,
             "combined_hash": self._combined_hash,
             "pdf_paths": [str(Path(p).resolve()) for p in pdf_paths_for_manifest],
+            "source_artifacts": [
+                str(Path(p).resolve()) for p in source_artifacts_for_manifest
+            ],
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
             "response_schema": schema,
@@ -222,6 +238,7 @@ class SubagentBackend(ProcessorBackend):
                 "role": "Fresh sub-agent. Has only this manifest as input.",
                 "steps": [
                     "Read every PDF listed in pdf_paths.",
+                    "Read every native-coordinate source packet listed in source_artifacts.",
                     "Apply system_prompt + user_prompt to those PDFs.",
                     "Produce a single JSON object that strictly conforms to response_schema.",
                     "Write that JSON to expected_output_path atomically (write to a sibling .tmp file, then rename). This prevents the parent from reading a half-written file on its next polling pass.",
@@ -231,6 +248,7 @@ class SubagentBackend(ProcessorBackend):
                     "Re-invoke the scanner.",
                     "Touch the ledger or any file outside expected_output_path.",
                     "Read PDFs beyond pdf_paths (the parent already truncated for Stage A).",
+                    "Read source packets beyond source_artifacts.",
                 ],
             },
             "parent_agent_task": {
@@ -247,7 +265,8 @@ class SubagentBackend(ProcessorBackend):
             # Legacy fields kept for older sub-agent prompts that reference
             # them directly; remove in schema_version 4.
             "instructions": (
-                "Read each PDF in pdf_paths. Apply system_prompt + user_prompt. "
+                "Read each PDF in pdf_paths and each source packet in "
+                "source_artifacts. Apply system_prompt + user_prompt. "
                 "Produce a JSON object that strictly conforms to response_schema. "
                 f"Write the result to expected_output_path."
             ),

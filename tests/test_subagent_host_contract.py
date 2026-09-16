@@ -147,6 +147,7 @@ def test_main_json_output_is_parseable(tmp_path, capsys):
         "expected_output_path",
         "combined_hash",
         "pdf_paths",
+        "source_artifacts",
     ):
         assert key in entry, f"missing field {key!r} in JSON output"
 

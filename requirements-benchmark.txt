@@ -2,4 +2,5 @@
 # Kept separate from the product runtime: users who only run research-rag
 # do not need these packages.
 jsonschema>=4.22,<5
+numpy>=1.26,<3
 pyyaml>=6.0,<7

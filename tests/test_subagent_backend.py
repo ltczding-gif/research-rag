@@ -178,6 +178,47 @@ def test_note_generator_manifest_lists_full_pdfs(tmp_path, fake_pdf):
     assert str(sliced.resolve()) not in manifest["pdf_paths"]
 
 
+def test_source_artifacts_are_stage_b_only(tmp_path, fake_pdf):
+    run_dir = tmp_path / "run"
+    packet = tmp_path / "si-02-native.json"
+    packet.write_text('{"coordinate": "[SI-02 para.1]"}', encoding="utf-8")
+
+    backend = make_backend("subagent", run_dir_provider=lambda: run_dir)
+    backend.attach_pdfs([fake_pdf], combined_hash="testhash")
+    backend.attach_source_artifacts([packet])
+
+    with pytest.raises(SubagentManifestPending) as profiler_pending:
+        backend.call_model(**_profiler_kwargs())
+    profiler = json.loads(
+        profiler_pending.value.manifest_path.read_text(encoding="utf-8")
+    )
+    assert profiler["source_artifacts"] == []
+
+    note_kwargs = dict(
+        stage="note_generator",
+        system_prompt="note system",
+        user_prompt="note user",
+        schema={"type": "object"},
+        model_id="pro",
+        temperature=0.0,
+    )
+    with pytest.raises(SubagentManifestPending) as note_pending:
+        backend.call_model(**note_kwargs)
+    note = json.loads(note_pending.value.manifest_path.read_text(encoding="utf-8"))
+    assert note["source_artifacts"] == [str(packet.resolve())]
+    assert any(
+        "source_artifacts" in step for step in note["subagent_task"]["steps"]
+    )
+
+
+def test_source_artifact_must_exist(tmp_path, fake_pdf):
+    backend = make_backend("subagent", run_dir_provider=lambda: tmp_path / "run")
+    backend.attach_pdfs([fake_pdf], combined_hash="testhash")
+
+    with pytest.raises(FileNotFoundError, match="Source artifact"):
+        backend.attach_source_artifacts([tmp_path / "missing.json"])
+
+
 def test_resume_falls_through_when_output_is_empty(tmp_path, fake_pdf):
     """If the sub-agent crashed mid-write and left a 0-byte output file,
     resume mode must NOT crash with a parse error. It must fall through

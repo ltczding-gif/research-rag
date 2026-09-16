@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/native-coordinate.schema.json",
+  "title": "ResearchQA source-native citation coordinate",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinate_type", "page"],
+      "properties": {
+        "coordinate_type": {"const": "pdf_page"},
+        "page": {"type": "integer", "minimum": 1}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinate_type", "paragraph"],
+      "properties": {
+        "coordinate_type": {"const": "docx_paragraph"},
+        "paragraph": {"type": "integer", "minimum": 1}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coordinate_type",
+        "table",
+        "row_start",
+        "row_end",
+        "col_start",
+        "col_end"
+      ],
+      "properties": {
+        "coordinate_type": {"const": "docx_table"},
+        "table": {"type": "integer", "minimum": 1},
+        "row_start": {"type": "integer", "minimum": 1},
+        "row_end": {"type": "integer", "minimum": 1},
+        "col_start": {"type": "string", "pattern": "^[A-Z]+$"},
+        "col_end": {"type": "string", "pattern": "^[A-Z]+$"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coordinate_type",
+        "sheet_name",
+        "cell_range"
+      ],
+      "properties": {
+        "coordinate_type": {"const": "xlsx_cells"},
+        "sheet_name": {"type": "string", "minLength": 1},
+        "cell_range": {
+          "type": "string",
+          "pattern": "^[A-Z]+[1-9][0-9]*(?::[A-Z]+[1-9][0-9]*)?$"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coordinate_type",
+        "row_start",
+        "row_end",
+        "columns"
+      ],
+      "properties": {
+        "coordinate_type": {"const": "csv_rows_columns"},
+        "row_start": {"type": "integer", "minimum": 1},
+        "row_end": {"type": "integer", "minimum": 1},
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      }
+    }
+  ]
+}

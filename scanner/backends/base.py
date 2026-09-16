@@ -56,6 +56,15 @@ class ProcessorBackend(ABC):
             list(profiler_pdf_paths) if profiler_pdf_paths is not None else None
         )
 
+    def attach_source_artifacts(self, source_artifact_paths: list[Path]) -> None:
+        """Attach non-PDF, locally extracted source packets.
+
+        The default implementation only records paths. Provider backends ignore
+        them; the sub-agent backend exposes them in its manifest so a host agent
+        can read native-coordinate DOCX/XLSX/CSV extracts alongside the PDFs.
+        """
+        self._source_artifact_paths = list(source_artifact_paths)
+
     @abstractmethod
     def call_model(
         self,

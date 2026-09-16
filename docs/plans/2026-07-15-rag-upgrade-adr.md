@@ -1,10 +1,21 @@
 # ADR-002：可评测的检索升级路线（RAG v2）
 
-**Status:** Accepted for staged implementation
+**Status:** Accepted architecture; benchmark substrate superseded by ADR-003
 **Original date:** 2026-07-15
-**Revised:** 2026-07-27
+**Revised:** 2026-07-28
 **Decider:** 项目所有者
 **前置:** ADR-001（终端优先架构）
+
+---
+
+> **2026-07-28 benchmark supersession**
+>
+> 本文关于一次只改一个变量族、canonical IR、隔离运行、版本绑定和先评测后升级的架构
+> 决策继续有效。S5/D20/V20/H60、自建 query/gold、SI 与 note 三轨 benchmark 计划暂时
+> 搁置，作为历史设计保留，不再阻塞当前实现。当前唯一活跃 benchmark、四级规模合同和
+> 防泄漏规则由
+> [`2026-07-28-researchqa-benchmark-adr.md`](2026-07-28-researchqa-benchmark-adr.md)
+> 定义；两份文档冲突时以 ADR-003 为准。
 
 ---
 
@@ -957,8 +968,9 @@ Wave 2 及之后使用统一 DoR/DoD：
 
 ### Wave 1：provenance
 
-- [ ] 先完成 1A page/section/source-spans canonical IR 与 C0 adapter；
-- [ ] `ChunkRecord` schema 与版本迁移；
+- [x] 完成 1A page/section/source-spans canonical IR 与 C0 shadow adapter；
+- [x] 定义 `ChunkRecord` v1 schema、稳定 fingerprint 与 C0 parity tests；
+- [ ] 将生产索引迁移到版本化 `ChunkRecord`；
 - [ ] `IndexArtifact`、独立 collection/ledger 与 active-index manifest；
 - [ ] MCP 返回 page/span provenance；
 - [ ] doctor、side-by-side activation、rollback 与 sanitizer tests。

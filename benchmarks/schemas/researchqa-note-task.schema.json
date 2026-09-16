@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-rag.local/schemas/researchqa-note-task.schema.json",
+  "title": "ResearchQA note task",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "paper_id",
+    "main_pdf",
+    "si_pdfs",
+    "source_artifacts",
+    "run_dir",
+    "output_dir",
+    "page_count",
+    "non_pdf_si_count"
+  ],
+  "properties": {
+    "paper_id": {"type": "string", "minLength": 1},
+    "main_pdf": {"type": "string", "minLength": 1},
+    "si_pdfs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "source_artifacts": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "run_dir": {"type": "string", "minLength": 1},
+    "output_dir": {"type": "string", "minLength": 1},
+    "page_count": {"type": "integer", "minimum": 1},
+    "non_pdf_si_count": {"type": "integer", "minimum": 0}
+  }
+}

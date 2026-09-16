@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-rag.local/schemas/researchqa-note-audit.schema.json",
+  "title": "ResearchQA independent note audit",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "paper_id",
+    "generator_id",
+    "auditor_id",
+    "verdict",
+    "p0",
+    "p1",
+    "note_sha256",
+    "draft_sha256",
+    "findings"
+  ],
+  "properties": {
+    "paper_id": {"type": "string", "minLength": 1},
+    "generator_id": {"type": "string", "minLength": 1},
+    "auditor_id": {"type": "string", "minLength": 1},
+    "verdict": {"enum": ["PASS", "FAIL"]},
+    "p0": {"type": "integer", "minimum": 0},
+    "p1": {"type": "integer", "minimum": 0},
+    "note_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "draft_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["severity", "summary"],
+        "properties": {
+          "severity": {"enum": ["P0", "P1", "P2", "P3"]},
+          "summary": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

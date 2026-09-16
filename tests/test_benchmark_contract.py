@@ -18,7 +18,7 @@ BENCHMARK_ROOT = REPO_ROOT / "benchmarks"
 def _ignore_local_benchmark_state(directory: str, names: list[str]) -> set[str]:
     current = Path(directory)
     if current == BENCHMARK_ROOT:
-        return {"artifacts"} & set(names)
+        return {"artifacts", ".cache", "__pycache__"} & set(names)
     if current == BENCHMARK_ROOT / "corpus":
         return {"files"} & set(names)
     return set()
@@ -168,8 +168,14 @@ def test_committed_wave0b_corpus_lock_is_valid():
 
     assert result.ok, result.errors
     assert result.counts["suites"] == 5
-    assert result.counts["configs"] == 1
+    assert result.counts["configs"] == 2
     assert result.counts["manifest"] == 5
+    rq2_config = yaml.safe_load(
+        (BENCHMARK_ROOT / "configs" / "rq2-overnight.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert rq2_config["config_kind"] == "researchqa-overnight"
 
 
 def test_committed_s5_has_one_cc_by_main_plus_si_paper_per_domain():
@@ -299,7 +305,9 @@ def test_release_ready_enforces_partition_quotas(tmp_path):
     assert not result.ok
     assert "release:s5: expected 5 papers, found 1" in result.errors
     assert "release:h60: expected at least 30 negative queries, found 0" in result.errors
-    assert any("pending fingerprints are not allowed" in error for error in result.errors)
+    assert not any(
+        "pending fingerprints are not allowed" in error for error in result.errors
+    )
 
 
 def test_cli_accepts_committed_empty_skeleton(capsys):

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ltczding-gif/research-rag/benchmarks/schemas/researchqa-source-record.schema.json",
+  "title": "ResearchQA hash-bound source manifest record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "paper_id",
+    "file_id",
+    "source_role",
+    "media_type",
+    "original_filename",
+    "source_url",
+    "sha256",
+    "bytes",
+    "parser_fingerprint",
+    "citation_coordinate_type",
+    "acquisition_status"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "paper_id": {"type": "string", "minLength": 1},
+    "file_id": {
+      "type": "string",
+      "pattern": "^(Main|SI-[0-9]{2,}|AUX-[0-9]{2,})$"
+    },
+    "source_role": {
+      "enum": [
+        "benchmark_pdf",
+        "bundled_supplement",
+        "external_si",
+        "auxiliary_reporting_file"
+      ]
+    },
+    "media_type": {
+      "enum": [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv"
+      ]
+    },
+    "original_filename": {"type": "string", "minLength": 1},
+    "source_url": {"type": "string", "format": "uri", "pattern": "^https://"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "bytes": {"type": "integer", "minimum": 0},
+    "parser_fingerprint": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "citation_coordinate_type": {
+      "enum": [
+        "pdf_page",
+        "docx_paragraph_table",
+        "xlsx_cells",
+        "csv_rows_columns"
+      ]
+    },
+    "acquisition_status": {"type": "string", "minLength": 1}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"source_role": {"const": "benchmark_pdf"}},
+        "required": ["source_role"]
+      },
+      "then": {
+        "properties": {
+          "file_id": {"const": "Main"},
+          "media_type": {"const": "application/pdf"},
+          "citation_coordinate_type": {"const": "pdf_page"}
+        }
+      }
+    }
+  ]
+}

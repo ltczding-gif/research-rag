@@ -24,17 +24,22 @@ REFERENCE_HEADING_PATTERN = re.compile(
 )
 
 
+def truncate_final_references(text: str) -> str:
+    """Return text before the final reference-like heading, if present."""
+    final_heading = None
+    for match in REFERENCE_HEADING_PATTERN.finditer(text):
+        final_heading = match
+    if final_heading:
+        return text[: final_heading.start()]
+    return text
+
+
 def extract_text_pdfplumber(pdf_path: str | Path) -> str:
     """Extract page text and preserve the legacy final-reference truncation."""
     with pdfplumber.open(pdf_path) as pdf:
         full_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
 
-    final_heading = None
-    for match in REFERENCE_HEADING_PATTERN.finditer(full_text):
-        final_heading = match
-    if final_heading:
-        full_text = full_text[: final_heading.start()]
-    return full_text
+    return truncate_final_references(full_text)
 
 
 def chunk_text(

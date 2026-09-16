@@ -64,6 +64,7 @@ def build_repair_manifest(
         "temperature": 0.0,
         "combined_hash": generation["combined_hash"],
         "pdf_paths": generation["pdf_paths"],
+        "source_artifacts": generation.get("source_artifacts", []),
         "system_prompt": generation["system_prompt"],
         "user_prompt": repair_user_prompt,
         "response_schema": generation["response_schema"],
@@ -82,6 +83,7 @@ def build_repair_manifest(
             ),
             "steps": [
                 "Read every PDF listed in pdf_paths.",
+                "Read every native-coordinate source packet listed in source_artifacts.",
                 "Read source_candidate_path, source_rendered_note_path, and repair_brief_path.",
                 "Apply system_prompt + user_prompt; make only source-verifiable repairs requested by the brief.",
                 "Produce one JSON object that strictly conforms to response_schema.",
@@ -93,6 +95,7 @@ def build_repair_manifest(
                 "Touch the ledger.",
                 "Overwrite source_candidate_path or source_rendered_note_path.",
                 "Read documents beyond pdf_paths.",
+                "Read source packets beyond source_artifacts.",
                 "Introduce facts from external search or machine-global skills.",
             ],
         },
