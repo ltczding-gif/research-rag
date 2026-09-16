@@ -34,8 +34,9 @@ windows (step 700) are further split when required by the embedding tokenizer. T
 default multilingual FastEmbed model tested here has a 128-token input window.
 Offsets and real chunk adjacency survive this subdivision. Inter-page separators
 have no fabricated page spans; a unit containing only derived separators needs no
-embedding. Source-bearing text remains represented. The legacy final-reference
-truncation policy still applies; this is a text-extraction index, not OCR.
+embedding. Source-bearing text within the retained extraction remains represented.
+The legacy final-reference truncation policy still applies; this is a text-extraction
+index, not OCR.
 
 ## Readiness and query contract
 

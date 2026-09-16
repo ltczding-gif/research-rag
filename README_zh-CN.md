@@ -420,8 +420,9 @@ PowerShell 使用相同参数，并把解释器替换为 `.\.venv\Scripts\python
 | 怀疑 ledger 漂移 | 先用 `scanner/verify_and_clean.py` 预览；确认后才使用 `--clean` |
 | 旧笔记缺少稳定哈希 | 先用 `scanner/backfill_hash.py` 预览；确认后才使用 `--write` |
 
-更改嵌入提供方或模型时，必须同时重建受影响的 collection 和入库 ledger。请先备份
-`LOCALRAG_HOME`。不要把 Zotero PDF 或生成的 Markdown 笔记当作缓存删除。
+更改嵌入提供方或模型后，运行 `scripts/build_indexes.py`（或 `--notes-only`）构建完整候选。
+成功发布前保留旧 active；发布后重启 MCP/query 进程。无需删除或重建历史入库 ledger。
+保留 Zotero PDF 和生成的 Markdown 笔记。
 
 ## 高级安装
 

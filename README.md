@@ -444,9 +444,10 @@ PowerShell uses the same arguments with `.\.venv\Scripts\python.exe`.
 | suspected ledger drift | preview with `scanner/verify_and_clean.py`; use `--clean` only after review |
 | old notes missing stable hashes | preview `scanner/backfill_hash.py`; use `--write` only after review |
 
-Changing the embedding provider or model requires rebuilding the affected collections
-and their ingest ledgers together. Back up `LOCALRAG_HOME` first. Never delete Zotero
-PDFs or generated Markdown notes as if they were cache.
+After changing the embedding provider or model, run `scripts/build_indexes.py`
+(or `--notes-only`) to build complete candidates. The previous active generation
+remains until publication succeeds; then restart MCP/query processes. Legacy ingest
+ledgers need no deletion or rebuild. Preserve Zotero PDFs and generated Markdown notes.
 
 ## Advanced installation
 
