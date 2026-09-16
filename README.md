@@ -52,7 +52,7 @@ can be rebuilt from the notes and source PDFs.
 | Benefit | What the repository delivers |
 |---|---|
 | **Research memory, not chat history** | Structured Markdown notes survive model changes, client changes, and individual agent sessions. |
-| **Evidence you can inspect** | Whole-note search finds the right paper; source-passage search returns to the original PDF text. |
+| **Evidence you can inspect** | Note-section search finds the right paper; source-passage search returns to the original PDF text. |
 | **Your literature structure stays intact** | Zotero parent items keep the main article and supporting information in one processing unit. |
 | **A stack you can change piece by piece** | Choose among five generation backends and three embedding providers independently. |
 | **Domain depth without a fork** | Domain packs bundle prompts, schemas, templates, quality rules, and model routing. |
@@ -71,7 +71,7 @@ This project occupies a different layer from a typical single-document chat flow
 | Starting point | Manually selected documents | A Zotero PDF library |
 | Durable output | A conversation or exported answer | Structured, reviewable Markdown notes |
 | Main paper + SI | Usually handled as separate files | Grouped by Zotero parent item |
-| Retrieval | Conversation context or document chunks | Whole-note discovery plus source-PDF passage search |
+| Retrieval | Conversation context or document chunks | Note-section discovery plus source-PDF passage search |
 | Reuse by agents | Tied to a product session | Four stdio MCP tools usable from compatible clients |
 | Specialization | General-purpose instructions | Versioned domain packs with schemas and quality rules |
 | Recovery | Repeat the session or upload | Resume manifests, content hashes, ledgers, and rebuildable indexes |
@@ -215,7 +215,7 @@ chunk. Then try:
 ### Already have Markdown notes?
 
 Point `LOCALRAG_NOTES_DIR` at the directory during setup, then run
-`scripts/build_indexes.py`. Whole-note search needs `*_review_note.md` files with a
+`scripts/build_indexes.py`. Note-section search needs `*_review_note.md` files with a
 `zotero_parent_key` in YAML frontmatter. PDF passage search additionally discovers
 `pdf_0_path`, `pdf_1_path`, and later fields from that frontmatter.
 
@@ -247,7 +247,7 @@ flowchart LR
     SA --> J
 
     J --> MD["Rendered Markdown note<br/>hash + PDF paths + Zotero key"]
-    MD --> NB["Whole-note builder"]
+    MD --> NB["Note-section builder"]
     MD --> PDB["PDF extraction + chunk builder"]
 
     EP{"Embedding provider<br/>FastEmbed / Ollama / OpenAI-compatible"} --> NB
@@ -330,14 +330,15 @@ Use `scripts/build_indexes.py` after a generation batch.
 
 | Collection | Discovery | Unit of embedding | Stable link |
 |---|---|---|---|
-| `notes` | top-level `*_review_note.md` files | one whole Markdown note | `zotero_parent_key` |
-| `papers` | `pdf_N_path` fields in note frontmatter | 800-character chunks, 700-character step | `zotero_parent_key` + content hashes |
+| `notes` | Structured Markdown | Heading sections split to the actual model window; full note retained | Note ID + source hash |
+| `papers` | Declared `pdf_N_path` attachments | Canonical page/span chunks, further split to fit the embedding window | Exact parent + attachment identity |
 
-The paper builder removes text after the final References, Bibliography, or
-Acknowledgements heading when detected. Chunk IDs contain group and file content
-hashes, so adding another note or reordering PDFs does not change existing IDs.
-When paper content changes, stale chunks for the same `pdf_path` are removed before
-the replacement is inserted.
+Builders publish complete candidate generations through an atomic active pointer.
+Failures preserve the previous index; removing sources requires `--allow-removals`.
+The final-reference truncation policy remains, with its code bound into the build
+contract. Model swaps are checked even when vector dimensions match. See
+[the index-generation contract](docs/INDEX_GENERATIONS.md) for migration, exact
+attachment identity, verified citations, notes-only builds, and offline rollback.
 
 At query time the terminal agent spawns `scripts/run_mcp_server.py`. The launcher
 switches into the repository's service-capable venv, then starts the stdio MCP server.
@@ -346,10 +347,10 @@ optional HTTP compatibility layer over the same query functions.
 
 | MCP tool | Use |
 |---|---|
-| `search_notes` | Broad semantic discovery over full structured notes |
-| `search_papers` | Evidence lookup in original PDF chunks; can filter by Zotero parent key |
+| `search_notes` | Semantic discovery over note sections; best section per note |
+| `search_papers` | Verified page/span evidence; AND filters for parent, attachment, main/SI and filename |
 | `get_note` | Fetch a complete indexed note by filename or Zotero parent key |
-| `index_status` | Check readiness, counts, embedding provider/model, and dimension problems |
+| `index_status` | Check active generation, latest build attempt, counts and embedding contract |
 
 The typical retrieval strategy is broad-to-narrow: discover relevant notes, extract
 their `zotero_parent_key`, search the corresponding source PDFs, then fetch the full
@@ -363,8 +364,8 @@ note only when needed.
 | Subagent run artifacts | under the configured notes/progress area | resumable Stage A/B manifests and JSON |
 | Generation ledger | `scanner/processed_history.txt` unless overridden | prevents duplicate note generation |
 | ChromaDB | `LOCALRAG_HOME/chroma` | derived `notes` and `papers` collections |
-| Notes ingest ledger | `LOCALRAG_HOME/processed_notes.txt` | incremental whole-note indexing |
-| Papers ingest ledger | `LOCALRAG_HOME/processed_groups.txt` | incremental PDF-group indexing |
+| Index generations | `LOCALRAG_HOME/chroma/.research-rag` | source manifests, artifacts, active pointers and attempts |
+| Legacy ingest ledgers | `processed_notes.txt`, `processed_groups.txt` | retained for old tooling; new builds use generation manifests |
 | Query logs | `LOCALRAG_QUERY_LOG_ROOT` | workflow outcomes and diagnostics |
 
 `combined_hash` identifies a PDF group for generation and resume.

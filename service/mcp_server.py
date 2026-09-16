@@ -46,7 +46,7 @@ mcp = FastMCP("research-rag")
 
 @mcp.tool()
 def search_notes(query: str, n: int = 5, zotero_parent_key: str = "") -> dict:
-    """Semantic search over the whole-document research-notes collection.
+    """Semantic search over note sections, returning the best section per note.
 
     Returns the top-n notes with content previews and metadata
     (title_en/title_zh/year/journal/doi/zotero_parent_key/score).
@@ -65,6 +65,9 @@ def search_papers(
     zotero_parent_key: str = "",
     second_query: str = "",
     include_context: bool = False,
+    zotero_attachment_key: str = "",
+    source_role: str = "",
+    pdf_filename: str = "",
 ) -> dict:
     """Semantic search over the PDF chunk collection (original paper text).
 
@@ -73,7 +76,9 @@ def search_papers(
     (e.g. English technical terms extracted from a Chinese note) while
     `query` is kept for logging. include_context=True stitches the
     previous/next chunks around each match, with the match wrapped in
-    [MATCH]...[/MATCH].
+    [MATCH]...[/MATCH]. Canonical indexes return page/span/hash verified evidence.
+    zotero_attachment_key restricts to one exact attachment; source_role is
+    "main" or "si". All supplied filters are combined with AND.
     """
     payload, _status = _core.search_papers_chroma(
         query=query,
@@ -81,6 +86,9 @@ def search_papers(
         zotero_parent_key=zotero_parent_key or None,
         second_query=second_query or None,
         include_context=include_context,
+        zotero_attachment_key=zotero_attachment_key or None,
+        source_role=source_role or None,
+        pdf_filename=pdf_filename or None,
     )
     return payload
 
@@ -106,9 +114,11 @@ def index_status() -> dict:
     plus which embedding provider/model is active."""
     from embedding_client import healthcheck, active_model_id
 
+    states = _core.index_state()
     status: dict = {
-        "papers_ready": bool(_core.chroma_ready and _core.pdf_col is not None),
-        "notes_ready": bool(_core.notes_ready and _core.notes_col is not None),
+        "papers_ready": states["papers"]["ready"],
+        "notes_ready": states["notes"]["ready"],
+        "indexes": states,
         "embedding": healthcheck(),
         "active_embed_model": active_model_id(),
     }

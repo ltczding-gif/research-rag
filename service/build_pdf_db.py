@@ -11,25 +11,59 @@
 # service/config.py and .env.example at the repo root.
 # ============================================================
 import argparse
+import importlib.metadata
+import json
 import os
 import re
 import hashlib
 import sqlite3 as zotero_sqlite
 import glob
+from pathlib import Path
+import sys
 import yaml
 
-from config import (
-    NOTES_DIR,
-    CHROMA_PATH,
-    EMBED_PROVIDER,
-    PAPERS_COLLECTION_NAME as COLLECTION_NAME,
-    PDF_LEDGER as LEDGER_PATH,
-    ZOTERO_DB_PATH as ZOTERO_DB,
-    CHUNK_SIZE,
-    CHUNK_STEP,
-    MIN_CHUNK_LEN,
-)
-from pdf_baseline import chunk_text, extract_text_pdfplumber
+try:
+    from .config import (
+        NOTES_DIR,
+        CHROMA_PATH,
+        EMBED_PROVIDER,
+        PAPERS_COLLECTION_NAME as COLLECTION_NAME,
+        PDF_LEDGER as LEDGER_PATH,
+        ZOTERO_DB_PATH as ZOTERO_DB,
+        CHUNK_SIZE,
+        CHUNK_STEP,
+        MIN_CHUNK_LEN,
+    )
+    from .pdf_baseline import chunk_text, extract_text_pdfplumber
+    from .pdf_sources import (
+        canonical_chunk_start,
+        PdfSourceError,
+        PreparedPdfBuild,
+        prepare_pdf_build,
+        resolve_attachment_identity_exact,
+        split_prepared_chunks_for_embedding,
+    )
+except ImportError:  # Support direct `python service/build_pdf_db.py` execution.
+    from config import (
+        NOTES_DIR,
+        CHROMA_PATH,
+        EMBED_PROVIDER,
+        PAPERS_COLLECTION_NAME as COLLECTION_NAME,
+        PDF_LEDGER as LEDGER_PATH,
+        ZOTERO_DB_PATH as ZOTERO_DB,
+        CHUNK_SIZE,
+        CHUNK_STEP,
+        MIN_CHUNK_LEN,
+    )
+    from pdf_baseline import chunk_text, extract_text_pdfplumber
+    from pdf_sources import (
+        canonical_chunk_start,
+        PdfSourceError,
+        PreparedPdfBuild,
+        prepare_pdf_build,
+        resolve_attachment_identity_exact,
+        split_prepared_chunks_for_embedding,
+    )
 
 
 PAPERS_ID_SCHEMA = "content-hash-v1"
@@ -224,161 +258,350 @@ def _parse_args(argv=None):
         "--rebuild",
         action="store_true",
         help=(
-            "Delete and rebuild only the papers collection and its ledger. "
-            "Required once when migrating from the legacy positional chunk-ID schema."
+            "Build a fresh immutable candidate even when inputs match active. "
+            "The active generation is never deleted first."
         ),
+    )
+    parser.add_argument(
+        "--allow-removals",
+        action="store_true",
+        help="Allow a complete candidate to withdraw sources from the active generation.",
     )
     return parser.parse_args(argv)
 
 
-def main(argv=None):
-    import chromadb
+def _canonical_json(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
-    from embedding_client import active_model_id, get_chromadb_embedding_function
 
-    args = _parse_args(argv)
+def _inventory_payload(plan):
+    return [item.to_dict() for item in plan.inventory]
 
-    print("[INIT] Extracting PDF groups from notes...")
-    pdf_groups = extract_pdf_groups_from_notes(NOTES_DIR)
-    print(f"[INIT] Total groups: {len(pdf_groups)}")
 
-    # Init ChromaDB before loading the ledger so an explicit rebuild can reset
-    # both pieces of papers-index state together. The notes collection is not
-    # touched.
-    ef = get_chromadb_embedding_function()
-    CHROMA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(CHROMA_PATH))
-
-    if args.rebuild:
-        reset_papers_index(client, LEDGER_PATH, COLLECTION_NAME)
-        print(f"[REBUILD] Reset papers collection '{COLLECTION_NAME}' and ledger")
-
-    # Load ledger (group-level resume support)
-    LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if LEDGER_PATH.exists():
-        with open(LEDGER_PATH, 'r', encoding='utf-8') as f:
-            processed = set(line.strip() for line in f)
-    else:
-        processed = set()
-
-    expected_metadata = {
-        "embed_provider": EMBED_PROVIDER,
-        "embed_model": active_model_id(),
-        "id_schema": PAPERS_ID_SCHEMA,
+def _source_lookup(plan):
+    return {
+        item.file_id: item
+        for item in plan.inventory
+        if item.status == "success" and item.file_id
     }
-    col = client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=ef,
-        # Stamped at first creation only — records what the collection was
-        # actually built with, so provider/model switches are diagnosable.
-        metadata=expected_metadata,
+
+
+def _validate_prepared_build(plan):
+    if not plan.publishable:
+        failures = [
+            f"{item.note_path} pdf_{item.pdf_index}: {item.status}/{item.error_code}"
+            for item in plan.inventory
+            if item.status != "success"
+        ]
+        if not failures:
+            failures.append("every note must declare a successful pdf_0 MAIN source")
+        raise PdfSourceError("PDF source inventory is not publishable: " + "; ".join(failures))
+
+    successful = _source_lookup(plan)
+    documents = {document.file_id: document for document in plan.documents}
+    if set(successful) != set(documents):
+        raise PdfSourceError("successful inventory and canonical documents differ")
+    if len({chunk.chunk_id for chunk in plan.chunks}) != len(plan.chunks):
+        raise PdfSourceError("duplicate canonical chunk IDs")
+
+    for file_id, source in successful.items():
+        document = documents[file_id]
+        if (
+            document.paper_id != source.paper_id
+            or document.file_hash != source.file_sha256
+            or len(document.pages) != source.page_count
+            or tuple(page.page_text_hash for page in document.pages)
+            != source.page_text_hashes
+        ):
+            raise PdfSourceError(f"canonical document does not match inventory: {file_id}")
+
+    chunk_ids = {chunk.chunk_id for chunk in plan.chunks}
+    for chunk in plan.chunks:
+        document = documents[chunk.file_id]
+        canonical_chunk_start(document, chunk)
+        for span in chunk.source_spans:
+            page = document.pages[span.pdf_page_index]
+            if page.page_text_hash != span.page_text_hash:
+                raise PdfSourceError(f"chunk page hash mismatch: {chunk.chunk_id}")
+        for neighbor in (chunk.previous_chunk_id, chunk.next_chunk_id):
+            if neighbor and neighbor not in chunk_ids:
+                raise PdfSourceError(f"chunk neighbor is not an actual chunk ID: {chunk.chunk_id}")
+
+
+def _page_records(plan, generation_id):
+    sources = _source_lookup(plan)
+    for document in plan.documents:
+        source = sources[document.file_id]
+        for page in document.pages:
+            yield {
+                "generation_id": generation_id,
+                "paper_id": document.paper_id,
+                "file_id": document.file_id,
+                "pdf_index": source.pdf_index,
+                "source_role": source.source_role,
+                "zotero_parent_key": source.zotero_parent_key,
+                "zotero_attachment_key": source.zotero_attachment_key,
+                "file_hash": document.file_hash,
+                "extractor_fingerprint": document.extractor_fingerprint,
+                "pdf_page_index": page.pdf_page_index,
+                "printed_page_label": page.printed_page_label,
+                "page_text_hash": page.page_text_hash,
+                "normalized_text": page.normalized_text,
+                "extraction_warnings": list(page.extraction_warnings),
+            }
+
+
+def _chunk_metadata(chunk, source, generation_id):
+    return {
+        "schema_version": chunk.schema_version,
+        "generation_id": generation_id,
+        "paper_id": chunk.paper_id,
+        "file_id": chunk.file_id,
+        "source_type": "pdf",
+        "source_role": source.source_role,
+        "pdf_index": source.pdf_index,
+        "pdf_filename": source.pdf_filename or "",
+        "pdf_path": source.declared_path or "",
+        "is_main": chunk.is_main,
+        "is_si": chunk.is_si,
+        "file_hash": chunk.file_hash,
+        "zotero_parent_key": source.zotero_parent_key or "",
+        "zotero_attachment_key": source.zotero_attachment_key or "",
+        "identity_source": source.identity_source,
+        "start_page": chunk.start_page,
+        "end_page": chunk.end_page,
+        "text_hash": chunk.text_hash,
+        "extractor_fingerprint": chunk.extractor_fingerprint,
+        "chunker_fingerprint": chunk.chunker_fingerprint,
+        "section_path_json": _canonical_json(list(chunk.section_path)),
+        "source_spans_json": _canonical_json(
+            [span.to_dict() for span in chunk.source_spans]
+        ),
+        "previous_chunk_id": chunk.previous_chunk_id or "",
+        "next_chunk_id": chunk.next_chunk_id or "",
+        "extraction_warnings_json": _canonical_json(
+            list(chunk.extraction_warnings)
+        ),
+    }
+
+
+def _write_candidate(
+    *,
+    client,
+    store,
+    generation,
+    plan,
+    embed_index_text,
+    atomic_write_text,
+):
+    generation_id = generation["generation_id"]
+    generation_path = store.generation_path(generation)
+    pages_text = "".join(
+        _canonical_json(record) + "\n"
+        for record in _page_records(plan, generation_id)
     )
-    ensure_papers_id_schema(col, expected_metadata)
+    atomic_write_text(generation_path / "pages.jsonl", pages_text)
 
-    total_groups = len(pdf_groups)
-    print(f"Total groups: {total_groups}")
-    print(f"Already processed: {len(processed)}")
-    print(f"Remaining: {total_groups - len(processed)}")
+    collection = client.create_collection(
+        name=generation["collection_name"],
+        metadata={
+            "generation_id": generation_id,
+            "id_schema": "canonical-pdf-v1",
+            "hnsw:space": "cosine",
+        },
+    )
+    sources = _source_lookup(plan)
+    items = [
+        (
+            chunk.chunk_id,
+            chunk.text,
+            _chunk_metadata(chunk, sources[chunk.file_id], generation_id),
+            embed_index_text(chunk.text),
+        )
+        for chunk in plan.chunks
+    ]
+    for offset in range(0, len(items), 100):
+        batch = items[offset : offset + 100]
+        collection.add(
+            ids=[item[0] for item in batch],
+            documents=[item[1] for item in batch],
+            metadatas=[item[2] for item in batch],
+            embeddings=[item[3] for item in batch],
+        )
+    expected_ids = {chunk.chunk_id for chunk in plan.chunks}
+    stored = collection.get(ids=sorted(expected_ids), include=[])
+    if collection.count() != len(plan.chunks) or set(stored["ids"]) != expected_ids:
+        raise PdfSourceError("candidate collection does not contain every prepared chunk")
 
-    for group_idx, pdf_group in enumerate(pdf_groups, 1):
-        # 计算本组组合hash
-        group_hash = get_combined_hash(pdf_group)
-        
-        if group_hash in processed:
-            print(f"\n[Group {group_idx}/{total_groups}] SKIP (already processed)")
-            continue
-        
-        print(f"\n[Group {group_idx}/{total_groups}] Processing {len(pdf_group)} PDF(s)...")
-        
-        # 查询 Zotero parent_key（用主文PDF查）
-        parent_key = get_parent_key_by_pdf_path(pdf_group[0]) if pdf_group else None
-        if parent_key:
-            print(f"  [Zotero] parent_key: {parent_key}")
-        
-        group_chunks_count = 0
-        group_had_errors = False
 
-        for file_idx, pdf_path in enumerate(pdf_group):
-            if not os.path.exists(pdf_path):
-                print(f"  [SKIP] File not found: {os.path.basename(pdf_path)}")
-                continue
-            
-            filename = os.path.basename(pdf_path)
-            is_main = (file_idx == 0)
-            doc_type = "MAIN" if is_main else "SI"
-            print(f"  - [{doc_type}] {filename}")
-            
-            try:
-                # 提取文本（自动截断参考文献）
-                full_text = extract_text_pdfplumber(pdf_path)
-                
-                if not full_text.strip():
-                    print(f"    [WARNING] No text extracted")
-                    continue
-                
-                # 分块
-                chunks = chunk_text(
-                    full_text,
-                    chunk_size=CHUNK_SIZE,
-                    chunk_step=CHUNK_STEP,
-                    min_chunk_len=MIN_CHUNK_LEN,
-                )
-                
-                if not chunks:
-                    print(f"    [WARNING] No valid chunks")
-                    continue
-                
-                # Content-addressed IDs remain stable when a newly generated
-                # note sorts before existing notes or PDF order changes.
-                file_hash = get_file_hash(pdf_path)
-                ids = build_chunk_ids(group_hash, file_hash, len(chunks))
-                metas = [{
-                    "pdf_path": pdf_path,
-                    "pdf_filename": filename,
-                    "paper_group": group_idx,      # 组编号（1-6，对应6篇笔记）
-                    "file_index": file_idx,        # 组内文件序号（0=主文）
-                    "chunk_index": k,
-                    "is_main": is_main,            # 是否主文
-                    "is_si": not is_main,          # 是否SI
-                    "group_hash": group_hash[:16], # 组hash前缀
-                    "file_hash": file_hash,
-                    "id_schema": PAPERS_ID_SCHEMA,
-                    "zotero_parent_key": parent_key or ""  # Zotero父条目key
-                } for k in range(len(chunks))]
+def _optional_env_path(name):
+    value = os.environ.get(name, "").strip()
+    return Path(os.path.expandvars(os.path.expanduser(value))) if value else None
 
-                # Stale-chunk cleanup: when a paper's content changes, its
-                # group_hash changes; without this delete the old chunks
-                # would linger as duplicate semantic content. We key on
-                # pdf_path because that's the stable identity across content
-                # revisions. ChromaDB 1.5.5 (Rust backend) returns silently
-                # on a 0-match delete, so no try/except is needed.
-                col.delete(where={"pdf_path": pdf_path})
 
-                col.add(documents=chunks, ids=ids, metadatas=metas)
-                print(f"    [OK] {len(chunks)} chunks")
-                group_chunks_count += len(chunks)
-                
-            except KeyboardInterrupt:
-                print(f"\n[INTERRUPTED] Group {group_idx} partially processed.")
-                print("Run again to continue from this group.")
-                return
-            except Exception as e:
-                print(f"    [ERROR] {e}")
-                group_had_errors = True
+def _build_contract(plan, embedding_contract, implementation_contract):
+    inventory = _inventory_payload(plan)
+    inventory_hash = hashlib.sha256(
+        (_canonical_json(inventory) + "\n").encode("utf-8")
+    ).hexdigest()
+    implementation_files = [
+        Path(__file__),
+        Path(__file__).with_name("pdf_sources.py"),
+        Path(__file__).with_name("pdf_ir.py"),
+        Path(__file__).with_name("pdf_baseline.py"),
+        Path(__file__).with_name("index_generation.py"),
+    ]
+    return {
+        "embedding": embedding_contract(),
+        "pipeline": implementation_contract(
+            implementation_files,
+            {
+                "chunk_size": CHUNK_SIZE,
+                "chunk_step": CHUNK_STEP,
+                "min_chunk_len": MIN_CHUNK_LEN,
+                "source_set_fingerprint": plan.source_set_fingerprint,
+                "source_inventory_sha256": inventory_hash,
+                "runtime_versions": {
+                    "pdfplumber": importlib.metadata.version("pdfplumber"),
+                },
+                "extractor_fingerprints": sorted(
+                    {document.extractor_fingerprint for document in plan.documents}
+                ),
+                "chunker_fingerprints": sorted(
+                    {chunk.chunker_fingerprint for chunk in plan.chunks}
+                ),
+            },
+        ),
+    }
 
-        # 本组全部处理完成才写入 ledger。任何一个文件抽取失败都不记账，
-        # 否则失败的那个 PDF 永远不会被重试（组 hash 已被标记为完成）。
-        if group_had_errors:
-            print(f"  [WARNING] Group had file errors; NOT recording in ledger (will retry next run)")
-        elif group_chunks_count > 0:
-            with open(LEDGER_PATH, 'a', encoding='utf-8') as f:
-                f.write(group_hash + '\n')
-            processed.add(group_hash)
-            print(f"  [GROUP DONE] Total {group_chunks_count} chunks")
-        else:
-            print(f"  [WARNING] No chunks extracted from this group")
 
-    print(f"\n[SUMMARY] Total chunks in collection: {col.count()}")
+def _record_failed_attempt(store, generation, error, sources=None):
+    if store is None:
+        return
+    try:
+        with store.writer_lock():
+            attempt = generation or store.begin({}, sources or [])
+            store.fail(attempt, error)
+    except Exception:
+        # Preserve the original build error when status recording itself fails.
+        pass
+
+
+def _active_generation_usable(store, client, active):
+    if not active or active.get("item_count", 0) <= 0:
+        return False
+    try:
+        store.validate_artifacts(active)
+        collection = client.get_collection(active["collection_name"])
+        metadata = collection.metadata or {}
+        return (
+            collection.count() == active["item_count"]
+            and metadata.get("generation_id") == active["generation_id"]
+        )
+    except Exception:
+        return False
+
+
+def main(argv=None):
+    generation = None
+    store = None
+    failure_sources = []
+    try:
+        args = _parse_args(argv)
+        try:
+            from .index_generation import (
+                GenerationStore,
+                atomic_write_text,
+                implementation_contract,
+            )
+        except ImportError:
+            from index_generation import (
+                GenerationStore,
+                atomic_write_text,
+                implementation_contract,
+            )
+
+        store = GenerationStore(CHROMA_PATH, COLLECTION_NAME)
+        plan = prepare_pdf_build(
+            NOTES_DIR,
+            zotero_db=ZOTERO_DB,
+            zotero_data_dir=_optional_env_path("ZOTERO_DATA_DIR"),
+            linked_attachment_base=_optional_env_path("ZOTERO_ATTACHMENT_BASE_DIR"),
+            chunk_size=CHUNK_SIZE,
+            chunk_step=CHUNK_STEP,
+            min_chunk_len=MIN_CHUNK_LEN,
+        )
+        failure_sources = _inventory_payload(plan)
+        if not plan.publishable:
+            with store.writer_lock():
+                generation = store.begin({}, failure_sources)
+                _validate_prepared_build(plan)
+
+        import chromadb
+        try:
+            from .embedding_client import (
+                embedding_contract,
+                embed_index_text,
+                split_embedding_text,
+            )
+        except ImportError:
+            from embedding_client import (
+                embedding_contract,
+                embed_index_text,
+                split_embedding_text,
+            )
+
+        plan = split_prepared_chunks_for_embedding(plan, split_embedding_text)
+        sources = _inventory_payload(plan)
+        failure_sources = sources
+        contract = _build_contract(plan, embedding_contract, implementation_contract)
+        client = chromadb.PersistentClient(path=str(CHROMA_PATH))
+        with store.writer_lock():
+            active = store.load_active()
+            if (
+                plan.publishable
+                and not args.rebuild
+                and store.same_inputs(active, contract, sources)
+                and _active_generation_usable(store, client, active)
+            ):
+                print(f"[SKIP] Active PDF generation already matches inputs: {active['generation_id']}")
+                return 0
+            generation = store.begin(contract, sources)
+            _validate_prepared_build(plan)
+            _write_candidate(
+                client=client,
+                store=store,
+                generation=generation,
+                plan=plan,
+                embed_index_text=embed_index_text,
+                atomic_write_text=atomic_write_text,
+            )
+            if active and not args.allow_removals:
+                current_ids = {source["source_id"] for source in sources}
+                removed = [source["source_id"] for source in active["sources"] if source["source_id"] not in current_ids]
+                if removed:
+                    raise PdfSourceError("Attachment withdrawals require --allow-removals: " + ", ".join(removed))
+            store.publish(
+                generation,
+                item_count=len(plan.chunks),
+                artifacts={"pages": "pages.jsonl"},
+                allow_removals=args.allow_removals,
+            )
+            print(
+                f"[OK] Published PDF generation {generation['generation_id']} "
+                f"with {len(plan.chunks)} chunks"
+            )
+            return 0
+    except KeyboardInterrupt:
+        _record_failed_attempt(
+            store, generation, "interrupted", failure_sources
+        )
+        print("[INTERRUPTED] PDF build did not change the active generation.")
+        return 130
+    except Exception as exc:
+        _record_failed_attempt(store, generation, exc, failure_sources)
+        print(f"[ERROR] PDF build failed; active generation unchanged: {exc}")
+        return 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

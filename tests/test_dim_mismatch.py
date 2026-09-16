@@ -77,7 +77,8 @@ def test_detect_dim_mismatch_flags_dim_change(embedding_client, monkeypatch):
     assert mismatch is True
     assert "2560" in msg
     assert "1024" in msg
-    assert "rm -rf" in msg
+    assert "rm -rf" not in msg
+    assert "old active generation" in msg
     assert "build_notes_db.py" in msg
     assert "build_pdf_db.py" in msg
 
