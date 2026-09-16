@@ -17,14 +17,19 @@ from benchmarks.researchqa_chunking import (
     chunk_pdf,
 )
 from benchmarks.researchqa_retrieval import (
+    BM25Index,
     RERANKER_MODEL_ID,
     RERANKER_REVISION,
+)
+from benchmarks.researchqa_scoring import (
+    STRICT_EVIDENCE_PROTOCOL_VERSION,
+    evidence_alternative_id,
 )
 from benchmarks.researchqa_strategy import (
     ConfirmationSelection,
     NOTE_ROUTE_ELIGIBILITY_POLICY,
     REFERENCE_EXACT_METHOD,
-    REFERENCE_MATCH_REVISION,
+    REFERENCE_FUZZY_METHOD,
     REFERENCE_PAGE_HINT_METHOD,
     REFERENCE_SECTION_HINT_METHOD,
     R1_RETRIEVER_FUSION_ID,
@@ -278,12 +283,15 @@ def test_reference_mapping_uses_nfkc_exact_then_versioned_fuzzy(tmp_path):
     groups = bundle.mappings[0].groups
 
     assert groups[0].alternatives[0].match_method == REFERENCE_EXACT_METHOD
-    assert groups[1].alternatives[0].match_method == REFERENCE_MATCH_REVISION
-    assert groups[0].mapped and groups[1].mapped
+    assert groups[1].alternatives[0].match_method == REFERENCE_FUZZY_METHOD
+    assert groups[0].mapped
+    assert groups[1].alternatives[0].verification_state == "weak_hint"
+    assert not groups[1].mapped
     assert not groups[2].mapped
-    assert bundle.unmapped[0].alternatives == (
-        "Completely unrelated lunar evidence.",
-    )
+    assert [item.alternatives for item in bundle.unmapped] == [
+        ("Alpha result was 43 units under the controlled condition.",),
+        ("Completely unrelated lunar evidence.",),
+    ]
 
 
 def test_page_aligned_reference_mapping_is_deterministic(tmp_path):
@@ -314,6 +322,30 @@ def test_page_aligned_reference_mapping_is_deterministic(tmp_path):
     )
 
     assert second.to_dict() == first.to_dict()
+
+
+def test_hybrid_empty_sparse_branch_returns_dense_hits_unchanged():
+    passages = {"a": "alpha", "b": "beta"}
+    index = strategy._SearchIndex(
+        passages=passages,
+        embeddings={"a": (1.0, 0.0), "b": (0.0, 1.0)},
+        bm25=BM25Index(passages),
+    )
+    dense = strategy._search(
+        index,
+        retriever="dense",
+        query="term-not-present",
+        query_embedding=(1.0, 0.0),
+    )
+    hybrid = strategy._search(
+        index,
+        retriever="hybrid-rrf",
+        query="term-not-present",
+        query_embedding=(1.0, 0.0),
+    )
+
+    assert hybrid == dense
+    assert all(hit.source == "dense" for hit in hybrid)
 
 
 def test_reference_mapping_uses_researchqa_page_hint_for_version_drift(
@@ -349,7 +381,9 @@ def test_reference_mapping_uses_researchqa_page_hint_for_version_drift(
     )
     alternative = bundle.mappings[0].groups[0].alternatives[0]
 
-    assert alternative.mapped
+    assert not alternative.mapped
+    assert alternative.loose_mapped
+    assert alternative.verification_state == "weak_hint"
     assert alternative.match_method == REFERENCE_PAGE_HINT_METHOD
 
 
@@ -394,8 +428,250 @@ def test_reference_mapping_uses_section_hint_without_page_hint(tmp_path):
     )
     alternative = bundle.mappings[0].groups[0].alternatives[0]
 
-    assert alternative.mapped
+    assert not alternative.mapped
+    assert alternative.loose_mapped
+    assert alternative.verification_state == "weak_hint"
     assert alternative.match_method == REFERENCE_SECTION_HINT_METHOD
+
+
+def test_agent_adjudication_is_validated_against_canonical_document(tmp_path):
+    _write_native_ir(
+        tmp_path,
+        "W1",
+        ["Methods\nObserved evidence in the available edition."],
+    )
+    document = load_main_documents(
+        tmp_path,
+        expected_paper_ids=["https://openalex.org/W1"],
+    )["W1"]
+    chunks = chunk_pdf(document, "pdf-fixed-400", is_main=True).chunks
+    question = {
+        "row_id": "q-adjudicated",
+        "paper_id": "W1",
+        "domain": "d",
+        "question_type": "lookup",
+        "question": "q",
+        "metadata_page_hint": 1,
+        "expected_references": [
+            {"alternatives": ["Wording from another edition."]}
+        ],
+    }
+    page = document.pages[0]
+    evidence_text = "Observed evidence in the available edition."
+    start = page.normalized_text.index(evidence_text)
+    alternative_id = evidence_alternative_id("q-adjudicated", 0, 0)
+    sidecar = {
+        "schema_version": 1,
+        "protocol_version": STRICT_EVIDENCE_PROTOCOL_VERSION,
+        "adjudications": {
+            alternative_id: {
+                "verification_state": "adjudicated",
+                "gold_version": "audit-2026-09-17-v1",
+                "provenance": {
+                    "label": "agent_adjudicated",
+                    "source": "gold-audit.json",
+                    "source_revision": "audit-sha-1",
+                },
+                "spans": [
+                    {
+                        "file_id": page.file_id,
+                        "file_hash": document.file_hash,
+                        "pdf_page_index": 0,
+                        "char_start_in_normalized_page": start,
+                        "char_end_in_normalized_page": start + len(evidence_text),
+                        "page_text_hash": page.page_text_hash,
+                        "evidence_text": evidence_text,
+                        "evidence_text_hash": _sha(evidence_text),
+                    }
+                ],
+            }
+        },
+    }
+
+    mapping = map_all_references(
+        [question],
+        chunks,
+        documents={"W1": document},
+        gold_adjudications=sidecar,
+        overall_minimum=1.0,
+        per_paper_minimum=1.0,
+    )
+    alternative = mapping.mappings[0].groups[0].alternatives[0]
+
+    assert alternative.mapped
+    assert alternative.verification_state == "adjudicated"
+    assert alternative.gold_version == "audit-2026-09-17-v1"
+    assert mapping.coverage.passed
+
+    sidecar["adjudications"][alternative_id]["spans"][0][
+        "page_text_hash"
+    ] = "0" * 64
+    with pytest.raises(StrategyContractError, match="canonical IR"):
+        map_all_references(
+            [question],
+            chunks,
+            documents={"W1": document},
+            gold_adjudications=sidecar,
+            overall_minimum=0.0,
+            per_paper_minimum=0.0,
+        )
+
+
+def test_exact_gold_span_is_independent_of_chunker_boundaries(tmp_path):
+    documents, questions = _fixture_corpus(tmp_path)
+    document = documents["W1"]
+    question = questions[0]
+    small = map_all_references(
+        [question],
+        chunk_pdf(document, "pdf-fixed-400", is_main=True).chunks,
+        documents={"W1": document},
+        overall_minimum=0.0,
+        per_paper_minimum=0.0,
+    )
+    large = map_all_references(
+        [question],
+        chunk_pdf(document, "pdf-fixed-800", is_main=True).chunks,
+        documents={"W1": document},
+        overall_minimum=0.0,
+        per_paper_minimum=0.0,
+    )
+
+    assert (
+        small.mappings[0].groups[0].alternatives[0].gold_spans
+        == large.mappings[0].groups[0].alternatives[0].gold_spans
+    )
+
+
+def test_alphanumeric_exact_does_not_verify_critical_scientific_conflicts(
+    tmp_path,
+):
+    _write_native_ir(
+        tmp_path,
+        "W1",
+        [
+            "Decimal dose was 12 mg. "
+            "Signed change was 5 percent. "
+            "Condition threshold was >5 C. "
+            "Signal was active."
+        ],
+    )
+    document = load_main_documents(
+        tmp_path,
+        expected_paper_ids=["https://openalex.org/W1"],
+    )["W1"]
+    chunks = chunk_pdf(document, "pdf-fixed-400", is_main=True).chunks
+    question = {
+        "row_id": "q-critical-conflicts",
+        "paper_id": "W1",
+        "domain": "d",
+        "question_type": "adversarial",
+        "question": "q",
+        "expected_references": [
+            {"alternatives": ["Decimal dose was 1.2 mg."]},
+            {"alternatives": ["Signed change was -5 percent."]},
+            {"alternatives": ["Condition threshold was <5 C."]},
+            {"alternatives": ["Signal was ¬active."]},
+        ],
+    }
+
+    mapping = map_all_references(
+        [question],
+        chunks,
+        documents={"W1": document},
+        overall_minimum=0.0,
+        per_paper_minimum=0.0,
+    ).mappings[0]
+
+    assert mapping.mapped_groups == 0
+    for group in mapping.groups:
+        alternative = group.alternatives[0]
+        assert alternative.verification_state == "weak_hint"
+        assert alternative.match_method == (
+            "nfkc-alnum-exact-critical-conflict-weak-v1"
+        )
+        assert alternative.match_diagnostics["reason"] == (
+            "critical_signature_mismatch"
+        )
+
+
+def test_exact_alignment_respects_numeric_boundaries_and_adjacent_signs(
+    tmp_path,
+):
+    _write_native_ir(
+        tmp_path,
+        "W1",
+        ["Voltage was -5 mV. Yield was 42%. Count was 15."],
+    )
+    document = load_main_documents(
+        tmp_path,
+        expected_paper_ids=["https://openalex.org/W1"],
+    )["W1"]
+    chunks = chunk_pdf(document, "pdf-fixed-400", is_main=True).chunks
+    question = {
+        "row_id": "q-boundaries",
+        "paper_id": "W1",
+        "domain": "d",
+        "question_type": "adversarial",
+        "question": "q",
+        "expected_references": [
+            {"alternatives": ["Voltage was 5 mV."]},
+            {"alternatives": ["Voltage was -5 mV."]},
+            {"alternatives": ["Yield was 42%."]},
+            {"alternatives": ["5"]},
+        ],
+    }
+
+    mapping = map_all_references(
+        [question],
+        chunks,
+        documents={"W1": document},
+        overall_minimum=0.0,
+        per_paper_minimum=0.0,
+    ).mappings[0]
+    unsigned, signed, percent, substring = (
+        group.alternatives[0] for group in mapping.groups
+    )
+
+    assert unsigned.verification_state == "weak_hint"
+    assert unsigned.match_diagnostics["reason"] == (
+        "critical_signature_mismatch"
+    )
+    assert signed.verification_state == "exact"
+    assert signed.gold_spans[0].evidence_text == "Voltage was -5 mV"
+    assert percent.verification_state == "exact"
+    assert percent.gold_spans[0].evidence_text == "Yield was 42%"
+    assert substring.verification_state != "exact"
+
+
+@pytest.mark.parametrize("source, reference", [
+    ("Change was - 5 mV.", "Change was + 5 mV."),
+    ("Change was - 5 mV.", "Change was 5 mV."),
+    ("Condition x ≠ 5.", "Condition x 5."),
+    ("Value about ~ 5.", "Value about 5."),
+    ("Ratio x/y applies.", "Ratio xy applies."),
+    ("Difference x-y applies.", "Difference xy applies."),
+])
+def test_exact_alignment_retains_spaced_signs_and_operators(tmp_path, source, reference):
+    _write_native_ir(tmp_path, "W1", [source])
+    document = load_main_documents(tmp_path, expected_paper_ids=["W1"])["W1"]
+    question = {
+        "row_id": "q-operators", "paper_id": "W1", "domain": "d",
+        "question_type": "adversarial", "question": "q",
+        "expected_references": [{"alternatives": [reference]}],
+    }
+    mapping = map_all_references(
+        [question], chunk_pdf(document, "pdf-fixed-400", is_main=True).chunks,
+        documents={"W1": document}, overall_minimum=0.0, per_paper_minimum=0.0,
+    ).mappings[0]
+    assert mapping.mapped_groups == 0
+    assert mapping.groups[0].alternatives[0].verification_state == "weak_hint"
+
+
+def test_critical_signature_preserves_safe_typographic_equivalence():
+    signature = strategy._critical_evidence_signature
+    assert signature("compara-\nble change - 5 mV") == signature("comparable change -5 mV")
+    assert signature("x ≠ 5 and y ≈ 2") == signature("x != 5 and y ~ 2")
+    assert signature("x-\ny") != signature("xy")
 
 
 def test_candidate_plan_is_orthogonal_and_confirmation_is_capped_at_16():
@@ -1122,6 +1398,7 @@ def test_resume_question_result_rejects_non_mapping_retrieval_diagnostics():
         "pre_rerank_metrics": {},
         "metrics": {"coverage_ndcg_at_10": 1.0},
         "retrieval_diagnostics": [["ranking_changed", False]],
+        "metrics_protocol_version": STRICT_EVIDENCE_PROTOCOL_VERSION,
     }
 
     with pytest.raises(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from benchmarks import researchqa_sweep as sweep_module
 from benchmarks.overnight import fingerprint_payload
 from benchmarks.researchqa_models import ModelTransportError
 from benchmarks.researchqa_retrieval import (
@@ -32,9 +34,12 @@ from benchmarks.researchqa_sweep import (
     _candidate_input_fingerprint,
     _candidate_progress_path,
     _empty_candidate_progress,
+    _implementation_fingerprints,
+    _load_candidate_record,
     _load_candidate_progress,
     _pareto_frontier,
     _relative_guardrail_diagnostics,
+    _write_candidate_record,
     _write_candidate_progress,
     run_extension_candidate,
     run_strategy_sweep,
@@ -222,7 +227,25 @@ def _candidate_result(candidate, *, incomplete=False, alternate_group=False):
         domain="domain-a",
         question_type="lookup",
         reference_groups=[{"alternatives": ["Alpha evidence."]}],
-        mapper=lambda _text: "chunk-alpha",
+        mapper=lambda _text: {
+            "mapped_item_ids": ["chunk-alpha"],
+            "match_method": "exact-test-v1",
+            "match_score": 1.0,
+            "verification_state": "exact",
+            "gold_version": "test-gold-v1",
+            "gold_spans": [
+                {
+                    "file_id": "file-1",
+                    "file_hash": "a" * 64,
+                    "pdf_page_index": 0,
+                    "char_start_in_normalized_page": 0,
+                    "char_end_in_normalized_page": 5,
+                    "page_text_hash": "b" * 64,
+                    "evidence_text": "xxxxx",
+                    "evidence_text_hash": hashlib.sha256(b"xxxxx").hexdigest(),
+                }
+            ],
+        },
     )
     if alternate_group:
         changed_group = replace(mapping.groups[0], group_id="different-group")
@@ -583,6 +606,163 @@ def test_candidate_fingerprint_scopes_reranker_adapter_revision():
 
     assert off_v1 == off_v2
     assert enabled_v1 != enabled_v2
+
+
+def test_candidate_fingerprint_binds_runtime_dependencies(monkeypatch):
+    candidate = generate_orthogonal_candidates(_config()).stages[
+        "pdf-chunker"
+    ][0]
+    common = {
+        "config_fingerprint": "config-v1",
+        "documents": _documents(),
+        "questions": QUESTIONS,
+        "notes": {"W1": "# Frozen note\n\nAlpha evidence. [Main p.1]"},
+        "embedder": _FakeEmbedder([]),
+        "reranker": _FakeReranker([]),
+    }
+    monkeypatch.setattr(
+        sweep_module,
+        "_runtime_dependency_fingerprint",
+        lambda _candidate: {
+            "payload": {"python": "3.11.1"},
+            "fingerprint": "v1",
+        },
+    )
+    first = _candidate_input_fingerprint(candidate, **common)
+    monkeypatch.setattr(
+        sweep_module,
+        "_runtime_dependency_fingerprint",
+        lambda _candidate: {
+            "payload": {"python": "3.11.2"},
+            "fingerprint": "v2",
+        },
+    )
+    second = _candidate_input_fingerprint(candidate, **common)
+
+    assert first != second
+
+
+def test_implementation_fingerprint_layers_scoring_from_retrieval(
+    tmp_path,
+    monkeypatch,
+):
+    paths = {
+        name: tmp_path / f"{name}.py"
+        for name in (
+            "chunking",
+            "models",
+            "pdf_baseline",
+            "pdf_ir",
+            "retrieval",
+            "scoring",
+            "strategy",
+            "sweep",
+        )
+    }
+    for name, path in paths.items():
+        path.write_text(f"# {name} v1\n", encoding="utf-8")
+    monkeypatch.setattr(sweep_module, "_IMPLEMENTATION_SOURCE_PATHS", paths)
+
+    before = _implementation_fingerprints()
+    paths["scoring"].write_text("# scoring v2\n", encoding="utf-8")
+    after = _implementation_fingerprints()
+
+    assert before["layers"]["retrieval"] == after["layers"]["retrieval"]
+    assert before["layers"]["scoring"] != after["layers"]["scoring"]
+    assert before["result"] != after["result"]
+
+    paths["pdf_ir"].write_text("# pdf_ir v2\n", encoding="utf-8")
+    changed_ir = _implementation_fingerprints()
+    assert after["layers"]["retrieval"] != changed_ir["layers"]["retrieval"]
+
+
+def test_completed_candidate_cache_rejects_code_change_and_missing_fingerprint(
+    tmp_path,
+    monkeypatch,
+):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    paths = {
+        name: source_root / f"{name}.py"
+        for name in (
+            "chunking",
+            "models",
+            "pdf_baseline",
+            "pdf_ir",
+            "retrieval",
+            "scoring",
+            "strategy",
+            "sweep",
+        )
+    }
+    for name, path in paths.items():
+        path.write_text(f"# {name} v1\n", encoding="utf-8")
+    monkeypatch.setattr(sweep_module, "_IMPLEMENTATION_SOURCE_PATHS", paths)
+    monkeypatch.setattr(
+        sweep_module,
+        "_source_audit",
+        lambda: {"git_commit": "test", "dirty_sources": ()},
+    )
+    candidate = generate_orthogonal_candidates(_config()).stages[
+        "pdf-chunker"
+    ][0]
+    payload = {
+        "candidate": candidate.to_dict(),
+        "execution_complete": True,
+        "guardrail_finalized": True,
+        "guardrails_passed": True,
+        "mapping": {"coverage": {"passed": True}},
+        "completed_paper_ids": ["W1"],
+        "completed_question_ids": ["q-1"],
+    }
+    result_path = tmp_path / "candidate.json"
+    _write_candidate_record(
+        result_path,
+        candidate=candidate,
+        input_fingerprint="input-v1",
+        status="completed",
+        payload=payload,
+    )
+    load = lambda: _load_candidate_record(
+        result_path,
+        candidate=candidate,
+        input_fingerprint="input-v1",
+        expected_paper_ids=("W1",),
+        expected_question_ids=("q-1",),
+    )
+
+    assert load() is not None
+
+    original = json.loads(result_path.read_text(encoding="utf-8"))
+    for field in (
+        "implementation_fingerprints",
+        "runtime_dependencies",
+        "strategy_fingerprint",
+    ):
+        missing = dict(original)
+        missing.pop(field)
+        result_path.write_text(json.dumps(missing), encoding="utf-8")
+        assert load() is None
+
+    result_path.write_text(json.dumps(original), encoding="utf-8")
+    dependency_fingerprint = sweep_module._runtime_dependency_fingerprint
+    monkeypatch.setattr(
+        sweep_module,
+        "_runtime_dependency_fingerprint",
+        lambda _candidate: {
+            "payload": {"python": "changed"},
+            "fingerprint": "changed",
+        },
+    )
+    assert load() is None
+
+    monkeypatch.setattr(
+        sweep_module,
+        "_runtime_dependency_fingerprint",
+        dependency_fingerprint,
+    )
+    paths["retrieval"].write_text("# retrieval v2\n", encoding="utf-8")
+    assert load() is None
 
 
 def test_candidate_progress_is_atomic_hash_verified_and_fingerprint_bound(

@@ -143,15 +143,22 @@ def embedding_cache_key(
     *,
     model_digest: str,
     normalization_revision: str,
+    implementation_fingerprint: str,
     text: str,
 ) -> str:
     """Build the per-text cache key required by the RQ2 contract."""
-    if not model_digest or not normalization_revision:
-        raise ValueError("model_digest and normalization_revision are required")
+    if not all(
+        (model_digest, normalization_revision, implementation_fingerprint)
+    ):
+        raise ValueError(
+            "model digest, normalization revision, and implementation "
+            "fingerprint are required"
+        )
     return ":".join(
         (
             model_digest,
             normalization_revision,
+            implementation_fingerprint,
             text_sha256(text),
         )
     )
@@ -161,6 +168,7 @@ def batch_embedding_cache_key(
     *,
     model_digest: str,
     normalization_revision: str,
+    implementation_fingerprint: str,
     texts: Sequence[str],
 ) -> str:
     """Hash an ordered batch of per-text cache keys for artifact reuse."""
@@ -170,6 +178,7 @@ def batch_embedding_cache_key(
     for key in embedding_cache_keys(
         model_digest=model_digest,
         normalization_revision=normalization_revision,
+        implementation_fingerprint=implementation_fingerprint,
         texts=texts,
     ):
         encoded = key.encode("utf-8")
@@ -182,6 +191,7 @@ def embedding_cache_keys(
     *,
     model_digest: str,
     normalization_revision: str,
+    implementation_fingerprint: str,
     texts: Sequence[str],
 ) -> tuple[str, ...]:
     """Return one cache key per text while preserving batch order."""
@@ -189,6 +199,7 @@ def embedding_cache_keys(
         embedding_cache_key(
             model_digest=model_digest,
             normalization_revision=normalization_revision,
+            implementation_fingerprint=implementation_fingerprint,
             text=text,
         )
         for text in texts
@@ -271,14 +282,15 @@ class BM25Index:
         *,
         top_k: int | None = 10,
     ) -> tuple[RetrievalHit, ...]:
-        """Rank all documents by BM25 with stable ID tie-breaking."""
+        """Rank positive-evidence documents with stable ID tie-breaking."""
         hits = [
             RetrievalHit(
                 item_id=document_id,
-                score=self.score(query, document_id),
+                score=score,
                 source="bm25",
             )
             for document_id in self.document_ids
+            if (score := self.score(query, document_id)) > 0.0
         ]
         return _rank_hits(hits, top_k)
 

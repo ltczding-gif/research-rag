@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 import unicodedata
 from collections import defaultdict
@@ -64,24 +65,30 @@ from benchmarks.researchqa_retrieval import (
 from benchmarks.researchqa_scoring import (
     CandidateSummary,
     EvidenceMapping,
+    GoldEvidenceSpan,
     MacroAggregate,
     MappingCoverage,
     QuestionScore,
+    RetrievedEvidenceSpan,
+    STRICT_EVIDENCE_PROTOCOL_VERSION,
     canonical_fingerprint,
-    evidence_group_recall_at_k,
+    evidence_alternative_id,
     evaluate_mapping_coverage,
     macro_aggregate,
     map_reference_groups,
     rank_candidates,
     score_ranking,
+    strict_evidence_group_recall_at_k,
 )
 from service.pdf_ir import CanonicalDocument, DocumentPage, hash_text
 
 
-REFERENCE_MATCH_REVISION = "nfkc-alnum-page-span-v2"
-REFERENCE_EXACT_METHOD = "nfkc-alnum-page-span-exact-v2"
-REFERENCE_PAGE_HINT_METHOD = "researchqa-page-hint-best-chunk-v2"
-REFERENCE_SECTION_HINT_METHOD = "researchqa-section-hint-best-chunk-v2"
+REFERENCE_MATCH_REVISION = "nfkc-alnum-page-span-v3"
+REFERENCE_EXACT_METHOD = "nfkc-alnum-page-span-exact-v3"
+REFERENCE_PAGE_HINT_METHOD = "researchqa-page-hint-weak-v3"
+REFERENCE_SECTION_HINT_METHOD = "researchqa-section-hint-weak-v3"
+REFERENCE_FUZZY_METHOD = "nfkc-alnum-fuzzy-weak-v3"
+REFERENCE_EXACT_GOLD_VERSION = "auto-exact-v1"
 DEFAULT_FUZZY_THRESHOLD = 0.86
 PAPER_SCOPED_RETRIEVAL = "paper-scoped"
 RETRIEVER_IDS = ("dense", "bm25", "hybrid-rrf")
@@ -373,6 +380,37 @@ def _partial_sequence_ratio(left: str, right: str) -> float:
     return best
 
 
+_CRITICAL_NUMBER_RE = re.compile(
+    r"(?<![\w.])(?:[+\-]\s*)?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+\-]?\d+)?",
+    re.IGNORECASE,
+)
+_CRITICAL_OPERATOR_RE = re.compile(r"<=|>=|!=|==|[<>=≤≥≠≈~±+*/×÷^%‰°\-]")
+_NEGATION_RE = re.compile(
+    r"\b(?:no|not|never|neither|nor|without)\b|(?:没有|不|无|未|否)|¬",
+    re.IGNORECASE,
+)
+
+
+def _critical_evidence_signature(text: str) -> Mapping[str, tuple[str, ...]]:
+    """Retain scientific tokens erased by alphanumeric normalization."""
+
+    normalized = unicodedata.normalize("NFKC", text).lower().replace("−", "-")
+    # PDF line-wrap hyphenation is typographic. Keep inline hyphens and
+    # single-letter algebraic subtraction conservative instead of erasing them.
+    normalized = re.sub(
+        r"(?<=[^\W\d_]{2})-[ \t]*\n[ \t]*(?=[^\W\d_]{2})", "", normalized
+    )
+    operators = tuple(
+        {"≤": "<=", "≥": ">=", "≠": "!=", "≈": "~"}.get(value, value)
+        for value in _CRITICAL_OPERATOR_RE.findall(normalized)
+    )
+    return {
+        "numbers": tuple(re.sub(r"\s+", "", match.group(0)) for match in _CRITICAL_NUMBER_RE.finditer(normalized)),
+        "operators": operators,
+        "negations": tuple(match.group(0) for match in _NEGATION_RE.finditer(normalized)),
+    }
+
+
 @dataclass(frozen=True)
 class UnmappedEvidenceGroup:
     row_id: str
@@ -399,7 +437,8 @@ class EvidenceMappingBundle:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
+            "protocol_version": STRICT_EVIDENCE_PROTOCOL_VERSION,
             "revision": self.revision,
             "fuzzy_threshold": self.fuzzy_threshold,
             "coverage": self.coverage.to_dict(),
@@ -415,6 +454,8 @@ class _ReferenceAlignmentContext:
     compact_chunks: Mapping[str, str]
     chunks_by_page: Mapping[int, tuple[ResearchQAChunk, ...]]
     pages: tuple[tuple[str, tuple[int, ...]], ...]
+    page_records: tuple[DocumentPage, ...]
+    file_hash: str | None
 
 
 def _build_reference_alignment_context(
@@ -435,6 +476,8 @@ def _build_reference_alignment_context(
         ):
             chunks_by_page[page_index].append(chunk)
     pages: tuple[tuple[str, tuple[int, ...]], ...] = ()
+    page_records: tuple[DocumentPage, ...] = ()
+    file_hash: str | None = None
     if document is not None:
         if document.paper_id != paper_id:
             raise StrategyContractError(
@@ -444,6 +487,8 @@ def _build_reference_alignment_context(
             _normalize_page_with_offsets(page.normalized_text)
             for page in document.pages
         )
+        page_records = document.pages
+        file_hash = document.file_hash
     return _ReferenceAlignmentContext(
         paper_id=paper_id,
         chunks=paper_chunks,
@@ -456,6 +501,8 @@ def _build_reference_alignment_context(
             for page_index, page_chunks in chunks_by_page.items()
         },
         pages=pages,
+        page_records=page_records,
+        file_hash=file_hash,
     )
 
 
@@ -480,24 +527,108 @@ def _overlapping_chunk_ids(
 
 def _exact_page_span_matches(
     reference: str,
+    original_reference: str,
     context: _ReferenceAlignmentContext,
-) -> tuple[str, ...]:
-    matches: list[str] = []
+) -> tuple[
+    tuple[
+        GoldEvidenceSpan,
+        tuple[str, ...],
+        bool,
+        Mapping[str, object],
+    ],
+    ...,
+]:
+    matches: list[
+        tuple[
+            GoldEvidenceSpan,
+            tuple[str, ...],
+            bool,
+            Mapping[str, object],
+        ]
+    ] = []
+    if context.file_hash is None:
+        return ()
     for page_index, (page_text, offsets) in enumerate(context.pages):
         position = page_text.find(reference)
         while position >= 0:
             start = offsets[position]
             end = offsets[position + len(reference) - 1] + 1
-            matches.extend(
-                _overlapping_chunk_ids(
-                    context,
-                    page_index=page_index,
-                    start=start,
-                    end=end,
+            page = context.page_records[page_index]
+            source_text = page.normalized_text
+            if (
+                (start > 0 and source_text[start - 1].isalnum())
+                or (end < len(source_text) and source_text[end].isalnum())
+            ):
+                position = page_text.find(reference, position + 1)
+                continue
+            evidence_start, evidence_end = _expand_critical_boundaries(
+                source_text,
+                start,
+                end,
+            )
+            evidence_text = source_text[evidence_start:evidence_end]
+            reference_signature = _critical_evidence_signature(
+                original_reference
+            )
+            evidence_signature = _critical_evidence_signature(evidence_text)
+            matches.append(
+                (
+                    GoldEvidenceSpan(
+                        file_id=page.file_id,
+                        file_hash=context.file_hash,
+                        pdf_page_index=page_index,
+                        char_start_in_normalized_page=evidence_start,
+                        char_end_in_normalized_page=evidence_end,
+                        page_text_hash=page.page_text_hash,
+                        evidence_text=evidence_text,
+                        evidence_text_hash=hash_text(evidence_text),
+                    ),
+                    _overlapping_chunk_ids(
+                        context,
+                        page_index=page_index,
+                        start=evidence_start,
+                        end=evidence_end,
+                    ),
+                    reference_signature == evidence_signature,
+                    {
+                        "reference_critical_signature": reference_signature,
+                        "evidence_critical_signature": evidence_signature,
+                    },
                 )
             )
             position = page_text.find(reference, position + 1)
-    return tuple(dict.fromkeys(matches))
+    return tuple(matches)
+
+
+def _expand_critical_boundaries(
+    text: str,
+    start: int,
+    end: int,
+) -> tuple[int, int]:
+    """Include adjacent signs/operators erased from compact alignment."""
+
+    expanded_start = start
+    cursor = start
+    while cursor > 0 and text[cursor - 1].isspace():
+        cursor -= 1
+    operator_start = cursor
+    while operator_start > 0 and text[operator_start - 1] in (
+        "+-−<>=!≤≥≠≈~±¬*/×÷^"
+    ):
+        operator_start -= 1
+    if operator_start < cursor:
+        expanded_start = operator_start
+
+    expanded_end = end
+    cursor = end
+    while cursor < len(text) and text[cursor].isspace():
+        cursor += 1
+    suffix_end = cursor
+    while suffix_end < len(text) and text[suffix_end] in "%‰°":
+        suffix_end += 1
+    if suffix_end > cursor:
+        expanded_end = suffix_end
+    return expanded_start, expanded_end
 
 
 def _best_chunk_matches(
@@ -523,12 +654,163 @@ def _best_chunk_matches(
     return matches, best
 
 
+def _gold_adjudication_records(
+    sidecar: Mapping[str, Any] | None,
+) -> Mapping[str, Mapping[str, Any]]:
+    if sidecar is None:
+        return {}
+    if sidecar.get("schema_version") != 1 or sidecar.get(
+        "protocol_version"
+    ) != STRICT_EVIDENCE_PROTOCOL_VERSION:
+        raise StrategyContractError(
+            "gold adjudication sidecar schema/protocol is unsupported"
+        )
+    records = sidecar.get("adjudications")
+    if not isinstance(records, Mapping) or any(
+        not isinstance(key, str) or not isinstance(value, Mapping)
+        for key, value in records.items()
+    ):
+        raise StrategyContractError(
+            "gold adjudication sidecar must contain an adjudications object"
+        )
+    return records
+
+
+def load_gold_adjudications(path: str | Path) -> Mapping[str, Any]:
+    """Load a strict sidecar; canonical-document validation occurs at mapping."""
+
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(value, Mapping):
+        raise StrategyContractError("gold adjudication sidecar must be an object")
+    _gold_adjudication_records(value)
+    return value
+
+
+def item_source_spans_from_chunks(
+    chunks: Sequence[ResearchQAChunk],
+) -> Mapping[str, tuple[RetrievedEvidenceSpan, ...]]:
+    """Build the strict scorer's stable item-to-source-span lookup."""
+
+    result: dict[str, tuple[RetrievedEvidenceSpan, ...]] = {}
+    for chunk in chunks:
+        spans = tuple(
+            RetrievedEvidenceSpan(
+                file_id=span.file_id,
+                file_hash=chunk.file_hash,
+                pdf_page_index=span.pdf_page_index,
+                char_start_in_normalized_page=(
+                    span.char_start_in_normalized_page
+                ),
+                char_end_in_normalized_page=(
+                    span.char_end_in_normalized_page
+                ),
+                page_text_hash=span.page_text_hash,
+            )
+            for span in chunk.source_spans
+        )
+        previous = result.setdefault(chunk.chunk_id, spans)
+        if previous != spans:
+            raise StrategyContractError(
+                f"duplicate chunk ID has different source spans: {chunk.chunk_id}"
+            )
+    return result
+
+
+def _validated_adjudication(
+    alternative_id: str,
+    record: Mapping[str, Any],
+    context: _ReferenceAlignmentContext,
+) -> Mapping[str, Any]:
+    if record.get("verification_state") != "adjudicated":
+        raise StrategyContractError(
+            f"{alternative_id}: sidecar state must be adjudicated"
+        )
+    gold_version = record.get("gold_version")
+    provenance = record.get("provenance")
+    raw_spans = record.get("spans")
+    if not isinstance(gold_version, str) or not gold_version:
+        raise StrategyContractError(
+            f"{alternative_id}: sidecar gold_version is required"
+        )
+    if (
+        not isinstance(provenance, Mapping)
+        or provenance.get("label") != "agent_adjudicated"
+        or not isinstance(provenance.get("source"), str)
+        or not provenance.get("source")
+        or not isinstance(provenance.get("source_revision"), str)
+        or not provenance.get("source_revision")
+    ):
+        raise StrategyContractError(
+            f"{alternative_id}: agent_adjudicated provenance is required"
+        )
+    if (
+        not isinstance(raw_spans, Sequence)
+        or isinstance(raw_spans, (str, bytes))
+        or not raw_spans
+        or any(not isinstance(span, Mapping) for span in raw_spans)
+    ):
+        raise StrategyContractError(
+            f"{alternative_id}: sidecar spans must be a non-empty list"
+        )
+
+    spans: list[GoldEvidenceSpan] = []
+    item_ids: list[str] = []
+    for raw_span in raw_spans:
+        try:
+            span = GoldEvidenceSpan(**raw_span)
+        except (TypeError, ValueError) as exc:
+            raise StrategyContractError(
+                f"{alternative_id}: invalid adjudicated span: {exc}"
+            ) from exc
+        if context.file_hash is None or span.file_hash != context.file_hash:
+            raise StrategyContractError(
+                f"{alternative_id}: adjudicated file hash differs from canonical IR"
+            )
+        if not 0 <= span.pdf_page_index < len(context.page_records):
+            raise StrategyContractError(
+                f"{alternative_id}: adjudicated page index is out of range"
+            )
+        page = context.page_records[span.pdf_page_index]
+        if (
+            span.file_id != page.file_id
+            or span.page_text_hash != page.page_text_hash
+            or span.char_end_in_normalized_page > len(page.normalized_text)
+            or page.normalized_text[
+                span.char_start_in_normalized_page :
+                span.char_end_in_normalized_page
+            ]
+            != span.evidence_text
+        ):
+            raise StrategyContractError(
+                f"{alternative_id}: adjudicated span does not match canonical IR"
+            )
+        spans.append(span)
+        item_ids.extend(
+            _overlapping_chunk_ids(
+                context,
+                page_index=span.pdf_page_index,
+                start=span.char_start_in_normalized_page,
+                end=span.char_end_in_normalized_page,
+            )
+        )
+    return {
+        "mapped_item_ids": tuple(dict.fromkeys(item_ids)),
+        "match_method": "agent-adjudicated-sidecar-v1",
+        "match_score": 1.0,
+        "verification_state": "adjudicated",
+        "gold_version": gold_version,
+        "gold_spans": tuple(spans),
+        "adjudication_provenance": dict(provenance),
+    }
+
+
 def map_question_references(
     question: Mapping[str, Any],
     chunks: Sequence[ResearchQAChunk],
     *,
     document: CanonicalDocument | None = None,
     fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
+    gold_adjudications: Mapping[str, Any] | None = None,
 ) -> EvidenceMapping:
     """Map one question's AND/OR reference groups to stable chunk IDs."""
 
@@ -540,10 +822,24 @@ def map_question_references(
         chunks,
         document,
     )
+    records = _gold_adjudication_records(gold_adjudications)
+    row_id = _required_text(question, "row_id")
+    expected_ids = {
+        evidence_alternative_id(row_id, group_index, alternative_index)
+        for group_index, group in enumerate(question.get("expected_references", ()))
+        if isinstance(group, Mapping)
+        for alternative_index, _ in enumerate(group.get("alternatives", ()))
+    }
+    unknown = set(records) - expected_ids
+    if unknown:
+        raise StrategyContractError(
+            f"gold adjudication sidecar has unknown alternative IDs: {sorted(unknown)}"
+        )
     return _map_question_with_context(
         question,
         context,
         fuzzy_threshold=fuzzy_threshold,
+        adjudication_records=records,
     )
 
 
@@ -552,6 +848,7 @@ def _map_question_with_context(
     context: _ReferenceAlignmentContext,
     *,
     fuzzy_threshold: float,
+    adjudication_records: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> EvidenceMapping:
     row_id = _required_text(question, "row_id")
     paper_id = normalize_paper_id(question.get("paper_id"))
@@ -585,25 +882,64 @@ def _map_question_with_context(
         else None
     )
     reference_cache: dict[
-        tuple[str, str],
+        tuple[str, str, str],
         Mapping[str, object] | None,
     ] = {}
 
     def mapper(reference: str) -> Mapping[str, object] | None:
         normalized = normalize_reference_text(reference)
         section_label = section_by_reference.get(normalized, "")
-        cache_key = (normalized, section_label)
+        cache_key = (
+            normalized,
+            section_label,
+            json.dumps(
+                _critical_evidence_signature(reference),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
         if cache_key in reference_cache:
             return reference_cache[cache_key]
-        exact = _exact_page_span_matches(normalized, context)
-        if exact:
+        exact = _exact_page_span_matches(normalized, reference, context)
+        if len(exact) == 1 and exact[0][2]:
+            gold_span, item_ids, _, diagnostics = exact[0]
             result: Mapping[str, object] | None = {
-                "mapped_item_ids": exact,
+                "mapped_item_ids": item_ids,
                 "match_method": REFERENCE_EXACT_METHOD,
                 "match_score": 1.0,
+                "verification_state": "exact",
+                "gold_version": REFERENCE_EXACT_GOLD_VERSION,
+                "gold_spans": (gold_span,),
+                "match_diagnostics": diagnostics,
+            }
+        elif exact:
+            critical_conflict = any(not item[2] for item in exact)
+            result = {
+                "mapped_item_ids": tuple(
+                    dict.fromkeys(
+                        item_id
+                        for _, item_ids, _, _ in exact
+                        for item_id in item_ids
+                    )
+                ),
+                "match_method": (
+                    "nfkc-alnum-exact-critical-conflict-weak-v1"
+                    if critical_conflict
+                    else "nfkc-alnum-exact-ambiguous-weak-v1"
+                ),
+                "match_score": 1.0,
+                "verification_state": "weak_hint",
+                "match_diagnostics": {
+                    "reason": (
+                        "critical_signature_mismatch"
+                        if critical_conflict
+                        else "multiple_exact_occurrences"
+                    ),
+                    "occurrences": [item[3] for item in exact],
+                },
             }
         else:
-            method = REFERENCE_MATCH_REVISION
+            method = REFERENCE_FUZZY_METHOD
             candidate_chunks: Sequence[ResearchQAChunk] = context.chunks
             enforce_threshold = True
             if hinted_page is not None:
@@ -649,10 +985,19 @@ def _map_question_with_context(
                         "mapped_item_ids": matches,
                         "match_method": method,
                         "match_score": best,
+                        "verification_state": "weak_hint",
                     }
         reference_cache[cache_key] = result
         return result
 
+    overrides = {
+        alternative_id: _validated_adjudication(
+            alternative_id,
+            record,
+            context,
+        )
+        for alternative_id, record in (adjudication_records or {}).items()
+    }
     return map_reference_groups(
         row_id=row_id,
         paper_id=paper_id,
@@ -660,6 +1005,7 @@ def _map_question_with_context(
         question_type=question_type,
         reference_groups=references,
         mapper=mapper,
+        alternative_overrides=overrides,
     )
 
 
@@ -671,6 +1017,7 @@ def map_all_references(
     fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
     overall_minimum: float = 0.95,
     per_paper_minimum: float = 0.90,
+    gold_adjudications: Mapping[str, Any] | None = None,
 ) -> EvidenceMappingBundle:
     """Map all questions and retain an explicit unmapped-group ledger."""
 
@@ -700,11 +1047,42 @@ def map_all_references(
             chunks_by_paper.get(paper_id, ()),
             document,
         )
+    adjudication_records = _gold_adjudication_records(gold_adjudications)
+    expected_alternative_ids = {
+        evidence_alternative_id(row_id, group_index, alternative_index)
+        for question, row_id in zip(questions, row_ids, strict=True)
+        for group_index, group in enumerate(question.get("expected_references", ()))
+        if isinstance(group, Mapping)
+        for alternative_index, _ in enumerate(group.get("alternatives", ()))
+    }
+    unknown = set(adjudication_records) - expected_alternative_ids
+    if unknown:
+        raise StrategyContractError(
+            f"gold adjudication sidecar has unknown alternative IDs: {sorted(unknown)}"
+        )
     mappings = tuple(
         _map_question_with_context(
             question,
             contexts[normalize_paper_id(question.get("paper_id"))],
             fuzzy_threshold=fuzzy_threshold,
+            adjudication_records={
+                key: value
+                for key, value in adjudication_records.items()
+                if key in {
+                    evidence_alternative_id(
+                        _required_text(question, "row_id"),
+                        group_index,
+                        alternative_index,
+                    )
+                    for group_index, group in enumerate(
+                        question.get("expected_references", ())
+                    )
+                    if isinstance(group, Mapping)
+                    for alternative_index, _ in enumerate(
+                        group.get("alternatives", ())
+                    )
+                }
+            },
         )
         for question in questions
     )
@@ -1379,6 +1757,7 @@ class QuestionStrategyResult:
     retrieval_diagnostics: Mapping[str, object] = field(
         default_factory=dict
     )
+    metrics_protocol_version: str = STRICT_EVIDENCE_PROTOCOL_VERSION
 
     def to_dict(self) -> dict[str, object]:
         value = {
@@ -1392,6 +1771,7 @@ class QuestionStrategyResult:
             "pre_rerank_scores": list(self.pre_rerank_scores),
             "pre_rerank_metrics": dict(self.pre_rerank_metrics),
             "metrics": dict(self.metrics),
+            "metrics_protocol_version": self.metrics_protocol_version,
         }
         if self.retrieval_diagnostics:
             value["retrieval_diagnostics"] = dict(
@@ -1474,7 +1854,8 @@ class CandidateRunResult:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
+            "metrics_protocol_version": STRICT_EVIDENCE_PROTOCOL_VERSION,
             "candidate": self.candidate.to_dict(),
             "question_results": [
                 result.to_dict() for result in self.question_results
@@ -1867,6 +2248,10 @@ CandidateProgressCallback = Callable[[Mapping[str, object]], None]
 def _question_result_from_progress(
     value: Mapping[str, Any],
 ) -> QuestionStrategyResult:
+    if value.get("metrics_protocol_version") != STRICT_EVIDENCE_PROTOCOL_VERSION:
+        raise StrategyContractError(
+            "resume question result uses an incompatible metric protocol"
+        )
     def text(key: str) -> str:
         result = value.get(key)
         if not isinstance(result, str) or not result:
@@ -1958,6 +2343,7 @@ def _question_result_from_progress(
         pre_rerank_metrics=metrics("pre_rerank_metrics"),
         metrics=metrics("metrics"),
         retrieval_diagnostics=diagnostics("retrieval_diagnostics"),
+        metrics_protocol_version=STRICT_EVIDENCE_PROTOCOL_VERSION,
     )
 
 
@@ -2037,6 +2423,8 @@ def _search(
             top_k=top_k,
         )
         bm25_hits = index.bm25.search(query, top_k=top_k)
+        if not bm25_hits:
+            return dense_hits
         if retriever_fusion == R1_RETRIEVER_FUSION_ID:
             return preserve_dense_top1_weighted_rrf(
                 dense_hits,
@@ -2118,6 +2506,7 @@ def run_complete_candidate(
     performance_timed_passes: int = 3,
     p95_latency_ms: float | None = None,
     guardrails_passed: bool = True,
+    gold_adjudications: Mapping[str, Any] | None = None,
     evidence_mapping_cache: MutableMapping[
         str, EvidenceMappingBundle
     ]
@@ -2339,6 +2728,8 @@ def run_complete_candidate(
             "fuzzy_threshold": fuzzy_threshold,
             "overall_minimum": mapping_overall_minimum,
             "per_paper_minimum": mapping_per_paper_minimum,
+            "protocol_version": STRICT_EVIDENCE_PROTOCOL_VERSION,
+            "gold_adjudications": gold_adjudications,
             "questions": questions,
             "pdf_chunks": [
                 (chunk.chunk_id, hash_text(chunk.text))
@@ -2359,6 +2750,7 @@ def run_complete_candidate(
             fuzzy_threshold=fuzzy_threshold,
             overall_minimum=mapping_overall_minimum,
             per_paper_minimum=mapping_per_paper_minimum,
+            gold_adjudications=gold_adjudications,
         )
         if evidence_mapping_cache is not None:
             evidence_mapping_cache[mapping_cache_key] = mapping
@@ -2370,6 +2762,9 @@ def run_complete_candidate(
     mapping_by_row = {item.row_id: item for item in mapping.mappings}
 
     pdf_chunk_by_id = {chunk.chunk_id: chunk for chunk in corpus.pdf_chunks}
+    strict_item_source_spans = item_source_spans_from_chunks(
+        (*corpus.pdf_chunks, *corpus.pdf_parents)
+    )
     pdf_passages = {
         chunk.chunk_id: chunk.text for chunk in corpus.pdf_chunks
     }
@@ -2653,6 +3048,7 @@ def run_complete_candidate(
             metrics = score_ranking(
                 [hit.item_id for hit in hits],
                 evidence.evaluable_groups,
+                item_source_spans=strict_item_source_spans,
             )
             if candidate.reranker != "rerank-off":
                 pre_rerank_ids = [
@@ -2662,11 +3058,13 @@ def run_complete_candidate(
                     **score_ranking(
                         pre_rerank_ids,
                         evidence.evaluable_groups,
+                        item_source_spans=strict_item_source_spans,
                     ).metrics,
                     **{
-                        f"recall_at_{cutoff}": evidence_group_recall_at_k(
+                        f"recall_at_{cutoff}": strict_evidence_group_recall_at_k(
                             pre_rerank_ids,
                             evidence.evaluable_groups,
+                            strict_item_source_spans,
                             cutoff,
                         )
                         for cutoff in (20, 50, 100)
@@ -3146,7 +3544,12 @@ __all__ = [
     "NOTE_ROUTE_ELIGIBILITY_POLICY",
     "PAPER_SCOPED_RETRIEVAL",
     "QuestionStrategyResult",
+    "REFERENCE_EXACT_GOLD_VERSION",
+    "REFERENCE_EXACT_METHOD",
+    "REFERENCE_FUZZY_METHOD",
     "REFERENCE_MATCH_REVISION",
+    "REFERENCE_PAGE_HINT_METHOD",
+    "REFERENCE_SECTION_HINT_METHOD",
     "R1_RETRIEVER_FUSION_ID",
     "R1_RETRIEVER_FUSION_POLICY",
     "RR1_RERANK_FUSION_ID",
@@ -3166,6 +3569,8 @@ __all__ = [
     "generate_s1_candidate",
     "load_main_document",
     "load_main_documents",
+    "load_gold_adjudications",
+    "item_source_spans_from_chunks",
     "map_all_references",
     "map_question_references",
     "normalize_paper_id",

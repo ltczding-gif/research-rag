@@ -22,6 +22,11 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 DEFAULT_BOOTSTRAP_SEED = "research-rag-rq2-bootstrap-v1"
 DEFAULT_BOOTSTRAP_SAMPLES = 10_000
 PRIMARY_TIE_THRESHOLD = 0.005
+STRICT_EVIDENCE_PROTOCOL_VERSION = "researchqa-strict-evidence-v1"
+VERIFIED_EVIDENCE_STATES = frozenset({"exact", "adjudicated"})
+EVIDENCE_STATES = VERIFIED_EVIDENCE_STATES | frozenset(
+    {"weak_hint", "unmapped"}
+)
 
 
 class EvidenceContractError(ValueError):
@@ -49,18 +54,162 @@ def _stable_unique(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(ordered)
 
 
+def evidence_alternative_id(
+    row_id: str,
+    group_index: int,
+    alternative_index: int,
+) -> str:
+    """Return the stable ID used by adjudication sidecars."""
+
+    return _stable_id("ea", row_id, group_index, alternative_index)
+
+
+@dataclass(frozen=True)
+class GoldEvidenceSpan:
+    """Chunker-independent, version-bound sufficient-evidence locator."""
+
+    file_id: str
+    file_hash: str
+    pdf_page_index: int
+    char_start_in_normalized_page: int
+    char_end_in_normalized_page: int
+    page_text_hash: str
+    evidence_text: str
+    evidence_text_hash: str
+
+    def __post_init__(self) -> None:
+        if not self.file_id:
+            raise EvidenceContractError("gold span file_id must be non-empty")
+        for value, label in (
+            (self.file_hash, "file_hash"),
+            (self.page_text_hash, "page_text_hash"),
+            (self.evidence_text_hash, "evidence_text_hash"),
+        ):
+            if (
+                len(value) != 64
+                or value.lower() != value
+                or any(character not in "0123456789abcdef" for character in value)
+            ):
+                raise EvidenceContractError(
+                    f"gold span {label} must be a lowercase SHA-256"
+                )
+        if self.pdf_page_index < 0:
+            raise EvidenceContractError("gold span page index must be non-negative")
+        if (
+            self.char_start_in_normalized_page < 0
+            or self.char_end_in_normalized_page
+            <= self.char_start_in_normalized_page
+        ):
+            raise EvidenceContractError("gold span must be a non-empty half-open range")
+        if not self.evidence_text:
+            raise EvidenceContractError("gold span evidence_text must be non-empty")
+        if len(self.evidence_text) != (
+            self.char_end_in_normalized_page
+            - self.char_start_in_normalized_page
+        ):
+            raise EvidenceContractError(
+                "gold span evidence_text length does not match its range"
+            )
+        if hashlib.sha256(self.evidence_text.encode("utf-8")).hexdigest() != (
+            self.evidence_text_hash
+        ):
+            raise EvidenceContractError(
+                "gold span evidence_text_hash does not match evidence_text"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "file_id": self.file_id,
+            "file_hash": self.file_hash,
+            "pdf_page_index": self.pdf_page_index,
+            "char_start_in_normalized_page": self.char_start_in_normalized_page,
+            "char_end_in_normalized_page": self.char_end_in_normalized_page,
+            "page_text_hash": self.page_text_hash,
+            "evidence_text": self.evidence_text,
+            "evidence_text_hash": self.evidence_text_hash,
+        }
+
+
+@dataclass(frozen=True)
+class RetrievedEvidenceSpan:
+    """Source interval contributed by one retrieved item."""
+
+    file_id: str
+    file_hash: str
+    pdf_page_index: int
+    char_start_in_normalized_page: int
+    char_end_in_normalized_page: int
+    page_text_hash: str
+
+    def __post_init__(self) -> None:
+        if not self.file_id or not self.file_hash or not self.page_text_hash:
+            raise EvidenceContractError(
+                "retrieved span requires file and page provenance"
+            )
+        if self.pdf_page_index < 0:
+            raise EvidenceContractError(
+                "retrieved span page index must be non-negative"
+            )
+        if (
+            self.char_start_in_normalized_page < 0
+            or self.char_end_in_normalized_page
+            <= self.char_start_in_normalized_page
+        ):
+            raise EvidenceContractError(
+                "retrieved span must be a non-empty half-open range"
+            )
+
+
 @dataclass(frozen=True)
 class EvidenceAlternative:
-    """One OR alternative and the stable retrieval items it maps to."""
+    """One OR alternative with explicit verification and stable gold spans."""
 
     alternative_id: str
     reference_text: str
     mapped_item_ids: tuple[str, ...]
     match_method: str = "unmapped"
     match_score: float | None = None
+    verification_state: str = "unmapped"
+    gold_version: str | None = None
+    gold_spans: tuple[GoldEvidenceSpan, ...] = ()
+    adjudication_provenance: Mapping[str, str] | None = None
+    match_diagnostics: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if self.verification_state not in EVIDENCE_STATES:
+            raise EvidenceContractError(
+                f"unsupported evidence state: {self.verification_state}"
+            )
+        verified = self.verification_state in VERIFIED_EVIDENCE_STATES
+        if verified and (not self.gold_version or not self.gold_spans):
+            raise EvidenceContractError(
+                "verified evidence requires gold_version and gold_spans"
+            )
+        if not verified and self.gold_spans:
+            raise EvidenceContractError(
+                "weak or unmapped evidence cannot carry verified gold spans"
+            )
+        if self.verification_state == "adjudicated":
+            provenance = self.adjudication_provenance
+            if (
+                not isinstance(provenance, Mapping)
+                or provenance.get("label") != "agent_adjudicated"
+                or not provenance.get("source")
+                or not provenance.get("source_revision")
+            ):
+                raise EvidenceContractError(
+                    "adjudicated evidence requires agent_adjudicated provenance"
+                )
 
     @property
     def mapped(self) -> bool:
+        return (
+            self.verification_state in VERIFIED_EVIDENCE_STATES
+            and bool(self.gold_spans)
+        )
+
+    @property
+    def loose_mapped(self) -> bool:
         return bool(self.mapped_item_ids)
 
     def to_dict(self) -> dict[str, Any]:
@@ -70,6 +219,19 @@ class EvidenceAlternative:
             "mapped_item_ids": list(self.mapped_item_ids),
             "match_method": self.match_method,
             "match_score": self.match_score,
+            "verification_state": self.verification_state,
+            "gold_version": self.gold_version,
+            "gold_spans": [span.to_dict() for span in self.gold_spans],
+            "adjudication_provenance": (
+                dict(self.adjudication_provenance)
+                if self.adjudication_provenance is not None
+                else None
+            ),
+            "match_diagnostics": (
+                dict(self.match_diagnostics)
+                if self.match_diagnostics is not None
+                else None
+            ),
         }
 
 
@@ -89,8 +251,12 @@ class EvidenceGroup:
         )
 
     @property
+    def verified_alternatives(self) -> tuple[EvidenceAlternative, ...]:
+        return tuple(alternative for alternative in self.alternatives if alternative.mapped)
+
+    @property
     def mapped(self) -> bool:
-        return bool(self.mapped_item_ids)
+        return bool(self.verified_alternatives)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -99,6 +265,7 @@ class EvidenceGroup:
                 alternative.to_dict() for alternative in self.alternatives
             ],
             "mapped": self.mapped,
+            "loose_mapped": bool(self.mapped_item_ids),
         }
 
 
@@ -136,7 +303,8 @@ class EvidenceMapping:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
+            "protocol_version": STRICT_EVIDENCE_PROTOCOL_VERSION,
             "row_id": self.row_id,
             "paper_id": self.paper_id,
             "domain": self.domain,
@@ -179,6 +347,7 @@ def _coerce_alternative_mapping(
             reference_text,
             (raw,),
             match_method="mapped",
+            verification_state="weak_hint",
         )
     if isinstance(raw, Mapping):
         item_ids = raw.get("mapped_item_ids", raw.get("item_ids", ()))
@@ -199,18 +368,66 @@ def _coerce_alternative_mapping(
             raise EvidenceContractError(
                 f"{alternative_id}: match_method must be a non-empty string"
             )
+        state = raw.get(
+            "verification_state",
+            "weak_hint" if stable_ids else "unmapped",
+        )
+        if not isinstance(state, str):
+            raise EvidenceContractError(
+                f"{alternative_id}: verification_state must be a string"
+            )
+        gold_version = raw.get("gold_version")
+        if gold_version is not None and (
+            not isinstance(gold_version, str) or not gold_version
+        ):
+            raise EvidenceContractError(
+                f"{alternative_id}: gold_version must be non-empty or null"
+            )
+        raw_spans = raw.get("gold_spans", ())
+        if not isinstance(raw_spans, Sequence) or isinstance(
+            raw_spans, (str, bytes)
+        ):
+            raise EvidenceContractError(
+                f"{alternative_id}: gold_spans must be a sequence"
+            )
+        spans = tuple(
+            span
+            if isinstance(span, GoldEvidenceSpan)
+            else GoldEvidenceSpan(**span)
+            for span in raw_spans
+        )
+        provenance = raw.get("adjudication_provenance")
+        if provenance is not None and not isinstance(provenance, Mapping):
+            raise EvidenceContractError(
+                f"{alternative_id}: adjudication_provenance must be an object"
+            )
+        diagnostics = raw.get("match_diagnostics")
+        if diagnostics is not None and not isinstance(diagnostics, Mapping):
+            raise EvidenceContractError(
+                f"{alternative_id}: match_diagnostics must be an object"
+            )
         return EvidenceAlternative(
             alternative_id,
             reference_text,
             stable_ids,
             match_method=method,
             match_score=float(score) if score is not None else None,
+            verification_state=state,
+            gold_version=gold_version,
+            gold_spans=spans,
+            adjudication_provenance=(
+                dict(provenance) if provenance is not None else None
+            ),
+            match_diagnostics=(
+                dict(diagnostics) if diagnostics is not None else None
+            ),
         )
     return EvidenceAlternative(
         alternative_id,
         reference_text,
         _stable_unique(raw),
         match_method="mapped",
+        verification_state="weak_hint",
     )
 
 
@@ -222,6 +439,7 @@ def map_reference_groups(
     question_type: str,
     reference_groups: Sequence[Mapping[str, Any]],
     mapper: AlternativeMapper,
+    alternative_overrides: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> EvidenceMapping:
     """Map ResearchQA reference groups without collapsing AND/OR semantics.
 
@@ -268,14 +486,19 @@ def map_reference_groups(
                     f"{row_id}: group {group_index} alternative "
                     f"{alternative_index} must be non-empty text"
                 )
-            alternative_id = _stable_id(
-                "ea", row_id, group_index, alternative_index
+            alternative_id = evidence_alternative_id(
+                row_id, group_index, alternative_index
             )
             alternatives.append(
                 _coerce_alternative_mapping(
                     alternative_id=alternative_id,
                     reference_text=reference_text,
-                    raw=mapper(reference_text),
+                    raw=(
+                        alternative_overrides[alternative_id]
+                        if alternative_overrides is not None
+                        and alternative_id in alternative_overrides
+                        else mapper(reference_text)
+                    ),
                 )
             )
         groups.append(EvidenceGroup(group_id, tuple(alternatives)))
@@ -399,12 +622,149 @@ def _group_first_ranks(
     return first_ranks
 
 
+def _merge_intervals(
+    ranges: Iterable[tuple[int, int]],
+) -> tuple[tuple[int, int], ...]:
+    ordered = sorted(ranges)
+    if not ordered:
+        return ()
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        previous_start, previous_end = merged[-1]
+        if start <= previous_end:
+            merged[-1] = (previous_start, max(previous_end, end))
+        else:
+            merged.append((start, end))
+    return tuple(merged)
+
+
+def _coerce_retrieved_span(
+    value: RetrievedEvidenceSpan | Mapping[str, Any],
+) -> RetrievedEvidenceSpan:
+    if isinstance(value, RetrievedEvidenceSpan):
+        return value
+    if not isinstance(value, Mapping):
+        raise EvidenceContractError(
+            "retrieved source spans must be objects"
+        )
+    try:
+        return RetrievedEvidenceSpan(
+            file_id=str(value["file_id"]),
+            file_hash=str(value["file_hash"]),
+            pdf_page_index=int(value["pdf_page_index"]),
+            char_start_in_normalized_page=int(
+                value["char_start_in_normalized_page"]
+            ),
+            char_end_in_normalized_page=int(
+                value["char_end_in_normalized_page"]
+            ),
+            page_text_hash=str(value["page_text_hash"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise EvidenceContractError(
+            "retrieved source span is missing required provenance"
+        ) from exc
+
+
+def _span_is_covered(
+    gold: GoldEvidenceSpan,
+    covered: Mapping[
+        tuple[str, str, int, str],
+        list[tuple[int, int]],
+    ],
+) -> bool:
+    key = (
+        gold.file_id,
+        gold.file_hash,
+        gold.pdf_page_index,
+        gold.page_text_hash,
+    )
+    return any(
+        start <= gold.char_start_in_normalized_page
+        and end >= gold.char_end_in_normalized_page
+        for start, end in _merge_intervals(covered.get(key, ()))
+    )
+
+
+def strict_group_completion_ranks(
+    ranked_item_ids: Sequence[str],
+    groups: Sequence[EvidenceGroup],
+    item_source_spans: Mapping[
+        str,
+        Sequence[RetrievedEvidenceSpan | Mapping[str, Any]],
+    ],
+    *,
+    cutoff: int | None = None,
+) -> dict[str, int]:
+    """Return first ranks where interval unions fully satisfy each group."""
+
+    if cutoff is not None and cutoff < 0:
+        raise EvidenceContractError("cutoff must be non-negative or null")
+    if any(not group.mapped for group in groups):
+        raise EvidenceContractError(
+            "strict scoring accepts verified/evaluable groups only"
+        )
+    covered: dict[
+        tuple[str, str, int, str],
+        list[tuple[int, int]],
+    ] = defaultdict(list)
+    completed: dict[str, int] = {}
+    for rank, item_id in enumerate(ranked_item_ids, 1):
+        if cutoff is not None and rank > cutoff:
+            break
+        for raw_span in item_source_spans.get(item_id, ()):
+            span = _coerce_retrieved_span(raw_span)
+            key = (
+                span.file_id,
+                span.file_hash,
+                span.pdf_page_index,
+                span.page_text_hash,
+            )
+            covered[key].append(
+                (
+                    span.char_start_in_normalized_page,
+                    span.char_end_in_normalized_page,
+                )
+            )
+        for group in groups:
+            if group.group_id in completed:
+                continue
+            if any(
+                all(_span_is_covered(span, covered) for span in alternative.gold_spans)
+                for alternative in group.verified_alternatives
+            ):
+                completed[group.group_id] = rank
+    return completed
+
+
+def strict_evidence_group_recall_at_k(
+    ranked_item_ids: Sequence[str],
+    groups: Sequence[EvidenceGroup],
+    item_source_spans: Mapping[
+        str,
+        Sequence[RetrievedEvidenceSpan | Mapping[str, Any]],
+    ],
+    k: int,
+) -> float | None:
+    if k < 1:
+        raise EvidenceContractError("k must be at least 1")
+    if not groups:
+        return None
+    completed = strict_group_completion_ranks(
+        ranked_item_ids,
+        groups,
+        item_source_spans,
+        cutoff=k,
+    )
+    return len(completed) / len(groups)
+
+
 def evidence_group_recall_at_k(
     ranked_item_ids: Sequence[str],
     groups: Sequence[EvidenceGroup],
     k: int,
 ) -> float | None:
-    """Return the fraction of required groups hit by at least one OR alternative."""
+    """Legacy loose-hit diagnostic based only on overlapping chunk IDs."""
 
     if k < 1:
         raise EvidenceContractError("k must be at least 1")
@@ -469,11 +829,13 @@ class RankingMetrics:
     evaluable: bool
     required_group_count: int
     metrics: Mapping[str, float | None]
+    protocol_version: str = STRICT_EVIDENCE_PROTOCOL_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "evaluable": self.evaluable,
             "required_group_count": self.required_group_count,
+            "protocol_version": self.protocol_version,
             "metrics": dict(self.metrics),
         }
 
@@ -481,8 +843,14 @@ class RankingMetrics:
 def score_ranking(
     ranked_item_ids: Sequence[str],
     groups: Sequence[EvidenceGroup],
+    *,
+    item_source_spans: Mapping[
+        str,
+        Sequence[RetrievedEvidenceSpan | Mapping[str, Any]],
+    ]
+    | None = None,
 ) -> RankingMetrics:
-    """Compute the fixed ResearchQA retrieval metric bundle for one question."""
+    """Compute strict sufficient-evidence metrics plus loose-hit diagnostics."""
 
     if len(set(ranked_item_ids)) != len(ranked_item_ids):
         raise EvidenceContractError("ranked item IDs must be unique")
@@ -499,21 +867,45 @@ def score_ranking(
                 "all_required_groups_success_at_10": None,
                 "groups_covered_at_5": None,
                 "groups_covered_at_10": None,
+                "loose_hit_recall_at_5": None,
+                "loose_hit_recall_at_10": None,
+                "loose_hit_mrr": None,
+                "loose_hit_coverage_ndcg_at_10": None,
+                "loose_hit_all_required_groups_success_at_5": None,
+                "loose_hit_all_required_groups_success_at_10": None,
             },
         )
 
-    first_5 = _group_first_ranks(ranked_item_ids, groups, cutoff=5)
-    first_10 = _group_first_ranks(ranked_item_ids, groups, cutoff=10)
+    if item_source_spans is None:
+        raise EvidenceContractError(
+            "strict scoring requires item_source_spans; use loose_hit_* helpers "
+            "only for legacy diagnostics"
+        )
+
+    first_5 = strict_group_completion_ranks(
+        ranked_item_ids, groups, item_source_spans, cutoff=5
+    )
+    first_10 = strict_group_completion_ranks(
+        ranked_item_ids, groups, item_source_spans, cutoff=10
+    )
+    all_ranks = strict_group_completion_ranks(
+        ranked_item_ids, groups, item_source_spans
+    )
+    loose_first_5 = _group_first_ranks(ranked_item_ids, groups, cutoff=5)
+    loose_first_10 = _group_first_ranks(ranked_item_ids, groups, cutoff=10)
+    strict_ndcg = sum(
+        1.0 / math.log2(rank + 1) for rank in first_10.values()
+    ) / len(groups)
     return RankingMetrics(
         evaluable=True,
         required_group_count=len(groups),
         metrics={
             "recall_at_5": len(first_5) / len(groups),
             "recall_at_10": len(first_10) / len(groups),
-            "mrr": reciprocal_rank(ranked_item_ids, groups),
-            "coverage_ndcg_at_10": coverage_ndcg_at_k(
-                ranked_item_ids, groups, 10
+            "mrr": (
+                1.0 / min(all_ranks.values()) if all_ranks else 0.0
             ),
+            "coverage_ndcg_at_10": strict_ndcg,
             "all_required_groups_success_at_5": float(
                 len(first_5) == len(groups)
             ),
@@ -522,6 +914,18 @@ def score_ranking(
             ),
             "groups_covered_at_5": float(len(first_5)),
             "groups_covered_at_10": float(len(first_10)),
+            "loose_hit_recall_at_5": len(loose_first_5) / len(groups),
+            "loose_hit_recall_at_10": len(loose_first_10) / len(groups),
+            "loose_hit_mrr": reciprocal_rank(ranked_item_ids, groups),
+            "loose_hit_coverage_ndcg_at_10": coverage_ndcg_at_k(
+                ranked_item_ids, groups, 10
+            ),
+            "loose_hit_all_required_groups_success_at_5": float(
+                len(loose_first_5) == len(groups)
+            ),
+            "loose_hit_all_required_groups_success_at_10": float(
+                len(loose_first_10) == len(groups)
+            ),
         },
     )
 
