@@ -18,6 +18,7 @@ from benchmarks.researchqa_chunking import (
 )
 from benchmarks.researchqa_retrieval import (
     BM25Index,
+    ExactCosineIndex,
     RERANKER_MODEL_ID,
     RERANKER_REVISION,
 )
@@ -328,8 +329,9 @@ def test_hybrid_empty_sparse_branch_returns_dense_hits_unchanged():
     passages = {"a": "alpha", "b": "beta"}
     index = strategy._SearchIndex(
         passages=passages,
-        embeddings={"a": (1.0, 0.0), "b": (0.0, 1.0)},
+        dense=ExactCosineIndex({"a": (1.0, 0.0), "b": (0.0, 1.0)}),
         bm25=BM25Index(passages),
+        vector_bytes={"a": 8, "b": 8},
     )
     dense = strategy._search(
         index,
@@ -346,6 +348,41 @@ def test_hybrid_empty_sparse_branch_returns_dense_hits_unchanged():
 
     assert hybrid == dense
     assert all(hit.source == "dense" for hit in hybrid)
+
+
+def test_search_index_builds_dense_state_once_and_reuses_it_for_queries():
+    pytest.importorskip("numpy")
+    embedder = _FakeEmbedder()
+    index = strategy._make_search_index(
+        {"a": "alpha", "b": "beta"},
+        retriever="dense",
+        embedder=embedder,
+        embedding_batch_size=8,
+    )
+    assert index.dense is not None
+    matrix = index.dense._matrix
+    item_norms = index.dense._item_norms
+
+    alpha_hits = strategy._search(
+        index,
+        retriever="dense",
+        query="alpha",
+        query_embedding=(1.0, 0.05),
+    )
+    beta_hits = strategy._search(
+        index,
+        retriever="dense",
+        query="beta",
+        query_embedding=(0.05, 1.0),
+    )
+
+    assert embedder.calls == [("alpha", "beta")]
+    assert matrix is not None
+    assert item_norms is not None
+    assert index.dense._matrix is matrix
+    assert index.dense._item_norms is item_norms
+    assert alpha_hits[0].item_id == "a"
+    assert beta_hits[0].item_id == "b"
 
 
 def test_reference_mapping_uses_researchqa_page_hint_for_version_drift(
@@ -1278,7 +1315,15 @@ def test_complete_candidate_uses_fake_models_and_scores_every_question(tmp_path)
     assert result.retrieval_scope == "paper-scoped"
     assert all(item.ranked_scores for item in result.question_results)
     assert result.chunk_count == 2
-    assert result.index_bytes > 0
+    assert result.index_bytes == sum(
+        len(chunk.text.encode("utf-8")) + 8
+        for document in documents.values()
+        for chunk in chunk_pdf(
+            document,
+            base.pdf_chunker,
+            is_main=True,
+        ).chunks
+    )
     assert result.latency_metrics["measurement_revision"] == (
         "stratified-warm-query-v2"
     )

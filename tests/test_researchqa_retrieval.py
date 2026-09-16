@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import sys
 
 import pytest
 
@@ -9,6 +10,7 @@ from benchmarks.researchqa_retrieval import (
     BM25Index,
     BM25_B,
     BM25_K1,
+    ExactCosineIndex,
     RERANKER_MODEL_ID,
     RERANKER_REVISION,
     RetrievalHit,
@@ -49,6 +51,60 @@ def test_exact_cosine_is_not_approximate_and_ties_break_by_id():
     assert hits[0].score == pytest.approx(1.0)
     assert hits[2].score == pytest.approx(1 / math.sqrt(2))
     assert cosine_similarity((1.0, 2.0), (2.0, 4.0)) == pytest.approx(1.0)
+
+
+def test_exact_cosine_index_reuses_prebuilt_numpy_state_and_matches_wrapper():
+    pytest.importorskip("numpy")
+    embeddings = {
+        "a": (1.0, 0.0),
+        "b": (0.0, 1.0),
+        "c": (1.0, 1.0),
+    }
+    index = ExactCosineIndex(embeddings)
+    matrix = index._matrix
+    item_norms = index._item_norms
+
+    first = index.search((1.0, 0.0), top_k=None)
+    second = index.search((0.0, 1.0), top_k=2)
+
+    assert matrix is not None
+    assert item_norms is not None
+    assert index._matrix is matrix
+    assert index._item_norms is item_norms
+    assert first == exact_cosine_search((1.0, 0.0), embeddings, top_k=None)
+    assert second == exact_cosine_search((0.0, 1.0), embeddings, top_k=2)
+
+
+def test_exact_cosine_index_keeps_dependency_free_scalar_fallback(monkeypatch):
+    monkeypatch.setitem(sys.modules, "numpy", None)
+    index = ExactCosineIndex(
+        {
+            "far": (0.0, 1.0),
+            "near": (1.0, 0.0),
+        }
+    )
+
+    hits = index.search((1.0, 0.0), top_k=None)
+
+    assert index._numpy is None
+    assert [hit.item_id for hit in hits] == ["near", "far"]
+    assert [hit.score for hit in hits] == pytest.approx([1.0, 0.0])
+
+
+@pytest.mark.parametrize(
+    "item_embedding",
+    (
+        (0.0, 0.0),
+        (float("nan"), 0.0),
+    ),
+)
+def test_exact_cosine_wrapper_preserves_dimension_error_precedence(
+    item_embedding,
+):
+    pytest.importorskip("numpy")
+
+    with pytest.raises(ValueError, match="dimensions"):
+        exact_cosine_search((1.0,), {"item": item_embedding})
 
 
 def test_exact_cosine_rejects_zero_and_mismatched_vectors():
