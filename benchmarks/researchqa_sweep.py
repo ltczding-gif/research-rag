@@ -11,9 +11,12 @@ from __future__ import annotations
 import csv
 import gc
 import io
+import importlib.metadata
 import json
 import math
 import os
+import subprocess
+import sys
 import tempfile
 import traceback
 from dataclasses import dataclass, replace
@@ -48,6 +51,17 @@ from service.pdf_ir import CanonicalDocument
 SWEEP_SCHEMA_VERSION = 1
 SWEEP_ENGINE_REVISION = "researchqa-sweep-v9"
 CANDIDATE_PROGRESS_SCHEMA_VERSION = 1
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_IMPLEMENTATION_SOURCE_PATHS = {
+    "chunking": _REPO_ROOT / "benchmarks" / "researchqa_chunking.py",
+    "models": _REPO_ROOT / "benchmarks" / "researchqa_models.py",
+    "pdf_baseline": _REPO_ROOT / "service" / "pdf_baseline.py",
+    "pdf_ir": _REPO_ROOT / "service" / "pdf_ir.py",
+    "retrieval": _REPO_ROOT / "benchmarks" / "researchqa_retrieval.py",
+    "scoring": _REPO_ROOT / "benchmarks" / "researchqa_scoring.py",
+    "strategy": _REPO_ROOT / "benchmarks" / "researchqa_strategy.py",
+    "sweep": Path(__file__).resolve(),
+}
 CANDIDATE_PROGRESS_CODE_FINGERPRINT = fingerprint_payload(
     {
         "scoring": sha256_path(Path(rank_candidates.__code__.co_filename))[1],
@@ -57,6 +71,91 @@ CANDIDATE_PROGRESS_CODE_FINGERPRINT = fingerprint_payload(
         "sweep": sha256_path(Path(__file__))[1],
     }
 )
+
+
+def _implementation_fingerprints() -> dict[str, object]:
+    """Hash result-affecting source at the moment cache validity is checked."""
+    source = {
+        name: sha256_path(path)[1]
+        for name, path in sorted(_IMPLEMENTATION_SOURCE_PATHS.items())
+    }
+    layers = {
+        "retrieval": fingerprint_payload(
+            {
+                name: source[name]
+                for name in (
+                    "chunking",
+                    "models",
+                    "pdf_baseline",
+                    "pdf_ir",
+                    "retrieval",
+                )
+            }
+        ),
+        "strategy": fingerprint_payload({"strategy": source["strategy"]}),
+        "scoring": fingerprint_payload({"scoring": source["scoring"]}),
+        "orchestration": fingerprint_payload({"sweep": source["sweep"]}),
+    }
+    return {
+        "source": source,
+        "layers": layers,
+        "result": fingerprint_payload(layers),
+    }
+
+
+def _runtime_dependency_fingerprint(
+    candidate: StrategyCandidate,
+) -> dict[str, object]:
+    distributions = ["numpy"]
+    if candidate.reranker != "rerank-off":
+        distributions.extend(("tokenizers", "torch", "transformers"))
+    versions: dict[str, str | None] = {}
+    for distribution in distributions:
+        try:
+            versions[distribution] = importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            versions[distribution] = None
+    payload: dict[str, object] = {
+        "python": ".".join(str(part) for part in sys.version_info[:3]),
+        "distributions": versions,
+    }
+    return {"payload": payload, "fingerprint": fingerprint_payload(payload)}
+
+
+def _source_audit() -> dict[str, object]:
+    """Record Git provenance without making commit identity a cache key."""
+    relative_paths = tuple(
+        path.relative_to(_REPO_ROOT).as_posix()
+        for path in _IMPLEMENTATION_SOURCE_PATHS.values()
+    )
+    try:
+        commit = subprocess.run(
+            ("git", "rev-parse", "HEAD"),
+            cwd=_REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            (
+                "git",
+                "status",
+                "--short",
+                "--untracked-files=all",
+                "--",
+                *relative_paths,
+            ),
+            cwd=_REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+    except (OSError, subprocess.CalledProcessError):
+        return {"git_commit": None, "dirty_sources": None}
+    return {
+        "git_commit": commit or None,
+        "dirty_sources": tuple(line for line in status if line.strip()),
+    }
 
 
 class SweepContractError(ValueError):
@@ -715,6 +814,8 @@ def _candidate_input_fingerprint(
     embedder: EmbedderAdapter,
     reranker: object,
 ) -> str:
+    implementation = _implementation_fingerprints()
+    dependencies = _runtime_dependency_fingerprint(candidate)
     document_identity = {
         paper_id: {
             "file_hash": document.file_hash,
@@ -744,6 +845,7 @@ def _candidate_input_fingerprint(
                 "model_digest",
                 "dimensions",
                 "normalization_revision",
+                "implementation_fingerprint",
             )
             if getattr(embedder, key, None) is not None
         },
@@ -770,6 +872,8 @@ def _candidate_input_fingerprint(
     return fingerprint_payload(
         {
             "engine_revision": SWEEP_ENGINE_REVISION,
+            "implementation_fingerprint": implementation["result"],
+            "dependency_fingerprint": dependencies["fingerprint"],
             "config_fingerprint": config_fingerprint,
             "candidate": candidate.to_dict(),
             "documents": document_identity,
@@ -789,12 +893,18 @@ def _write_candidate_record(
     status: str,
     payload: Mapping[str, Any],
 ) -> SweepCandidateRecord:
+    implementation = _implementation_fingerprints()
+    dependencies = _runtime_dependency_fingerprint(candidate)
     envelope = {
         "schema_version": SWEEP_SCHEMA_VERSION,
         "engine_revision": SWEEP_ENGINE_REVISION,
         "config_id": candidate.config_id,
         "stage_id": candidate.stage_id,
+        "strategy_fingerprint": fingerprint_payload(candidate.to_dict()),
         "input_fingerprint": input_fingerprint,
+        "implementation_fingerprints": implementation,
+        "runtime_dependencies": dependencies,
+        "source_audit": _source_audit(),
         "status": status,
         "payload_sha256": fingerprint_payload(payload),
         "payload": dict(payload),
@@ -882,12 +992,18 @@ def _load_candidate_record(
         return None
     payload = envelope.get("payload")
     status = envelope.get("status")
+    implementation = _implementation_fingerprints()
+    dependencies = _runtime_dependency_fingerprint(candidate)
     if (
         envelope.get("schema_version") != SWEEP_SCHEMA_VERSION
         or envelope.get("engine_revision") != SWEEP_ENGINE_REVISION
         or envelope.get("config_id") != candidate.config_id
         or envelope.get("stage_id") != candidate.stage_id
+        or envelope.get("strategy_fingerprint")
+        != fingerprint_payload(candidate.to_dict())
         or envelope.get("input_fingerprint") != input_fingerprint
+        or envelope.get("implementation_fingerprints") != implementation
+        or envelope.get("runtime_dependencies") != dependencies
         or status not in {"completed", "incomplete", "failed"}
         or not isinstance(payload, Mapping)
         or envelope.get("payload_sha256") != fingerprint_payload(payload)

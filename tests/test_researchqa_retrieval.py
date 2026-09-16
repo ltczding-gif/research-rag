@@ -61,25 +61,33 @@ def test_exact_cosine_rejects_zero_and_mismatched_vectors():
 def test_embedding_cache_keys_bind_model_normalization_and_exact_text():
     model = "d" * 64
     revision = "nfkc-lower-v1"
-    expected = f"{model}:{revision}:{hashlib.sha256(b'alpha').hexdigest()}"
+    implementation = "i" * 64
+    expected = (
+        f"{model}:{revision}:{implementation}:"
+        f"{hashlib.sha256(b'alpha').hexdigest()}"
+    )
 
     assert embedding_cache_key(
         model_digest=model,
         normalization_revision=revision,
+        implementation_fingerprint=implementation,
         text="alpha",
     ) == expected
     assert embedding_cache_keys(
         model_digest=model,
         normalization_revision=revision,
+        implementation_fingerprint=implementation,
         texts=("alpha", "beta"),
     )[0] == expected
     assert batch_embedding_cache_key(
         model_digest=model,
         normalization_revision=revision,
+        implementation_fingerprint=implementation,
         texts=("alpha", "beta"),
     ) != batch_embedding_cache_key(
         model_digest=model,
         normalization_revision=revision,
+        implementation_fingerprint=implementation,
         texts=("beta", "alpha"),
     )
 
@@ -106,9 +114,32 @@ def test_repo_local_bm25_uses_fixed_parameters_and_stable_ranking():
 
     assert index.k1 == BM25_K1 == 1.2
     assert index.b == BM25_B == 0.75
-    assert [hit.item_id for hit in hits] == ["long", "short", "none"]
-    assert hits[0].score > hits[1].score > hits[2].score
+    assert [hit.item_id for hit in hits] == ["long", "short"]
+    assert hits[0].score > hits[1].score > 0.0
     assert all(hit.source == "bm25" for hit in hits)
+
+
+def test_bm25_returns_no_candidates_without_positive_term_evidence():
+    first = BM25Index({"a": "alpha", "b": "beta", "c": "gamma"})
+    renamed = BM25Index({"z": "alpha", "y": "beta", "x": "gamma"})
+
+    assert first.search("absent", top_k=None) == ()
+    assert renamed.search("absent", top_k=None) == ()
+
+
+def test_bm25_partial_positive_results_do_not_pad_to_top_k():
+    index = BM25Index(
+        {
+            "matching-second": "alpha alpha",
+            "nonmatching-first": "beta",
+            "nonmatching-third": "gamma",
+        }
+    )
+
+    hits = index.search("alpha", top_k=3)
+
+    assert [hit.item_id for hit in hits] == ["matching-second"]
+    assert hits[0].score > 0.0
 
 
 def test_rrf_uses_k60_equal_weights_and_stable_ties():

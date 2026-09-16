@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import math
 
 import pytest
 
 from benchmarks.researchqa_scoring import (
     CandidateSummary,
+    EvidenceContractError,
     EvidenceCoverageError,
+    GoldEvidenceSpan,
     QuestionScore,
     enforce_mapping_coverage,
     evaluate_mapping_coverage,
@@ -16,6 +19,46 @@ from benchmarks.researchqa_scoring import (
     rank_candidates,
     score_ranking,
 )
+
+
+def _verified(
+    item_id: str,
+    start: int,
+    end: int,
+    *,
+    file_id: str = "file-1",
+) -> dict[str, object]:
+    text = "x" * (end - start)
+    return {
+        "mapped_item_ids": [item_id],
+        "match_method": "exact-test-v1",
+        "match_score": 1.0,
+        "verification_state": "exact",
+        "gold_version": "test-gold-v1",
+        "gold_spans": [
+            {
+                "file_id": file_id,
+                "file_hash": "a" * 64,
+                "pdf_page_index": 0,
+                "char_start_in_normalized_page": start,
+                "char_end_in_normalized_page": end,
+                "page_text_hash": "b" * 64,
+                "evidence_text": text,
+                "evidence_text_hash": hashlib.sha256(text.encode()).hexdigest(),
+            }
+        ],
+    }
+
+
+def _source(start: int, end: int, *, file_id: str = "file-1") -> dict[str, object]:
+    return {
+        "file_id": file_id,
+        "file_hash": "a" * 64,
+        "pdf_page_index": 0,
+        "char_start_in_normalized_page": start,
+        "char_end_in_normalized_page": end,
+        "page_text_hash": "b" * 64,
+    }
 
 
 def _mapping(
@@ -45,12 +88,8 @@ def test_evidence_groups_are_and_while_alternatives_are_or():
             {"alternatives": ["beta", "beta paraphrase"]},
         ],
         {
-            "alpha paraphrase": {
-                "mapped_item_ids": ["chunk-a"],
-                "match_method": "fuzzy-v1",
-                "match_score": 0.95,
-            },
-            "beta": ["chunk-b", "chunk-b-extra"],
+            "alpha paraphrase": _verified("chunk-a", 0, 5),
+            "beta": _verified("chunk-b", 10, 14),
         },
     )
 
@@ -60,11 +99,19 @@ def test_evidence_groups_are_and_while_alternatives_are_or():
     assert not mapping.groups[0].alternatives[0].mapped
     assert mapping.groups[0].alternatives[1].mapped
 
-    one_group = score_ranking(["chunk-a", "noise"], mapping.groups)
+    sources = {
+        "chunk-a": [_source(0, 5)],
+        "chunk-b": [_source(10, 14)],
+    }
+    one_group = score_ranking(
+        ["chunk-a", "noise"], mapping.groups, item_source_spans=sources
+    )
     assert one_group.metrics["recall_at_5"] == 0.5
     assert one_group.metrics["all_required_groups_success_at_5"] == 0.0
 
-    all_groups = score_ranking(["chunk-a", "chunk-b"], mapping.groups)
+    all_groups = score_ranking(
+        ["chunk-a", "chunk-b"], mapping.groups, item_source_spans=sources
+    )
     assert all_groups.metrics["recall_at_5"] == 1.0
     assert all_groups.metrics["all_required_groups_success_at_5"] == 1.0
 
@@ -78,11 +125,15 @@ def test_recall_mrr_coverage_ndcg_and_multi_hop():
             {"alternatives": ["a"]},
             {"alternatives": ["b"]},
         ],
-        {"a": "chunk-a", "b": "chunk-b"},
+        {"a": _verified("chunk-a", 0, 5), "b": _verified("chunk-b", 10, 14)},
     )
     metrics = score_ranking(
         ["noise", "chunk-a", "noise-2", "chunk-b"],
         mapping.groups,
+        item_source_spans={
+            "chunk-a": [_source(0, 5)],
+            "chunk-b": [_source(10, 14)],
+        },
     ).metrics
 
     assert metrics["recall_at_5"] == 1.0
@@ -102,13 +153,98 @@ def test_no_reference_question_is_diagnostic_not_primary_evaluable():
     assert metrics.metrics["recall_at_5"] is None
 
 
+def test_strict_coverage_rejects_one_character_loose_hit():
+    mapping = _mapping(
+        "q-overlap",
+        "p1",
+        "biology",
+        [{"alternatives": ["required span"]}],
+        {"required span": _verified("touching-chunk", 90, 190)},
+    )
+
+    metrics = score_ranking(
+        ["touching-chunk"],
+        mapping.evaluable_groups,
+        item_source_spans={"touching-chunk": [_source(0, 91)]},
+    ).metrics
+
+    assert metrics["coverage_ndcg_at_10"] == 0.0
+    assert metrics["all_required_groups_success_at_10"] == 0.0
+    assert metrics["loose_hit_coverage_ndcg_at_10"] == 1.0
+
+
+def test_strict_coverage_unions_chunks_and_preserves_or_and_contract():
+    mapping = _mapping(
+        "q-union",
+        "p1",
+        "biology",
+        [
+            {"alternatives": ["long", "substitute"]},
+            {"alternatives": ["condition"]},
+        ],
+        {
+            "long": _verified("long-overlap", 0, 100),
+            "substitute": _verified("substitute", 200, 220),
+            "condition": _verified("condition", 300, 310),
+        },
+    )
+    sources = {
+        "left": [_source(0, 60)],
+        "right": [_source(60, 100)],
+        "substitute": [_source(200, 220)],
+        "condition": [_source(300, 310)],
+    }
+
+    union = score_ranking(
+        ["left", "right", "condition"],
+        mapping.evaluable_groups,
+        item_source_spans=sources,
+    ).metrics
+    via_or = score_ranking(
+        ["substitute", "condition"],
+        mapping.evaluable_groups,
+        item_source_spans=sources,
+    ).metrics
+
+    assert union["all_required_groups_success_at_5"] == 1.0
+    assert union["coverage_ndcg_at_10"] < 1.0
+    assert via_or["all_required_groups_success_at_5"] == 1.0
+
+
+def test_strict_scoring_blocks_missing_source_provenance():
+    mapping = _mapping(
+        "q-provenance",
+        "p1",
+        "biology",
+        [{"alternatives": ["a"]}],
+        {"a": _verified("chunk-a", 0, 5)},
+    )
+
+    with pytest.raises(EvidenceContractError, match="item_source_spans"):
+        score_ranking(["chunk-a"], mapping.evaluable_groups)
+
+
+def test_gold_span_quote_length_must_match_locator():
+    with pytest.raises(EvidenceContractError, match="length"):
+        GoldEvidenceSpan(
+            file_id="file-1",
+            file_hash="a" * 64,
+            pdf_page_index=0,
+            char_start_in_normalized_page=0,
+            char_end_in_normalized_page=10,
+            page_text_hash="b" * 64,
+            evidence_text="short",
+            evidence_text_hash=hashlib.sha256(b"short").hexdigest(),
+        )
+
+
 def test_mapping_coverage_gate_is_group_weighted_and_per_paper():
     mapped = _mapping(
         "q1",
         "p1",
         "biology",
         [{"alternatives": ["a"]}],
-        {"a": "chunk-a"},
+        {"a": _verified("chunk-a", 0, 5)},
     )
     unmapped = _mapping(
         "q2",

@@ -14,6 +14,7 @@ import json
 import math
 import os
 import tempfile
+import types
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,6 +40,7 @@ OLLAMA_GENERATE_ENDPOINT = "/api/generate"
 OLLAMA_TAGS_ENDPOINT = "/api/tags"
 DEFAULT_NORMALIZATION_REVISION = "exact-text-utf8-v1"
 MODEL_ADAPTER_REVISION = "researchqa-model-adapters-v2"
+EMBEDDING_CACHE_SCHEMA_VERSION = 2
 RERANKER_ADAPTER_REVISION = "qwen3-reranker-last-token-logits-v1"
 RERANKER_MAX_LENGTH = 8192
 RERANKER_INFERENCE_DTYPE = "bfloat16"
@@ -98,6 +100,43 @@ def _canonical_json_bytes(value: object) -> bytes:
 
 def _fingerprint(value: object) -> str:
     return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def _code_value_identity(value: object) -> object:
+    if isinstance(value, types.CodeType):
+        return _code_object_identity(value)
+    if isinstance(value, tuple):
+        return [_code_value_identity(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        items = [_code_value_identity(item) for item in value]
+        return {
+            "set_type": type(value).__qualname__,
+            "items": sorted(items, key=_canonical_json_bytes),
+        }
+    if isinstance(value, bytes):
+        return {"bytes_hex": value.hex()}
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return {"repr": repr(value), "type": type(value).__qualname__}
+
+
+def _code_object_identity(code: types.CodeType) -> dict[str, object]:
+    """Return stable behavior-bearing fields, excluding quickening state."""
+    return {
+        "argcount": code.co_argcount,
+        "posonlyargcount": code.co_posonlyargcount,
+        "kwonlyargcount": code.co_kwonlyargcount,
+        "nlocals": code.co_nlocals,
+        "stacksize": code.co_stacksize,
+        "flags": code.co_flags,
+        "code": code.co_code.hex(),
+        "consts": [_code_value_identity(value) for value in code.co_consts],
+        "names": list(code.co_names),
+        "varnames": list(code.co_varnames),
+        "freevars": list(code.co_freevars),
+        "cellvars": list(code.co_cellvars),
+        "exceptiontable": getattr(code, "co_exceptiontable", b"").hex(),
+    }
 
 
 def _require_finite_vector(
@@ -242,6 +281,9 @@ class OllamaBatchEmbeddingClient:
         self.base_url = _validated_ollama_base_url(base_url)
         self.cache_dir = Path(cache_dir).resolve(strict=False)
         self.normalization_revision = normalization_revision
+        self.implementation_fingerprint = (
+            _embedding_adapter_implementation_fingerprint()
+        )
         self.timeout_seconds = float(timeout_seconds)
         self.transport = transport or UrllibJsonTransport()
         self._preflight: ModelPreflight | None = None
@@ -369,6 +411,7 @@ class OllamaBatchEmbeddingClient:
             "endpoint": OLLAMA_EMBED_ENDPOINT,
             "normalization_revision": self.normalization_revision,
             "adapter_revision": MODEL_ADAPTER_REVISION,
+            "implementation_fingerprint": self.implementation_fingerprint,
         }
         details = record.get("details")
         self._preflight = ModelPreflight(
@@ -382,6 +425,7 @@ class OllamaBatchEmbeddingClient:
             details={
                 "endpoint": OLLAMA_EMBED_ENDPOINT,
                 "normalization_revision": self.normalization_revision,
+                "implementation_fingerprint": self.implementation_fingerprint,
                 "record_name": str(record.get("name", "")),
                 "record_model": str(record.get("model", "")),
                 "record_digest": str(record.get("digest", "")),
@@ -442,6 +486,7 @@ class OllamaBatchEmbeddingClient:
         return embedding_cache_key(
             model_digest=self.model_digest,
             normalization_revision=self.normalization_revision,
+            implementation_fingerprint=self.implementation_fingerprint,
             text=text,
         )
 
@@ -461,11 +506,12 @@ class OllamaBatchEmbeddingClient:
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ModelCacheError(f"invalid embedding cache artifact: {path}") from exc
         expected = {
-            "schema_version": 1,
+            "schema_version": EMBEDDING_CACHE_SCHEMA_VERSION,
             "cache_key": cache_key,
             "model_id": self.model_id,
             "model_digest": self.model_digest,
             "normalization_revision": self.normalization_revision,
+            "implementation_fingerprint": self.implementation_fingerprint,
             "text_sha256": text_sha256(text),
             "dimensions": self.dimensions,
         }
@@ -494,11 +540,12 @@ class OllamaBatchEmbeddingClient:
     ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "schema_version": 1,
+            "schema_version": EMBEDDING_CACHE_SCHEMA_VERSION,
             "cache_key": cache_key,
             "model_id": self.model_id,
             "model_digest": self.model_digest,
             "normalization_revision": self.normalization_revision,
+            "implementation_fingerprint": self.implementation_fingerprint,
             "text_sha256": text_sha256(text),
             "dimensions": self.dimensions,
             "embedding": list(embedding),
@@ -576,6 +623,49 @@ class OllamaBatchEmbeddingClient:
                 vectors_by_key[cache_key] = vector
 
         return tuple(vectors_by_key[cache_key] for cache_key in keys)
+
+
+def _embedding_adapter_implementation_fingerprint() -> str:
+    """Bind vectors to the loaded embedding path, excluding reranker code."""
+    callables = (
+        _canonical_json_bytes,
+        _require_finite_vector,
+        _validated_ollama_base_url,
+        UrllibJsonTransport.request_json,
+        OllamaBatchEmbeddingClient.embed_url.fget,
+        OllamaBatchEmbeddingClient.tags_url.fget,
+        OllamaBatchEmbeddingClient._request,
+        OllamaBatchEmbeddingClient._model_record,
+        OllamaBatchEmbeddingClient._post_embed,
+        OllamaBatchEmbeddingClient.preflight,
+        OllamaBatchEmbeddingClient._cache_key,
+        OllamaBatchEmbeddingClient._read_cache,
+        OllamaBatchEmbeddingClient._write_cache,
+        OllamaBatchEmbeddingClient.embed_texts,
+        embedding_cache_key,
+        text_sha256,
+    )
+    code = {
+        f"{item.__module__}.{item.__qualname__}": {
+            "code": _code_object_identity(item.__code__),
+            "defaults": _code_value_identity(item.__defaults__),
+            "kwdefaults": _code_value_identity(
+                tuple(sorted((item.__kwdefaults__ or {}).items()))
+            ),
+        }
+        for item in callables
+    }
+    return _fingerprint(
+        {
+            "adapter_revision": MODEL_ADAPTER_REVISION,
+            "cache_schema_version": EMBEDDING_CACHE_SCHEMA_VERSION,
+            "endpoint": OLLAMA_EMBED_ENDPOINT,
+            "model_id": OLLAMA_EMBED_MODEL_ID,
+            "model_digest": OLLAMA_EMBED_MODEL_DIGEST,
+            "dimensions": OLLAMA_EMBED_DIMENSIONS,
+            "code": code,
+        }
+    )
 
 
 TransformersComponentLoader = Callable[

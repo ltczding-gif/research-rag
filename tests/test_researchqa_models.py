@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from benchmarks import researchqa_models as models
+from benchmarks import researchqa_scoring as scoring
 
 
 def _vector(value: float = 0.25, *, dimensions: int = 2560) -> list[float]:
@@ -197,6 +202,110 @@ def test_ollama_corrupt_cache_is_rejected_not_silently_reembedded(tmp_path):
 
     # The second client did tags + dimension probe, but no replacement embed.
     assert len(transport.calls) == 5
+
+
+def test_embedding_implementation_change_uses_a_new_cache_entry(
+    tmp_path,
+    monkeypatch,
+):
+    transport = FakeTransport()
+    monkeypatch.setattr(
+        models,
+        "_embedding_adapter_implementation_fingerprint",
+        lambda: "a" * 64,
+    )
+    first_client = models.OllamaBatchEmbeddingClient(
+        cache_dir=tmp_path,
+        transport=transport,
+    )
+    first_client.embed_texts(("alpha",))
+    first_key = first_client._cache_key("alpha")
+    calls_after_first = len(transport.calls)
+
+    monkeypatch.setattr(
+        models,
+        "_embedding_adapter_implementation_fingerprint",
+        lambda: "b" * 64,
+    )
+    second_client = models.OllamaBatchEmbeddingClient(
+        cache_dir=tmp_path,
+        transport=transport,
+    )
+    second_client.embed_texts(("alpha",))
+
+    assert second_client._cache_key("alpha") != first_key
+    assert second_client.last_cache_hits == 0
+    assert second_client.last_cache_misses == 1
+    assert len(transport.calls) == calls_after_first + 3
+    assert len(tuple(tmp_path.rglob("*.json"))) == 2
+
+
+def test_embedding_implementation_fingerprint_is_stable_across_hash_seeds():
+    script = (
+        "from benchmarks.researchqa_models import "
+        "_embedding_adapter_implementation_fingerprint as fingerprint; "
+        "print(fingerprint())"
+    )
+    fingerprints = []
+    for seed in ("0", "1", "2", "42"):
+        environment = os.environ.copy()
+        environment["PYTHONHASHSEED"] = seed
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(models.__file__).resolve().parents[1],
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        fingerprints.append(completed.stdout.strip())
+
+    assert len(set(fingerprints)) == 1
+    assert len(fingerprints[0]) == 64
+
+
+def test_scoring_only_change_preserves_embedding_cache_hit(tmp_path, monkeypatch):
+    transport = FakeTransport()
+    first_client = models.OllamaBatchEmbeddingClient(
+        cache_dir=tmp_path,
+        transport=transport,
+    )
+    first_client.embed_texts(("alpha",))
+    first_key = first_client._cache_key("alpha")
+    calls_after_first = len(transport.calls)
+
+    monkeypatch.setattr(scoring, "DEFAULT_BOOTSTRAP_SEED", "changed-scoring")
+    second_client = models.OllamaBatchEmbeddingClient(
+        cache_dir=tmp_path,
+        transport=transport,
+    )
+    second_client.embed_texts(("alpha",))
+
+    assert second_client._cache_key("alpha") == first_key
+    assert second_client.last_cache_hits == 1
+    assert second_client.last_cache_misses == 0
+    assert len(transport.calls) == calls_after_first + 2
+
+
+def test_embedding_cache_rejects_missing_v2_implementation_identity(tmp_path):
+    transport = FakeTransport()
+    first_client = models.OllamaBatchEmbeddingClient(
+        cache_dir=tmp_path,
+        transport=transport,
+    )
+    first_client.embed_texts(("alpha",))
+    cache_key = first_client._cache_key("alpha")
+    cache_path = first_client._cache_path(cache_key)
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload.pop("implementation_fingerprint")
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    second_client = models.OllamaBatchEmbeddingClient(
+        cache_dir=tmp_path,
+        transport=transport,
+    )
+    with pytest.raises(models.ModelCacheError, match="metadata mismatch"):
+        second_client.embed_texts(("alpha",))
 
 
 def test_ollama_transport_failure_is_not_retried(tmp_path):
