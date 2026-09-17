@@ -42,7 +42,7 @@ cannot establish non-oracle retrieval quality. Each output source span retains
 the already-verified quote and quote hash for direct inspection.
 
 ```powershell
-C:\Users\Link\.localrag\venv\Scripts\python.exe -m unittest tests\test_service_evidence_adapter
+C:\Users\Link\.localrag\venv\Scripts\python.exe -m pytest tests/test_service_evidence_adapter.py -q
 C:\Users\Link\.localrag\venv\Scripts\python.exe benchmarks\scripts\verify_service_evidence_fixture.py path\to\fixture --manifest-sha256 d526f60fd9a1eff54c10acc17f95b90667ccb7e9e92799fe734a8cfad8a004ee --output path\to\fixture-score.json
 ```
 
