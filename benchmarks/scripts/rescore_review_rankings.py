@@ -28,6 +28,19 @@ def implementation_snapshot():
     return value
 
 
+def _load_adjudications_for_current_questions(args, questions, parser):
+    if args.adjudications and (not args.dataset_id or not args.dataset_revision):
+        parser.error("--adjudications requires --dataset-id and --dataset-revision")
+    if not args.adjudications:
+        return None
+    return load_gold_adjudications(
+        args.adjudications,
+        questions=questions,
+        dataset_id=args.dataset_id,
+        dataset_revision=args.dataset_revision,
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-run", type=Path, required=True)
@@ -36,6 +49,8 @@ def main(argv=None):
     parser.add_argument("--historical-bindings", type=Path, required=True,
                         help="Independently verified historical artifact/input manifest; never generated from candidate bytes by this command")
     parser.add_argument("--adjudications", type=Path)
+    parser.add_argument("--dataset-id")
+    parser.add_argument("--dataset-revision")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.output.exists():
@@ -45,11 +60,20 @@ def main(argv=None):
     questions_sha256 = hashlib.sha256(args.questions.read_bytes()).hexdigest()
     questions = [json.loads(line) for line in args.questions.read_text(encoding="utf-8").splitlines() if line.strip()]
     documents = load_main_documents(args.source_run)
-    adjudications = load_gold_adjudications(args.adjudications) if args.adjudications else None
+    adjudications = _load_adjudications_for_current_questions(
+        args, questions, parser
+    )
     results = []
     for candidate_path in args.candidate:
         payload = load_verified_payload(candidate_path, bindings=bindings, questions_sha256=questions_sha256)
-        result = rescore_payload(payload, documents, questions, adjudications=adjudications)
+        result = rescore_payload(
+            payload,
+            documents,
+            questions,
+            adjudications=adjudications,
+            dataset_id=args.dataset_id,
+            dataset_revision=args.dataset_revision,
+        )
         result["historical_artifact_sha256"] = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
         results.append(result)
     common = results[0]["evaluable_set"]

@@ -10,6 +10,7 @@ from benchmarks.overnight import canonical_json_bytes
 from benchmarks.researchqa_review import budget_prefix, load_verified_payload, rescore_payload
 from benchmarks.researchqa_chunking import chunk_pdf
 from benchmarks.researchqa_strategy import map_all_references
+from benchmarks.scripts.rescore_review_rankings import _load_adjudications_for_current_questions
 from service.pdf_ir import CanonicalDocument, DocumentPage, DEFAULT_EXTRACTOR_FINGERPRINT, hash_text
 
 
@@ -18,6 +19,14 @@ def test_budget_counts_unicode_and_stops_without_skipping():
               {"a": "中文abc", "b": "long", "c": "x"}.items()}
     assert budget_prefix(("a", "b", "c"), chunks, 6) == (("a",), 5)
     assert budget_prefix(("b",), chunks, 3) == ((), 0)
+
+
+def test_rescore_cli_allows_exact_only_without_a_sidecar():
+    parser = SimpleNamespace(error=lambda message: pytest.fail(message))
+    args = SimpleNamespace(
+        adjudications=None, dataset_id=None, dataset_revision=None
+    )
+    assert _load_adjudications_for_current_questions(args, [], parser) is None
 
 
 def test_historical_payload_requires_unchanged_hash(tmp_path):

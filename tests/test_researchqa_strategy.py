@@ -48,6 +48,8 @@ from benchmarks.researchqa_strategy import (
     generate_s1_candidate,
     load_main_documents,
     map_all_references,
+    question_fingerprint,
+    question_manifest_sha256,
     rank_stage_results,
     run_complete_candidate,
 )
@@ -498,10 +500,21 @@ def test_agent_adjudication_is_validated_against_canonical_document(tmp_path):
     start = page.normalized_text.index(evidence_text)
     alternative_id = evidence_alternative_id("q-adjudicated", 0, 0)
     sidecar = {
-        "schema_version": 1,
-        "protocol_version": STRICT_EVIDENCE_PROTOCOL_VERSION,
+        "schema_version": 2,
+        "protocol_version": "researchqa-adjudication-sidecar-v2",
+        "dataset_id": "fixture-rq",
+        "dataset_revision": "r1",
+        "question_manifest_sha256": question_manifest_sha256([question]),
         "adjudications": {
             alternative_id: {
+                "target": {
+                    "paper_id": "W1",
+                    "source": {"file_hash": document.file_hash, "extractor_fingerprint": document.extractor_fingerprint},
+                    "question": {"row_id": "q-adjudicated", "fingerprint": question_fingerprint(question)},
+                    "group_index": 0,
+                    "alternative_index": 0,
+                    "reference_sha256": _sha("Wording from another edition."),
+                },
                 "verification_state": "adjudicated",
                 "gold_version": "audit-2026-09-17-v1",
                 "provenance": {
@@ -530,6 +543,8 @@ def test_agent_adjudication_is_validated_against_canonical_document(tmp_path):
         chunks,
         documents={"W1": document},
         gold_adjudications=sidecar,
+        dataset_id="fixture-rq",
+        dataset_revision="r1",
         overall_minimum=1.0,
         per_paper_minimum=1.0,
     )
@@ -540,6 +555,41 @@ def test_agent_adjudication_is_validated_against_canonical_document(tmp_path):
     assert alternative.gold_version == "audit-2026-09-17-v1"
     assert mapping.coverage.passed
 
+    changed_question = dict(question)
+    changed_question["expected_references"] = [
+        {"alternatives": ["Wording from another edition with opposite condition."]}
+    ]
+    changed_sidecar = json.loads(json.dumps(sidecar))
+    changed_sidecar["question_manifest_sha256"] = question_manifest_sha256(
+        [changed_question]
+    )
+    changed_sidecar["adjudications"][alternative_id]["target"]["question"][
+        "fingerprint"
+    ] = question_fingerprint(changed_question)
+    with pytest.raises(StrategyContractError, match="target differs"):
+        map_all_references(
+            [changed_question],
+            chunks,
+            documents={"W1": document},
+            gold_adjudications=changed_sidecar,
+            dataset_id="fixture-rq",
+            dataset_revision="r1",
+            overall_minimum=0.0,
+            per_paper_minimum=0.0,
+        )
+
+    with pytest.raises(StrategyContractError, match="schema/protocol"):
+        map_all_references(
+            [question],
+            chunks,
+            documents={"W1": document},
+            gold_adjudications={"schema_version": 1, "adjudications": {}},
+            dataset_id="fixture-rq",
+            dataset_revision="r1",
+            overall_minimum=0.0,
+            per_paper_minimum=0.0,
+        )
+
     sidecar["adjudications"][alternative_id]["spans"][0][
         "page_text_hash"
     ] = "0" * 64
@@ -549,6 +599,8 @@ def test_agent_adjudication_is_validated_against_canonical_document(tmp_path):
             chunks,
             documents={"W1": document},
             gold_adjudications=sidecar,
+            dataset_id="fixture-rq",
+            dataset_revision="r1",
             overall_minimum=0.0,
             per_paper_minimum=0.0,
         )
