@@ -1,0 +1,89 @@
+{
+  "schema": "w6-answer-rubric-v5",
+  "version": "2026-09-17.v5",
+  "scope": "five previously observed development questions; paired context diagnostic",
+  "release_quality_claim_eligible": false,
+  "approval": {
+    "policy_approved_by": "project_owner",
+    "message": "按推荐口径继续",
+    "date": "2026-09-17",
+    "scope": "The five recommended question-scope rules; not human certification of individual scientific claims or future model answers."
+  },
+  "history_policy": {
+    "preserve_v4_and_original_scores": true,
+    "no_automatic_sidecar_v1_migration": true,
+    "compare_only_within_this_protocol": true,
+    "observed_questions_are_not_holdout": true,
+    "single_sample_pairs_do_not_establish_causal_or_statistical_improvement": true
+  },
+  "evaluation_dimensions": [
+    "output_complete",
+    "core_answer_correct_and_complete",
+    "citation_format_and_returned_id_valid",
+    "citation_source_location_correct",
+    "every_factual_claim_supported_by_its_citation",
+    "required_evidence_complete_in_context",
+    "optional_condition_completeness",
+    "refusal_decision_correct_for_supplied_context",
+    "unsupported_additional_claims_after_refusal"
+  ],
+  "rules": {
+    "missing_optional_detail_fails_core_answer": false,
+    "incorrect_volunteered_detail_is_still_an_error": true,
+    "citation_presence_alone_proves_claim_support": false,
+    "exact_span_coverage_alone_proves_scientific_sufficiency": false,
+    "missing_outputs_remain_in_denominator": true,
+    "review_label": "agent_reviewed_under_owner_approved_policy",
+    "human_reviewed_answers": false,
+    "answer_quality_and_appropriate_refusal_are_reported_separately": true
+  },
+  "questions": [
+    {
+      "question_id": "W6-L03",
+      "question": "What ORR specific activity did PtBi nanoplates/C reach at 0.9 V versus RHE, and how did it compare with Pt/C?",
+      "required": ["ORR specific activity 1.04 mA cm−2", "5.2-fold versus Pt/C", "correct explicit binding to 0.9 V versus RHE"],
+      "optional": ["mass activity and its relative comparison"],
+      "special_rules": ["An SI table without an explicit 0.9 V association cannot establish that condition by itself.", "Do not transfer the MOR i-t condition of 0.67 V to the ORR measurement."]
+    },
+    {
+      "question_id": "W6-L04",
+      "question": "Why would the thermochemical-model onset potential alone give a misleading impression that Pt(111) is better than Cu(111) for CO2 reduction?",
+      "required": ["thermochemical onset ignores activation barriers", "explicit kinetics show HER dominates CO2 reduction on Pt(111)", "explain why thermochemical onset alone misranks catalytic behavior"],
+      "optional": ["Pt(111) −0.35 V and Cu(111) −0.85 V thermochemical onset estimates", "Cu activation-energy and rate crossover values"],
+      "special_rules": ["Do not confuse activation-energy crossover near −0.6 V with rate crossover near −0.85 V.", "A volunteered −0.6 V claim requires citation to the passage that actually supports that activation-energy comparison."]
+    },
+    {
+      "question_id": "W6-L10",
+      "question": "What acidic-electrolyte MOR activities were reported for PtBi nanoplates/C, and what durability observation followed?",
+      "required": ["acidic MOR specific activity 3.18 mA cm−2", "mass activity 1.1 A mg−1", "after 4000 s the MOR current remains higher than Pt/C"],
+      "optional": ["7.4-fold specific activity and 3.7-fold mass activity comparisons"],
+      "special_rules": ["Do not substitute alkaline MOR measurements for acidic measurements."]
+    },
+    {
+      "question_id": "W6-C05",
+      "question": "What durability outcomes were reported for IrW/C during OER cycling and for Co/N-CNSNs during a fixed-potential OER test?",
+      "required": ["IrW/C polarization curves nearly unchanged after 3000 cycles", "Co/N-CNSNs retains 79% current after 30000 s at 1.50 V"],
+      "optional": ["IrW/C 0.1 M HClO4 electrolyte", "IrW/C cycling range 1.25–1.7 V versus RHE"],
+      "special_rules": ["Report outcome correctness separately from optional cycling-condition completeness.", "If an optional condition is stated, it must still be supported and correct."]
+    },
+    {
+      "question_id": "W6-C06",
+      "question": "How did the Cu-nanowire and PtBi studies use different structural strategies to preserve catalytic behavior?",
+      "required": ["rGO wrapping preserves Cu-nanowire morphology and methane selectivity through 5 C", "PtBi intermetallic core and Pt shell architecture supports durable catalytic behavior", "distinguish the two structural strategies"],
+      "optional": ["specific PtBi mechanism of limiting Bi mobility and dissolution"],
+      "special_rules": ["Direct architecture-and-durability evidence can satisfy the strategy question without the specific dissolution mechanism.", "Do not present an unquoted mechanism as if it were stated by an architecture-only passage."]
+    }
+  ],
+  "diagnostic_design": {
+    "variants": ["retrieved", "oracle"],
+    "new_generation_count": 10,
+    "same_question_prompt_model_and_parameters_within_pair": true,
+    "retrieved_context": "reuse the frozen v4 selected evidence; no new retrieval or reranking",
+    "oracle_context": "canonical source excerpts selected and checked before new generation; includes target evidence by design",
+    "budget": {"limit": 8000, "unit": "Unicode code points of evidence content", "citation_headers_separate": true},
+    "oracle_is_retrieval_score": false,
+    "rubric_or_reference_answer_text_in_model_prompt": false,
+    "oracle_source_selection_uses_target_knowledge": true,
+    "historical_answers": "optional separately labeled v5 rescoring; never merge with new samples or select best-of"
+  }
+}
