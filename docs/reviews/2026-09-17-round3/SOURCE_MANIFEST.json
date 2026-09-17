@@ -1,0 +1,26 @@
+{
+  "created_at": "2026-09-17T01:46:09.284298+00:00",
+  "files": [
+    {
+      "source": "ROUND3_REVIEW_2026-09-17.md",
+      "snapshot": "docs/reviews/2026-09-17-round3/ROUND3_REVIEW_2026-09-17.md",
+      "sha256": "82d3e4944e439431e011e12f62ea122cc118a398ff58d44a8fb7da3d4b1a7a54",
+      "availability": "published"
+    },
+    {
+      "source": "IMPROVEMENT_PLAN.md",
+      "snapshot": ".codex/round3-review-20260917/baseline-documents/IMPROVEMENT_PLAN.md",
+      "sha256": "c650959a562274c74a5fef08f7bf9d9383688ca6f2b708581bbc563b5c33a075",
+      "availability": "local_private_not_uploaded"
+    },
+    {
+      "source": "improvement-plan.json",
+      "snapshot": ".codex/round3-review-20260917/baseline-documents/improvement-plan.json",
+      "sha256": "a61586a12eea71be331ccd8a819d7b2c32eb9ccb691a547cfd023ace12d675d0",
+      "availability": "local_private_not_uploaded"
+    }
+  ],
+  "main": "6865af20471b5c1ae7a1821f35a464d807134b9c",
+  "research": "0262686c4536b0f77ef6284bdbf8c92166fea9bb",
+  "note": "Original review hash and pre-revision-5 plan snapshots; not the external reviewer's missing SOURCE_MANIFEST. Absolute machine paths omitted for portable publication."
+}
