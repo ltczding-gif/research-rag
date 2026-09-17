@@ -32,3 +32,15 @@ def test_neighbor_ids_follow_content_hash_schema():
 def test_neighbor_ids_remain_compatible_with_legacy_schema():
     helper = _load_helper()
     assert helper("group_2_file_0_chunk_0", 0) == (None, "group_2_file_0_chunk_1")
+
+
+def test_production_compact_ids_keep_parent_hash_and_attachment_boundary():
+    helper = _load_helper()
+    assert helper("paper_PARENT_digest_f0_c31", 31) == (
+        "paper_PARENT_digest_f0_c30", "paper_PARENT_digest_f0_c32")
+    assert helper("paper_PARENT_digest_f1_c0", 0) == (None, "paper_PARENT_digest_f1_c1")
+
+
+def test_neighbor_uses_actual_suffix_when_old_metadata_disagrees():
+    assert _load_helper()("paper_PARENT_digest_f0_c31", 0) == (
+        "paper_PARENT_digest_f0_c30", "paper_PARENT_digest_f0_c32")
