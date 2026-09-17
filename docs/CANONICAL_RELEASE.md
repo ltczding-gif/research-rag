@@ -63,9 +63,16 @@ successful input count from HTTP attempt count and record each recovery class.
 
 Earlier failed candidates are retained. A real full build exposed both a runner
 connection failure and an invalid-vector failure; the latter's original vector
-was not captured, so its exact defect is unknown. The current instrumented run
-captured an all-zero vector and continued after bounded recovery. Its final
-receipt must still pass before the whole generation is accepted.
+was not captured, so its exact defect is unknown. The successful instrumented
+notes run captured an all-zero vector and recovered without recording it as a
+successful input.
+
+The notes generation `0a0aade879fc42709101439700c69bc8` published 41,233 sections
+from 2,143 notes in 6,261.9 seconds. Its receipt records 2,581 embedding HTTP
+attempts, including two transient-connection retries and one invalid-vector
+retry, with no cleanup warnings. The successful input count is 41,233; the
+2,578 successful batches plus three retries account for all HTTP attempts.
+Configured-client acceptance remains a later gate.
 
 See [deployment and recovery](LOCAL_DEPLOYMENT.md) and
 [embedding build sessions](development/EMBEDDING_BUILD_SESSIONS.md).
@@ -75,7 +82,8 @@ See [deployment and recovery](LOCAL_DEPLOYMENT.md) and
 - Source inventory, exception accounting and final PDF preflight: passed.
 - Local regression: 485 passed, 3 skipped. All 12 GitHub checks passed for the
   implementation commit `8af6273`.
-- Complete notes and PDF generations with matching receipts/artifacts: pending.
+- Notes candidate generation and build receipt: published. Complete PDF
+  generation and joint reader validation: pending.
 - Real MCP, 30 frozen W6 questions repeated three times, source-coordinate
   coverage, all six tools and citation/error cases: pending.
 - Five actual client answer flows with independent semantic support review:
