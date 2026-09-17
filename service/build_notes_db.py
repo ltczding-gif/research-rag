@@ -26,7 +26,12 @@ from embedding_client import (
     get_embedding,  # noqa: F401 - retained as a legacy re-export
     split_embedding_text,
 )
-from index_generation import GenerationStore, implementation_contract
+from index_generation import (
+    GenerationStore, PublicationCommittedError, atomic_write_json, implementation_contract,
+)
+from embedding_session import (
+    BUILD_SESSION_POLICY, EmbeddingIdentityError, create_build_embedding_session,
+)
 
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -213,9 +218,11 @@ def _pipeline_contract(note_suffix: str, embedding):
     return {
         "embedding": embedding,
         "pipeline": implementation_contract(
-            [Path(__file__), Path(__file__).with_name("index_generation.py")],
+            [Path(__file__), Path(__file__).with_name("index_generation.py"),
+             Path(__file__).with_name("embedding_session.py")],
             {
                 "schema": _PIPELINE_SCHEMA,
+                "embedding_session_policy": BUILD_SESSION_POLICY,
                 "note_suffix": note_suffix,
                 "identity": "filename-md5-v1",
                 "artifact": "verbatim-utf8-note-v1",
@@ -241,6 +248,7 @@ def build_notes_generation(
     collection_name: str = COLLECTION_NAME,
     note_suffix: str = NOTE_SUFFIX,
     allow_removals: bool = False,
+    rebuild: bool = False,
     client_factory=chromadb.PersistentClient,
     embed_fn: Callable[[str], Sequence[float]] = embed_index_text,
     split_fn: Callable[[str], Sequence[tuple[int, int, str]]] = split_embedding_text,
@@ -281,18 +289,9 @@ def build_notes_generation(
 
             client = client_factory(path=str(chroma_path))
             active = store.load_active()
-            if store.same_inputs(active, contract, sources):
-                count = _collection_count(client, active["collection_name"])
-                if count <= 0 or count != active["item_count"]:
-                    raise NotesBuildError(
-                        "Active collection count does not match its manifest"
-                    )
-                try:
-                    store.validate_artifacts(active)
-                except ValueError:
-                    pass  # Rebuild missing or changed artifacts from current sources.
-                else:
-                    return active, True
+            if (not rebuild and store.same_inputs(active, contract, sources)
+                    and store.generation_usable(client, active)):
+                return active, True
 
             generation = store.begin(contract, sources)
             generation_dir = store.generation_path(generation)
@@ -310,47 +309,60 @@ def build_notes_generation(
 
             artifacts = {"notes": {}}
             item_count = 0
-            for note in notes:
-                artifact_relative = f"notes/{note['note_id']}.md"
-                artifact_path = generation_dir / artifact_relative
-                artifact_path.write_bytes(note["raw"])
-                artifacts["notes"][note["note_id"]] = artifact_relative
+            session = create_build_embedding_session(
+                embedding_metadata, embedding_contract_fn, embed_fn, split_fn,
+            )
+            with session:
+                for note in notes:
+                    artifact_relative = f"notes/{note['note_id']}.md"
+                    artifact_path = generation_dir / artifact_relative
+                    artifact_path.write_bytes(note["raw"])
+                    artifacts["notes"][note["note_id"]] = artifact_relative
 
-                for section_start, section_end, title in _section_ranges(note["text"]):
-                    section_text = note["text"][section_start:section_end]
-                    for local_start, local_end, chunk_text in _validated_splits(
-                        section_text, split_fn
-                    ):
-                        start = section_start + local_start
-                        end = section_start + local_end
-                        embedding = [float(value) for value in embed_fn(chunk_text)]
-                        if (
-                            len(embedding) != dimensions
-                            or not all(math.isfinite(value) for value in embedding)
-                            or not any(embedding)
+                    for section_start, section_end, title in _section_ranges(note["text"]):
+                        section_text = note["text"][section_start:section_end]
+                        for local_start, local_end, chunk_text in _validated_splits(
+                            section_text, session.split
                         ):
-                            raise NotesBuildError(
-                                "Embedding does not match the declared dimensions"
+                            start = section_start + local_start
+                            end = section_start + local_end
+                            try:
+                                embedding = [float(value) for value in session.embed(chunk_text)]
+                            except EmbeddingIdentityError:
+                                raise
+                            except ValueError as exc:
+                                raise NotesBuildError(str(exc)) from exc
+                            if (
+                                len(embedding) != dimensions
+                                or not all(math.isfinite(value) for value in embedding)
+                                or not any(embedding)
+                            ):
+                                raise NotesBuildError(
+                                    "Embedding does not match the declared dimensions"
+                                )
+                            record_id = f"{note['note_id']}:{start}:{end}"
+                            collection.upsert(
+                                ids=[record_id],
+                                documents=[chunk_text],
+                                embeddings=[embedding],
+                                metadatas=[
+                                    {
+                                        "note_id": note["note_id"],
+                                        "source_file": note["path"].name,
+                                        "zotero_parent_key": note["zotero_parent_key"],
+                                        "start": start,
+                                        "end": end,
+                                        "section_title": title,
+                                        "generation_id": generation["generation_id"],
+                                        "embedding_truncated": False,
+                                    }
+                                ],
                             )
-                        record_id = f"{note['note_id']}:{start}:{end}"
-                        collection.upsert(
-                            ids=[record_id],
-                            documents=[chunk_text],
-                            embeddings=[embedding],
-                            metadatas=[
-                                {
-                                    "note_id": note["note_id"],
-                                    "source_file": note["path"].name,
-                                    "zotero_parent_key": note["zotero_parent_key"],
-                                    "start": start,
-                                    "end": end,
-                                    "section_title": title,
-                                    "generation_id": generation["generation_id"],
-                                    "embedding_truncated": False,
-                                }
-                            ],
-                        )
-                        item_count += 1
+                            item_count += 1
+
+            receipt = "embedding-session.json"
+            atomic_write_json(generation_dir / receipt, session.summary())
+            artifacts["embedding_session"] = receipt
 
             actual_count = int(collection.count())
             if item_count <= 0 or actual_count != item_count:
@@ -365,12 +377,14 @@ def build_notes_generation(
             )
             return published, False
         except BaseException as exc:
-            if generation is None:
-                generation = store.begin(contract, sources)
-            store.fail(
-                generation,
-                "interrupted" if isinstance(exc, KeyboardInterrupt) else exc,
-            )
+            try:
+                if generation is None:
+                    generation = store.begin(contract, sources)
+                outcome = store.fail(generation, exc)
+            except Exception:
+                outcome = "unknown"  # Diagnostics must not replace the original exception.
+            if outcome == "committed" and not isinstance(exc, PublicationCommittedError):
+                raise PublicationCommittedError(generation["generation_id"], "notes build", exc) from exc
             raise
 
 
@@ -381,24 +395,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Allow sources absent from the full current snapshot to be withdrawn.",
     )
+    parser.add_argument("--rebuild", action="store_true",
+                        help="Force a fresh notes candidate without deleting active data.")
     args = parser.parse_args(argv)
     print("[INIT] Building immutable notes index generation...")
     print(f"  Notes dir:  {NOTES_DIR}")
     print(f"  ChromaDB:   {CHROMA_PATH}")
     print(f"  Collection: {COLLECTION_NAME}")
     try:
-        manifest, reused = build_notes_generation(allow_removals=args.allow_removals)
+        options = {"allow_removals": args.allow_removals}
+        if args.rebuild:
+            options["rebuild"] = True
+        manifest, reused = build_notes_generation(**options)
+    except PublicationCommittedError as exc:
+        print(f"[COMMITTED WITH WARNING] {exc}", file=sys.stderr)
+        return 3
     except KeyboardInterrupt:
-        print("[INTERRUPTED] Notes index build left the active generation unchanged.")
+        print("[INTERRUPTED] Inspect index status before retrying; publication outcome may be unknown.")
         return 130
     except Exception as exc:
         print(f"[FATAL] Notes index build failed: {exc}", file=sys.stderr)
         return 1
     action = "Reused" if reused else "Published"
-    print(
-        f"[DONE] {action} generation {manifest['generation_id']} "
-        f"({manifest['item_count']} sections)."
-    )
+    try:
+        print(
+            f"[DONE] {action} generation {manifest['generation_id']} "
+            f"({manifest['item_count']} sections)."
+        )
+    except (OSError, KeyboardInterrupt):
+        return 3  # The output stream failed, not the already committed build.
     return 0
 
 

@@ -411,17 +411,17 @@ def _write_candidate(
         },
     )
     sources = _source_lookup(plan)
-    items = [
-        (
-            chunk.chunk_id,
-            chunk.text,
-            _chunk_metadata(chunk, sources[chunk.file_id], generation_id),
-            embed_index_text(chunk.text),
-        )
-        for chunk in plan.chunks
-    ]
-    for offset in range(0, len(items), 100):
-        batch = items[offset : offset + 100]
+    # Bound peak embedding materialization to the current write batch.
+    for offset in range(0, len(plan.chunks), 100):
+        batch = [
+            (
+                chunk.chunk_id,
+                chunk.text,
+                _chunk_metadata(chunk, sources[chunk.file_id], generation_id),
+                embed_index_text(chunk.text),
+            )
+            for chunk in plan.chunks[offset:offset + 100]
+        ]
         collection.add(
             ids=[item[0] for item in batch],
             documents=[item[1] for item in batch],
@@ -450,6 +450,7 @@ def _build_contract(plan, embedding_contract, implementation_contract):
         Path(__file__).with_name("pdf_ir.py"),
         Path(__file__).with_name("pdf_baseline.py"),
         Path(__file__).with_name("index_generation.py"),
+        Path(__file__).with_name("embedding_session.py"),
     ]
     return {
         "embedding": embedding_contract(),
@@ -477,29 +478,18 @@ def _build_contract(plan, embedding_contract, implementation_contract):
 
 def _record_failed_attempt(store, generation, error, sources=None):
     if store is None:
-        return
+        return "unknown"
     try:
         with store.writer_lock():
             attempt = generation or store.begin({}, sources or [])
-            store.fail(attempt, error)
+            return store.fail(attempt, error)
     except Exception:
         # Preserve the original build error when status recording itself fails.
-        pass
+        return "unknown"
 
 
 def _active_generation_usable(store, client, active):
-    if not active or active.get("item_count", 0) <= 0:
-        return False
-    try:
-        store.validate_artifacts(active)
-        collection = client.get_collection(active["collection_name"])
-        metadata = collection.metadata or {}
-        return (
-            collection.count() == active["item_count"]
-            and metadata.get("generation_id") == active["generation_id"]
-        )
-    except Exception:
-        return False
+    return bool(active and store.generation_usable(client, active))
 
 
 def main(argv=None):
@@ -509,15 +499,19 @@ def main(argv=None):
     try:
         args = _parse_args(argv)
         try:
+            from .embedding_session import create_build_embedding_session
             from .index_generation import (
                 GenerationStore,
                 atomic_write_text,
+                atomic_write_json,
                 implementation_contract,
             )
         except ImportError:
+            from embedding_session import create_build_embedding_session
             from index_generation import (
                 GenerationStore,
                 atomic_write_text,
+                atomic_write_json,
                 implementation_contract,
             )
 
@@ -551,30 +545,38 @@ def main(argv=None):
                 split_embedding_text,
             )
 
-        plan = split_prepared_chunks_for_embedding(plan, split_embedding_text)
-        sources = _inventory_payload(plan)
-        failure_sources = sources
-        contract = _build_contract(plan, embedding_contract, implementation_contract)
+        expected_embedding = embedding_contract()
         client = chromadb.PersistentClient(path=str(CHROMA_PATH))
         with store.writer_lock():
             active = store.load_active()
-            if (
-                plan.publishable
-                and not args.rebuild
-                and store.same_inputs(active, contract, sources)
-                and _active_generation_usable(store, client, active)
-            ):
-                print(f"[SKIP] Active PDF generation already matches inputs: {active['generation_id']}")
-                return 0
-            generation = store.begin(contract, sources)
-            _validate_prepared_build(plan)
-            _write_candidate(
-                client=client,
-                store=store,
-                generation=generation,
-                plan=plan,
-                embed_index_text=embed_index_text,
-                atomic_write_text=atomic_write_text,
+            session = create_build_embedding_session(
+                expected_embedding, embedding_contract, embed_index_text, split_embedding_text,
+            )
+            with session:
+                plan = split_prepared_chunks_for_embedding(plan, session.split)
+                sources = _inventory_payload(plan)
+                failure_sources = sources
+                contract = _build_contract(plan, lambda: session.expected, implementation_contract)
+                if (
+                    plan.publishable
+                    and not args.rebuild
+                    and store.same_inputs(active, contract, sources)
+                    and _active_generation_usable(store, client, active)
+                ):
+                    print(f"[SKIP] Active PDF generation already matches inputs: {active['generation_id']}")
+                    return 0
+                generation = store.begin(contract, sources)
+                _validate_prepared_build(plan)
+                _write_candidate(
+                    client=client,
+                    store=store,
+                    generation=generation,
+                    plan=plan,
+                    embed_index_text=session.embed,
+                    atomic_write_text=atomic_write_text,
+                )
+            atomic_write_json(
+                store.generation_path(generation) / "embedding-session.json", session.summary(),
             )
             if active and not args.allow_removals:
                 current_ids = {source["source_id"] for source in sources}
@@ -584,7 +586,7 @@ def main(argv=None):
             store.publish(
                 generation,
                 item_count=len(plan.chunks),
-                artifacts={"pages": "pages.jsonl"},
+                artifacts={"pages": "pages.jsonl", "embedding_session": "embedding-session.json"},
                 allow_removals=args.allow_removals,
             )
             print(
@@ -592,15 +594,19 @@ def main(argv=None):
                 f"with {len(plan.chunks)} chunks"
             )
             return 0
-    except KeyboardInterrupt:
-        _record_failed_attempt(
-            store, generation, "interrupted", failure_sources
-        )
-        print("[INTERRUPTED] PDF build did not change the active generation.")
+    except KeyboardInterrupt as exc:
+        outcome = _record_failed_attempt(store, generation, exc, failure_sources)
+        if outcome == "committed":
+            print("[COMMITTED WITH WARNING] PDF generation is active despite interruption; inspect status.", file=sys.stderr)
+            return 3
+        print("[INTERRUPTED] Inspect index status before retrying; publication outcome may be unknown.")
         return 130
     except Exception as exc:
-        _record_failed_attempt(store, generation, exc, failure_sources)
-        print(f"[ERROR] PDF build failed; active generation unchanged: {exc}")
+        outcome = _record_failed_attempt(store, generation, exc, failure_sources)
+        if outcome == "committed":
+            print(f"[COMMITTED WITH WARNING] PDF generation is active: {exc}", file=sys.stderr)
+            return 3
+        print(f"[ERROR] PDF build stopped; inspect index status: {exc}")
         return 1
 
 if __name__ == "__main__":

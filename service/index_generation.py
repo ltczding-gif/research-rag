@@ -17,6 +17,27 @@ from uuid import uuid4
 SCHEMA_VERSION = 1
 
 
+class GenerationIntegrityError(ValueError):
+    """Persistent state is inconsistent; automatic selection is unsafe."""
+
+
+class PublicationCommittedError(RuntimeError):
+    """The active pointer committed despite a subsequent exception."""
+
+    def __init__(self, generation_id, operation, cause):
+        self.generation_id = generation_id
+        self.operation = operation
+        self.interrupted = isinstance(cause, KeyboardInterrupt)
+        super().__init__(
+            f"{operation} committed generation {generation_id}; "
+            f"subsequent {type(cause).__name__}: {cause}. Inspect index status before retrying."
+        )
+
+
+def _error_text(error):
+    return "interrupted" if isinstance(error, KeyboardInterrupt) else str(error) or type(error).__name__
+
+
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
                                      separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -86,7 +107,12 @@ class GenerationStore:
         identifier = generation if isinstance(generation, str) else generation["generation_id"]
         if not re.fullmatch(r"[a-f0-9]{32}", identifier):
             raise ValueError("Invalid generation identity")
-        return self.root / "generations" / identifier
+        generation_root = self.root / "generations"
+        path = generation_root / identifier
+        if (generation_root.resolve().parent != self.root.resolve()
+                or path.resolve().parent != generation_root.resolve()):
+            raise GenerationIntegrityError("Generation path escapes its logical namespace")
+        return path
 
     @contextmanager
     def writer_lock(self):
@@ -118,21 +144,111 @@ class GenerationStore:
                 else:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
+    def _validate_manifest(self, manifest, generation_id=None):
+        if not isinstance(manifest, dict):
+            raise GenerationIntegrityError("Generation manifest must be an object")
+        identifier = manifest.get("generation_id")
+        if (
+            not isinstance(identifier, str)
+            or not re.fullmatch(r"[a-f0-9]{32}", identifier)
+            or (generation_id is not None and identifier != generation_id)
+            or manifest.get("schema_version") != SCHEMA_VERSION
+            or manifest.get("logical_name") != self.logical_name
+            or manifest.get("collection_name") != self.logical_name + "_g_" + identifier
+            or manifest.get("state") != "complete"
+            or not isinstance(manifest.get("item_count"), int)
+            or isinstance(manifest.get("item_count"), bool)
+            or manifest["item_count"] <= 0
+        ):
+            raise GenerationIntegrityError("Generation manifest is incomplete or inconsistent")
+        return manifest
+
     def load_active(self):
         pointer_path = self.root / "active.json"
         if not pointer_path.exists():
+            if pointer_path.is_symlink():
+                raise GenerationIntegrityError("Active pointer is a dangling symlink")
             return None
-        pointer = read_json(pointer_path)
-        manifest = read_json(self.generation_path(pointer) / "manifest.json")
-        if (manifest.get("state") != "complete"
-                or manifest.get("schema_version") != SCHEMA_VERSION
-                or manifest.get("logical_name") != self.logical_name
-                or fingerprint(manifest) != pointer.get("manifest_fingerprint")
-                or manifest.get("collection_name") != pointer.get("collection_name")
-                or manifest.get("generation_id") != pointer.get("generation_id")
-                or manifest.get("item_count", 0) <= 0):
-            raise ValueError("Active index manifest is incomplete or inconsistent")
+        try:
+            pointer = read_json(pointer_path)
+            if not isinstance(pointer, dict):
+                raise GenerationIntegrityError("Active pointer must be an object")
+            manifest = read_json(self.generation_path(pointer) / "manifest.json")
+            self._validate_manifest(manifest, pointer.get("generation_id"))
+            if (fingerprint(manifest) != pointer.get("manifest_fingerprint")
+                    or manifest["collection_name"] != pointer.get("collection_name")):
+                raise GenerationIntegrityError("Active index manifest is incomplete or inconsistent")
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            if isinstance(exc, GenerationIntegrityError):
+                raise
+            raise GenerationIntegrityError(
+                "Active index is unreadable or inconsistent; use explicit offline recovery"
+            ) from exc
         return manifest
+
+    def publication_state(self, generation):
+        """Observe persistent commit state, not a local success flag.
+
+        'not_active' does not imply the generation has never been active.
+        'unknown' must never authorize rewriting a sealed manifest.
+        """
+        try:
+            active = self.load_active()
+        except (OSError, ValueError, KeyError, TypeError):
+            return "unknown"
+        if active is None or active["generation_id"] != generation["generation_id"]:
+            return "not_active"
+        return "committed" if fingerprint(active) == fingerprint(generation) else "unknown"
+
+    def _pointer_for(self, manifest):
+        return {
+            "generation_id": manifest["generation_id"],
+            "collection_name": manifest["collection_name"],
+            "manifest_fingerprint": fingerprint(manifest),
+        }
+
+    def _activate_manifest(self, manifest, operation):
+        try:
+            atomic_write_json(self.root / "active.json", self._pointer_for(manifest))
+        except BaseException as exc:
+            if self.publication_state(manifest) == "committed":
+                self._record_error_event(manifest, exc, "committed", operation)
+                raise PublicationCommittedError(manifest["generation_id"], operation, exc) from exc
+            raise
+        return manifest
+
+    def _record_error_event(self, generation, error, publication_state, operation="build"):
+        """Best-effort diagnostics cannot invalidate an already sealed version."""
+        event = {
+            "schema_version": 1,
+            "event_id": uuid4().hex,
+            "generation_id": generation["generation_id"],
+            "logical_name": self.logical_name,
+            "operation": operation,
+            "recorded_at": now(),
+            "publication_state": publication_state,
+            "manifest_state": generation.get("state"),
+            "error_type": type(error).__name__,
+            "error": _error_text(error),
+        }
+        try:
+            atomic_write_json(self.root / "events" / (event["event_id"] + ".json"), event)
+            latest = self.latest_attempt()
+            # A delayed recorder may run after a newer attempt acquired the lock.
+            if latest is None or latest.get("generation_id") == generation["generation_id"]:
+                atomic_write_json(self.root / "latest-attempt.json", {
+                    "generation_id": generation["generation_id"],
+                    "state": generation.get("state"),
+                    "started_at": generation.get("started_at"),
+                    "finished_at": generation.get("finished_at"),
+                    "item_count": generation.get("item_count", 0),
+                    "publication_state": publication_state,
+                    "error": _error_text(error),
+                    "event_id": event["event_id"],
+                })
+        except Exception:
+            return False
+        return True
 
     def latest_attempt(self):
         path = self.root / "latest-attempt.json"
@@ -154,14 +270,47 @@ class GenerationStore:
         return generation
 
     def _save_attempt(self, generation):
-        atomic_write_json(self.generation_path(generation) / "manifest.json", generation)
+        manifest_path = self.generation_path(generation) / "manifest.json"
+        if manifest_path.exists():
+            previous = read_json(manifest_path)
+            if previous.get("state") in {"complete", "failed"}:
+                if fingerprint(previous) != fingerprint(generation):
+                    raise GenerationIntegrityError("A sealed generation manifest is immutable")
+                return
+        atomic_write_json(manifest_path, generation)
         atomic_write_json(self.root / "latest-attempt.json", {
             key: generation[key] for key in ("generation_id", "state", "started_at", "item_count")
         } | {"error": generation.get("error"), "finished_at": generation.get("finished_at")})
 
     def fail(self, generation, error):
-        generation.update(state="failed", error=str(error), finished_at=now())
-        self._save_attempt(generation)
+        """Record failure while holding writer_lock; never mutate sealed state."""
+        try:
+            disk = read_json(self.generation_path(generation) / "manifest.json")
+            if not isinstance(disk, dict) or disk.get("generation_id") != generation["generation_id"]:
+                raise GenerationIntegrityError("Unexpected candidate manifest identity")
+        except (OSError, ValueError, KeyError, TypeError):
+            self._record_error_event(generation, error, "unknown")
+            return "unknown"
+        state = self.publication_state(disk)
+        if state != "not_active" or disk.get("state") in {"complete", "failed"}:
+            self._record_error_event(disk, error, state)
+            return state
+        disk.update(state="failed", error=_error_text(error), finished_at=now())
+        atomic_write_json(self.generation_path(disk) / "manifest.json", disk)
+        generation.clear()
+        generation.update(disk)
+        self._record_error_event(disk, error, state)
+        return state
+
+    def generation_usable(self, client, manifest):
+        """Complete identity, artifacts and collection are prerequisites to reuse."""
+        try:
+            self._validate_manifest(manifest)
+            self.validate_artifacts(manifest)
+            self._validate_collection(client, manifest)
+        except Exception:
+            return False
+        return True
 
     def _artifact_paths(self, generation, artifacts):
         generation_root = self.generation_path(generation).resolve()
@@ -195,6 +344,8 @@ class GenerationStore:
         return True
 
     def publish(self, generation, *, item_count, artifacts, allow_removals=False):
+        if generation.get("state") != "building":
+            raise GenerationIntegrityError("Only a building candidate may be published")
         sources = generation["sources"]
         if not sources or any(source.get("status") != "success" for source in sources):
             raise ValueError("Every declared source must succeed before publication")
@@ -239,12 +390,7 @@ class GenerationStore:
             previous_manifest_fingerprint=fingerprint(active) if active else None,
         )
         self._save_attempt(generation)
-        atomic_write_json(self.root / "active.json", {
-            "generation_id": generation["generation_id"],
-            "collection_name": generation["collection_name"],
-            "manifest_fingerprint": fingerprint(generation),
-        })
-        return generation
+        return self._activate_manifest(generation, "publish")
 
     @staticmethod
     def _validate_collection(client, manifest):
@@ -284,19 +430,66 @@ class GenerationStore:
             raise ValueError("Previous generation embedding contract is incompatible")
         self.validate_artifacts(previous)
         self._validate_collection(client, previous)
-        atomic_write_json(
-            self.root / "active.json",
-            {
-                "generation_id": previous["generation_id"],
-                "collection_name": previous["collection_name"],
-                "manifest_fingerprint": fingerprint(previous),
-            },
-        )
-        return previous
+        return self._activate_manifest(previous, "rollback")
+
+    def recover(self, client, generation_id, expected_embedding_contract, *,
+                expected_manifest_fingerprint):
+        """Explicit offline recovery to one independently trusted sealed version.
+
+        Caller holds writer_lock. Preserve the original pointer before replacing
+        it. Never choose a target by timestamp or rewrite a target manifest.
+        """
+        if (not isinstance(expected_manifest_fingerprint, str)
+                or not re.fullmatch(r"[a-f0-9]{64}", expected_manifest_fingerprint)):
+            raise ValueError("Recovery requires a trusted manifest fingerprint")
+        pointer_path = self.root / "active.json"
+        if pointer_path.is_symlink():
+            raise GenerationIntegrityError("Refusing recovery through a symlinked active pointer")
+        original = pointer_path.read_bytes() if pointer_path.exists() else None
+        if original is not None and len(original) > 65536:
+            raise GenerationIntegrityError("Active pointer is unexpectedly large")
+        try:
+            active = self.load_active()
+        except GenerationIntegrityError:
+            active = None
+        else:
+            if active is not None:
+                raise ValueError("Active manifest is valid; use rollback or rebuild instead")
+        target = read_json(self.generation_path(generation_id) / "manifest.json")
+        self._validate_manifest(target, generation_id)
+        if fingerprint(target) != expected_manifest_fingerprint:
+            raise GenerationIntegrityError("Recovery manifest does not match the trusted fingerprint")
+        if target.get("contract", {}).get("embedding") != expected_embedding_contract:
+            raise ValueError("Recovery embedding contract is incompatible")
+        if not target.get("sources") or any(
+            not isinstance(source, dict) or source.get("status") != "success"
+            for source in target["sources"]
+        ):
+            raise GenerationIntegrityError("Recovery requires a complete source inventory")
+        self.validate_artifacts(target)
+        self._validate_collection(client, target)
+        atomic_write_json(self.root / "recovery" / (uuid4().hex + ".json"), {
+            "schema_version": 1, "operation": "recover-intent", "recorded_at": now(),
+            "logical_name": self.logical_name, "generation_id": generation_id,
+            "manifest_fingerprint": expected_manifest_fingerprint,
+            "previous_pointer_hex": original.hex() if original is not None else None,
+            "previous_pointer_sha256": hashlib.sha256(original).hexdigest() if original is not None else None,
+        })
+        current = pointer_path.read_bytes() if pointer_path.exists() else None
+        if current != original:
+            raise GenerationIntegrityError("Active pointer changed during recovery")
+        return self._activate_manifest(target, "recover")
 
     def status(self, client=None):
-        active = self.load_active()
-        latest = self.latest_attempt()
+        active_error = latest_error = None
+        try:
+            active = self.load_active()
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            active, active_error = None, str(exc)
+        try:
+            latest = self.latest_attempt()
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            latest, latest_error = None, str(exc)
         collection_ok = None
         collection_error = None
         artifact_ok = None
@@ -319,6 +512,9 @@ class GenerationStore:
             "logical_name": self.logical_name,
             "root": str(self.root.resolve()),
             "active": active,
+            "active_error": active_error,
+            "recovery_required": active_error is not None,
+            "latest_attempt_error": latest_error,
             "active_collection_valid": collection_ok,
             "active_collection_error": collection_error,
             "active_artifacts_valid": artifact_ok,

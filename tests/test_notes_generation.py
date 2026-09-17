@@ -173,11 +173,13 @@ def test_identical_snapshot_reuses_only_a_complete_matching_collection(tmp_path)
 
     collection = client.get_collection(first["collection_name"])
     collection.records.pop(next(iter(collection.records)))
-    with pytest.raises(notes_builder.NotesBuildError, match="count"):
-        _build(notes_dir, tmp_path / "chroma", client)
-    assert GenerationStore(
-        tmp_path / "chroma", "notes-test"
-    ).latest_attempt()["state"] == "failed"
+    repaired, reused = _build(notes_dir, tmp_path / "chroma", client)
+    assert not reused
+    assert repaired["generation_id"] != first["generation_id"]
+    store = GenerationStore(tmp_path / "chroma", "notes-test")
+    assert store.load_active()["generation_id"] == repaired["generation_id"]
+    assert store.generation_usable(client, repaired)
+    assert first["collection_name"] in client.collections
 
 
 def test_embedding_contract_change_builds_a_new_generation(tmp_path):

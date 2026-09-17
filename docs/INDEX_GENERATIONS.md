@@ -1,15 +1,18 @@
 # Reliable local indexes (Alpha)
 
-New notes and papers builds publish complete, immutable generations. A failed or
-interrupted candidate cannot replace the active generation. The two collections
+New notes and papers builds publish complete, immutable generations. Active-pointer
+replacement is the commit point: a failure before it preserves the previous active;
+an exception after it cannot downgrade the newly committed manifest. Exit `3`
+reports a completed operation with a subsequent warning; inspect status before
+retrying. The two collections
 publish independently: if notes succeeds and papers fails, the command fails while
 the newly published notes and previous papers remain available.
 
 ## Build and source identity
 
 Run `python scripts/build_indexes.py` with your configured service interpreter.
-`--notes-only` builds only notes. `--rebuild-papers` forces a fresh papers candidate;
-it does not delete the current index. `--allow-removals` explicitly permits sources
+`--notes-only` builds only notes. `--rebuild-notes` and `--rebuild-papers` force fresh
+candidates without deleting the current index. `--allow-removals` explicitly permits sources
 missing from the current full snapshot to be withdrawn from both requested indexes.
 An unavailable root, empty scan, invalid note, missing declared PDF, empty PDF text,
 or unresolved PDF identity fails the build instead of silently shrinking coverage.
@@ -53,6 +56,10 @@ must set `OPENAI_EMBED_REVISION` to an operator-pinned model version. A remote a
 is not independently verifiable; operators must also enforce the remote provider's
 input-limit behavior. Such providers were not part of the local acceptance run.
 
+Builds now use a provider-bound embedding session and save its receipt with the
+generation. See [build-session guarantees and limitations](development/EMBEDDING_BUILD_SESSIONS.md).
+This records model identity and input order; it does not claim bitwise reproducibility.
+
 `search_papers` accepts `zotero_parent_key`, `zotero_attachment_key`, `source_role`
 (`main` or `si`), and `pdf_filename`. Every supplied filter is ANDed. A known
 attachment conflicting with the supplied parent, role, or filename returns HTTP 400;
@@ -75,6 +82,11 @@ dense Chroma retrieval; research NumPy ranking is a different backend, so its ke
 timing is not a serving latency promise.
 
 ## Offline rollback and retention
+
+For a corrupt or missing active pointer, use the explicit recovery procedure in
+[generation recovery](development/GENERATION_RECOVERY.md), with a generation ID and
+manifest fingerprint saved in a previously trusted inventory. Do not calculate a
+new hash of a suspect manifest and treat that as independent proof of trust.
 
 Stop query processes before maintenance. The utility requires an explicit index
 root and logical collection name:
