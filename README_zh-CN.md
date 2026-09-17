@@ -65,7 +65,7 @@ Zotero 仍然是只读的源文献库；Markdown 成为可检查、可迁移的�
 | 可持久结果 | 对话或导出的回答 | 结构化、可审查的 Markdown 笔记 |
 | 主文与 SI | 通常作为独立文件处理 | 按 Zotero parent item 自动分组 |
 | 检索方式 | 对话上下文或文档分块 | 全文笔记发现 + 源 PDF 段落检索 |
-| Agent 复用 | 依赖特定产品会话 | 四个 stdio MCP 工具，可供兼容客户端调用 |
+| Agent 复用 | 依赖特定产品会话 | 六个 stdio MCP 工具，可供兼容客户端调用 |
 | 领域适配 | 通用指令 | 带 Schema 和质量规则的版本化 Domain Pack |
 | 故障恢复 | 重新对话或重新上传 | Resume manifest、内容哈希、ledger 与可重建索引 |
 
@@ -85,7 +85,8 @@ Zotero 仍然是只读的源文献库；Markdown 成为可检查、可迁移的�
 - 两阶段生成：先判断文档结构，再对完整 PDF 组执行结构化抽取。
 - 五种生成后端：终端 subagent、Vertex AI、Gemini API、Anthropic 和 OpenAI-compatible。
 - 三种嵌入提供方：进程内 FastEmbed、Ollama 和 OpenAI-compatible。
-- 四个 stdio MCP 工具：`search_notes`、`search_papers`、`get_note` 和 `index_status`。
+- 六个 stdio MCP 工具：`search_notes`、`search_papers`、`get_note`、`index_status`、`prepare_answer` 和 `check_answer`。
+- [带引用回答流程](docs/ANSWER_WORKFLOW.md)：将原文按源坐标去重并控制在 8000 字符预算内，由 MCP 客户端生成回答，再校验引用。
 - 跨平台引导式安装、无需 Zotero 和 LLM API key 的合成演示、健康检查与恢复命令。
 - 一个可直接使用的催化领域 Domain Pack，以及创建新领域包的模板。
 
@@ -257,7 +258,7 @@ flowchart LR
 | `domain-packs/` | 领域提示词、Schema、模板、质量规则与路由 | `catalysis/`、`_template/` |
 | `service/` | 笔记/PDF 入库、嵌入、查询核心、HTTP 兼容层与 MCP | `build_notes_db.py`、`build_pdf_db.py`、`query_server.py`、`mcp_server.py` |
 | `scripts/` | 跨平台入口与验证 | `run_mcp_server.py`、`build_indexes.py`、`demo.py` |
-| `skills/` | 构建在四个 MCP 工具之上的 Agent 工作流 | `search-literature`、`gemini-literature-processor` 及叶级 skills |
+| `skills/` | 构建在六个 MCP 工具之上的 Agent 工作流 | `search-literature`、`gemini-literature-processor` 及叶级 skills |
 
 ## 详细生成流程
 

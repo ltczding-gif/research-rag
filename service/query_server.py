@@ -49,6 +49,7 @@ from embedding_client import (
 )
 from index_generation import GenerationStore, atomic_write_json, atomic_write_text
 from generation_query import open_generation
+from answer_workflow import prepare_packet, check_answer as check_answer_sources
 
 app = Flask(__name__)
 
@@ -877,6 +878,57 @@ def search_papers():
         source_role=data.get('source_role'),
         source_type=data.get('source_type'),
     )
+    return jsonify(payload), status
+
+
+def prepare_answer_payload(query, n=10, budget_codepoints=8000, zotero_parent_key=None,
+                           second_query=None, zotero_attachment_key=None, source_role=None):
+    """Search then prepare bounded canonical evidence for the host's answer model."""
+    if not isinstance(query, str) or not query.strip():
+        return {'error': 'query must be a nonempty string'}, 400
+    if not pdf_generation:
+        return {'error': 'Answer preparation requires a canonical PDF generation'}, 409
+    if isinstance(budget_codepoints, bool) or not isinstance(budget_codepoints, int) or not 256 <= budget_codepoints <= 8000:
+        return {'error': 'budget_codepoints must be an integer between 256 and 8000'}, 400
+    payload, status = search_papers_chroma(query, n=n, zotero_parent_key=zotero_parent_key,
+        second_query=second_query, zotero_attachment_key=zotero_attachment_key, source_role=source_role)
+    if status != 200:
+        return payload, status
+    try:
+        packet = prepare_packet(query, payload['results'], pdf_generation, budget_codepoints)
+        packet['effective_query'] = payload['effective_query']
+        return packet, 200
+    except ValueError as exc:
+        return error_payload(exc), 409
+
+
+def check_answer_payload(packet, answer):
+    if not pdf_generation:
+        return {'error': 'Answer checking requires a canonical PDF generation'}, 409
+    try:
+        return check_answer_sources(packet, answer, pdf_generation), 200
+    except (ValueError, KeyError, TypeError) as exc:
+        return error_payload(exc), 400
+
+
+@app.route('/prepare_answer', methods=['POST'])
+def prepare_answer_route():
+    data = request.get_json() or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'JSON object required'}), 400
+    payload, status = prepare_answer_payload(data.get('query', ''), n=data.get('n', 10),
+        budget_codepoints=data.get('budget_codepoints', 8000),
+        zotero_parent_key=data.get('zotero_parent_key'), second_query=data.get('second_query'),
+        zotero_attachment_key=data.get('zotero_attachment_key'), source_role=data.get('source_role'))
+    return jsonify(payload), status
+
+
+@app.route('/check_answer', methods=['POST'])
+def check_answer_route():
+    data = request.get_json() or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'JSON object required'}), 400
+    payload, status = check_answer_payload(data.get('packet'), data.get('answer'))
     return jsonify(payload), status
 
 

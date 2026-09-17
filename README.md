@@ -72,7 +72,7 @@ This project occupies a different layer from a typical single-document chat flow
 | Durable output | A conversation or exported answer | Structured, reviewable Markdown notes |
 | Main paper + SI | Usually handled as separate files | Grouped by Zotero parent item |
 | Retrieval | Conversation context or document chunks | Note-section discovery plus source-PDF passage search |
-| Reuse by agents | Tied to a product session | Four stdio MCP tools usable from compatible clients |
+| Reuse by agents | Tied to a product session | Six stdio MCP tools usable from compatible clients |
 | Specialization | General-purpose instructions | Versioned domain packs with schemas and quality rules |
 | Recovery | Repeat the session or upload | Resume manifests, content hashes, ledgers, and rebuildable indexes |
 
@@ -93,7 +93,8 @@ research context.
 - Two-stage generation: document profiling first, full-group structured extraction second.
 - Five generation backends: terminal subagent, Vertex AI, Gemini API, Anthropic, and OpenAI-compatible.
 - Three embedding providers: in-process FastEmbed, Ollama, and OpenAI-compatible.
-- Four stdio MCP tools: `search_notes`, `search_papers`, `get_note`, and `index_status`.
+- Six stdio MCP tools: `search_notes`, `search_papers`, `get_note`, `index_status`, `prepare_answer`, and `check_answer`.
+- [Cited answer workflow](docs/ANSWER_WORKFLOW.md): prepare a deduplicated evidence packet within an 8000-character source budget, answer with your MCP client, then check source citations.
 - Cross-platform guided setup, a synthetic demo that needs no Zotero library or LLM API key, health checks, and recovery commands.
 - A ready-to-use catalysis domain pack plus a template for creating new fields.
 
@@ -270,7 +271,7 @@ flowchart LR
 | `domain-packs/` | Field-specific prompts, schemas, templates, quality rules, routing | `catalysis/`, `_template/` |
 | `service/` | Note/PDF ingestion, embeddings, query core, HTTP compatibility layer, MCP | `build_notes_db.py`, `build_pdf_db.py`, `query_server.py`, `mcp_server.py` |
 | `scripts/` | Cross-platform entry points and verification | `run_mcp_server.py`, `build_indexes.py`, `demo.py` |
-| `skills/` | Agent-facing workflows layered over the four MCP tools | `search-literature`, `gemini-literature-processor`, leaf skills |
+| `skills/` | Agent-facing workflows layered over the six MCP tools | `search-literature`, `gemini-literature-processor`, leaf skills |
 
 ## Detailed generation flow
 

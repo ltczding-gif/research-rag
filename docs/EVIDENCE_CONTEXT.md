@@ -58,3 +58,7 @@ This module completes source-coordinate context assembly and its client-facing
 contract. It does not retrieve a missing paper or distant passage, establish
 whether a claim's citation is sufficient, or fix ambiguous PDF typography.
 Those concerns remain retrieval, answer construction and source-review work.
+
+For a complete host-driven answering flow with a total evidence budget,
+cross-result deduplication and citation checks, use the
+[answer workflow](ANSWER_WORKFLOW.md).

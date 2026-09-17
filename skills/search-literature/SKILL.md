@@ -390,6 +390,25 @@ POST /search_notes {"query": "用户问题", "n": 10, "dedupe": true}
 
 ## Step 3：标准输出格式
 
+### canonical 原文回答流程
+
+形成研究结论时，优先调用 `prepare_answer(query=用户完整问题, n=10,
+budget_codepoints=8000)`；已知论文可附 `zotero_parent_key`，英文检索词放
+`second_query`。该入口会检索并对源坐标去重、控制整题预算；不要把多个原始
+扩展窗口直接拼成模型输入。HTTP 对应 `POST /prepare_answer`。
+
+按返回的 `instructions` 生成 `claims` 与 `missing_information`。每个 claim
+包括 `text` 和 `citations: [{"evidence_id":"E1"}]`；可选 `quote` 必须逐字
+保留原文换行。不提供 quote 时由服务自动附该 E1 的完整原文片段。
+主体、反应、条件、数值和比较对象须由该 claim 的引用共同支持，不能把相邻
+酸/碱条件、ORR/MOR 或不同耐久性测试互相套用。不足时给出有证据的部分，
+只列回答本题仍缺的信息。
+
+将原 packet 和结构化 answer 传入 `check_answer`（HTTP: `POST /check_answer`）。
+失败时修正引用或删除无依据结论后再检查；通过后仍由回答者逐项判断科学语义，
+不得把 `citation_checks_passed` 称为“结论已验证”。展示其 `answer`，并用
+`claim_bindings` 提供原文及页码。legacy 索引不支持该流程，需明确说明边界。
+
 ### 笔记结果
 ```
 📓 来源笔记：{filename}（第{note_rank}相关，相似度 {score}）
