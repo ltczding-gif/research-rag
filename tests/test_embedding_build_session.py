@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import importlib.util
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +28,15 @@ def expected(provider='fake'):
 
 def split(text):
     return [(0, len(text), text)]
+
+
+def test_ollama_http_failure_keeps_actionable_error_body(sessions, monkeypatch):
+    def failed(*args, **kwargs):
+        raise sessions.HTTPError('http://localhost/api/embed', 400, 'Bad Request', {},
+                                 io.BytesIO(b'{"error":"input exceeds the runtime context"}'))
+    monkeypatch.setattr(sessions, 'urlopen', failed)
+    with pytest.raises(RuntimeError, match='Ollama HTTP 400: input exceeds the runtime context'):
+        sessions.OllamaTransport('http://localhost').request('POST', '/api/embed', {'input': ['text']})
 
 
 def test_session_lifecycle_and_input_receipt(sessions):
@@ -95,7 +105,8 @@ class Daemon:
         self.models = {'source:latest': 'a'*64}
         self.calls, self.inferred = [], []
         self.before_copy = self.after_embed = self.delete_error = None
-        self.response_model = self.copy_error = None
+        self.response_model = self.copy_error = self.response_embeddings = None
+        self.embed_errors = []
 
     def request(self, method, path, payload=None):
         self.calls.append((method, path, deepcopy(payload)))
@@ -112,10 +123,15 @@ class Daemon:
             assert payload['truncate'] is False
             digest = self.models[payload['model']]
             self.inferred.append(digest)
+            if self.embed_errors:
+                raise self.embed_errors.pop(0)
             if self.after_embed:
                 self.after_embed(self, payload)
+            embeddings = (self.response_embeddings(payload['input'], digest)
+                          if self.response_embeddings else
+                          [[1. if digest == 'a'*64 else 2., .5] for _ in payload['input']])
             return {'model': self.response_model or payload['model'],
-                    'embeddings': [[1. if digest == 'a'*64 else 2., .5]]}
+                    'embeddings': embeddings}
         if path == '/api/delete':
             if self.delete_error:
                 raise self.delete_error
@@ -220,6 +236,86 @@ def test_response_model_mismatch_fails(sessions):
     with pytest.raises(sessions.EmbeddingIdentityError, match='response'):
         with session:
             session.embed('input')
+
+
+def test_ollama_batch_uses_one_request_and_records_returned_vectors_in_input_order(sessions):
+    session, daemon = ollama(sessions)
+    daemon.response_embeddings = lambda texts, _digest: [[float(len(text)), .5] for text in texts]
+    texts = ['a', 'three', 'twenty']
+    with session:
+        assert session.embed_batch(texts) == [[1., .5], [5., .5], [6., .5]]
+    requests = [body for _, path, body in daemon.calls if path == '/api/embed']
+    assert len(requests) == 1 and requests[0]['input'] == texts
+    receipt = session.summary()
+    assert receipt['request_count'] == len(texts)
+    assert receipt['request_count_unit'] == 'input'
+    assert receipt['embedding_http_request_count'] == 1
+
+    serial = sessions.CheckedEmbeddingSession(
+        expected(), lambda: expected(), lambda text: [float(len(text)), .5], split,
+    )
+    with serial:
+        for text in texts:
+            serial.embed(text)
+    reversed_serial = sessions.CheckedEmbeddingSession(
+        expected(), lambda: expected(), lambda text: [float(len(text)), .5], split,
+    )
+    with reversed_serial:
+        for text in reversed(texts):
+            reversed_serial.embed(text)
+    assert receipt['ordered_inputs_sha256'] == serial.summary()['ordered_inputs_sha256']
+    assert receipt['ordered_inputs_sha256'] != reversed_serial.summary()['ordered_inputs_sha256']
+    assert receipt['returned_vectors_float_hex_sha256'] == serial.summary()['returned_vectors_float_hex_sha256']
+
+
+def test_ollama_batch_rejects_count_or_runtime_identity_mismatch(sessions):
+    session, daemon = ollama(sessions)
+    daemon.response_embeddings = lambda texts, _digest: [[1., .5]]
+    with pytest.raises(ValueError, match='wrong number'):
+        with session:
+            session.embed_batch(['one', 'two'])
+
+
+def test_ollama_batch_retries_only_a_transient_runner_disconnect(sessions, monkeypatch):
+    session, daemon = ollama(sessions)
+    daemon.embed_errors = [sessions.OllamaRequestError(
+        400, 'do embedding request: runner connection reset by peer',
+    )]
+    pauses = []
+    monkeypatch.setattr(sessions.time, 'sleep', pauses.append)
+    with session:
+        assert session.embed_batch(['one', 'two']) == [[1., .5], [1., .5]]
+    receipt = session.summary()
+    assert receipt['request_count'] == 2
+    assert receipt['embedding_http_request_count'] == 2
+    assert receipt['transient_retry_count'] == 1
+    assert pauses == [1]
+
+
+def test_ollama_batch_does_not_retry_invalid_input_or_exceed_retry_cap(sessions, monkeypatch):
+    pauses = []
+    monkeypatch.setattr(sessions.time, 'sleep', pauses.append)
+    session, daemon = ollama(sessions)
+    daemon.embed_errors = [sessions.OllamaRequestError(400, 'input exceeds the runtime context')]
+    with pytest.raises(sessions.OllamaRequestError, match='input exceeds'):
+        with session:
+            session.embed_batch(['one', 'two'])
+    assert len([call for call in daemon.calls if call[1] == '/api/embed']) == 1
+    assert not pauses
+
+    session, daemon = ollama(sessions)
+    daemon.embed_errors = [sessions.OllamaRequestError(400, 'unexpected EOF')] * 3
+    with pytest.raises(sessions.OllamaRequestError, match='unexpected EOF'):
+        with session:
+            session.embed_batch(['one', 'two'])
+    assert len([call for call in daemon.calls if call[1] == '/api/embed']) == 3
+    assert pauses == [1, 1]
+
+    session, daemon = ollama(sessions)
+    daemon.after_embed = lambda d, body: d.models.update({body['model']: 'b'*64})
+    with pytest.raises(sessions.EmbeddingIdentityError, match='alias'):
+        with session:
+            session.embed_batch(['one', 'two'])
 
 
 def test_cleanup_problem_is_visible_without_false_failure(sessions):

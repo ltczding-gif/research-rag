@@ -580,3 +580,31 @@ def test_pdf_writer_embeds_only_current_batch_before_first_write(pdf_builder, mo
         atomic_write_text=sys.modules['index_generation'].atomic_write_text)
     assert at_write == [100, 200, 205]
     assert len(embedded) == 205
+
+
+def test_pdf_writer_batches_at_most_sixteen_and_keeps_vectors_with_their_chunks(pdf_builder):
+    builder, client, store = pdf_builder
+    source = SimpleNamespace(file_id='Main', status='success')
+    plan = SimpleNamespace(
+        inventory=[source], documents=[],
+        chunks=[SimpleNamespace(chunk_id=f'chunk-{index}', file_id='Main', text=f'text-{index}')
+                for index in range(17)],
+    )
+    generation = candidate(store)
+    received = []
+
+    def batch_embed(texts):
+        received.append(list(texts))
+        return [[float(int(text.rsplit('-', 1)[1])), 1.] for text in texts]
+
+    builder._write_candidate(
+        client=client, store=store, generation=generation, plan=plan,
+        embed_index_text=lambda text: (_ for _ in ()).throw(AssertionError('single embed used')),
+        embed_batch=batch_embed,
+        atomic_write_text=sys.modules['index_generation'].atomic_write_text,
+    )
+    collection = client.get_collection(generation['collection_name'])
+    assert [len(batch) for batch in received] == [16, 1]
+    assert {record[0]: record[1] for record in collection.records.values()} == {
+        f'text-{index}': [float(index), 1.] for index in range(17)
+    }

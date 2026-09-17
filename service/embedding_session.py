@@ -12,8 +12,10 @@ import hashlib
 import inspect
 import json
 import math
+import time
 from typing import Callable, Mapping, Sequence
 from urllib.parse import urlsplit
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -23,6 +25,14 @@ BUILD_SESSION_POLICY = "provider-bound-build-session-v1"
 
 class EmbeddingIdentityError(ValueError):
     """The expected embedding contract no longer matches the observed provider."""
+
+
+class OllamaRequestError(RuntimeError):
+    """An Ollama HTTP failure with its status and daemon-provided detail."""
+
+    def __init__(self, status: int, detail: str):
+        self.status, self.detail = status, detail
+        super().__init__(f'Ollama HTTP {status}: {detail}')
 
 
 def _fingerprint(value: object) -> str:
@@ -112,6 +122,12 @@ class CheckedEmbeddingSession:
         self.check_source()
         return self._record(text, raw)
 
+    def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed inputs in order; providers may override with a true batch request."""
+        if not isinstance(texts, Sequence) or isinstance(texts, (str, bytes)) or not texts:
+            raise ValueError('Embedding batch must contain at least one text input')
+        return [self.embed(text) for text in texts]
+
     def split(self, text: str):
         self._usable()
         self.check_source()
@@ -130,7 +146,9 @@ class CheckedEmbeddingSession:
         return {
             'schema_version': 1, 'policy': BUILD_SESSION_POLICY, 'assurance': self.assurance,
             'source_contract_fingerprint': self._expected_hash,
-            'request_count': self._count, 'ordered_inputs_sha256': self._inputs.hexdigest(),
+            # Kept for existing consumers: this counts embedded inputs, not transport calls.
+            'request_count': self._count, 'request_count_unit': 'input',
+            'ordered_inputs_sha256': self._inputs.hexdigest(),
             'returned_vectors_float_hex_sha256': self._returned_vectors.hexdigest(),
             'cleanup_warnings': list(self.cleanup_warnings), 'bitwise_reproducibility_claim': False,
         }
@@ -197,8 +215,16 @@ class OllamaTransport:
         data = json.dumps(payload, allow_nan=False).encode() if payload is not None else None
         request = Request(self.base + path, data=data, method=method,
                           headers={'Content-Type': 'application/json'})
-        with urlopen(request, timeout=self.timeout) as response:
-            raw = response.read()
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                raw = response.read()
+        except HTTPError as exc:
+            raw_error = exc.read()
+            try:
+                detail = json.loads(raw_error).get('error', '')
+            except (ValueError, AttributeError):
+                detail = ''
+            raise OllamaRequestError(exc.code, str(detail)[:500] or str(exc.reason)) from exc
         value = json.loads(raw) if raw.strip() else {}
         if not isinstance(value, dict):
             raise ValueError('Ollama returned a non-object response')
@@ -235,6 +261,8 @@ class OllamaBuildSession(CheckedEmbeddingSession):
         self.source_model = str(expected['model'])
         self.runtime_model = 'research-rag-build-' + uuid4().hex + ':latest'
         self.transport = transport or OllamaTransport(endpoint[:-len('/api/embed')])
+        self._embedding_http_request_count = 0
+        self._transient_retry_count = 0
         self._copied = False
         super().__init__(expected, contract_fn, self._bound_embed, self._bound_split)
 
@@ -276,26 +304,48 @@ class OllamaBuildSession(CheckedEmbeddingSession):
             raise
 
     def _bound_embed(self, text):
-        if len(text) > self.maximum:
+        return self._bound_embed_batch([text])[0]
+
+    def _bound_embed_batch(self, texts: Sequence[str]):
+        if any(len(text) > self.maximum for text in texts):
             raise ValueError('Embedding input would be truncated; split it before indexing')
-        self._check_runtime()
-        response = self.transport.request('POST', '/api/embed', {
-            'model': self.runtime_model, 'input': [text], 'truncate': False})
+        for attempt in range(3):
+            self._check_runtime()
+            self._embedding_http_request_count += 1
+            try:
+                response = self.transport.request('POST', '/api/embed', {
+                    'model': self.runtime_model, 'input': list(texts), 'truncate': False})
+                break
+            except OllamaRequestError as exc:
+                transient = any(marker in exc.detail.lower() for marker in (
+                    'runner connection reset', 'connection reset', 'forcibly closed',
+                    'unexpected eof', 'connection refused',
+                ))
+                if not transient or attempt == 2:
+                    raise
+                self._transient_retry_count += 1
+                time.sleep(1)
         if (not isinstance(response.get('model'), str)
                 or _model_name(response['model']) != self.runtime_model):
             raise EmbeddingIdentityError('Ollama response belongs to a different runtime model')
         vectors = response.get('embeddings')
-        if not isinstance(vectors, list) or len(vectors) != 1:
+        if not isinstance(vectors, list) or len(vectors) != len(texts):
             raise ValueError('Ollama returned the wrong number of embeddings')
         self._check_runtime()
-        return vectors[0]
+        return vectors
 
     def embed(self, text):
+        return self.embed_batch([text])[0]
+
+    def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
         self._usable()
-        if not isinstance(text, str) or not text:
+        if not isinstance(texts, Sequence) or isinstance(texts, (str, bytes)) or not texts:
+            raise ValueError('Embedding batch must contain at least one text input')
+        values = list(texts)
+        if any(not isinstance(text, str) or not text for text in values):
             raise ValueError('Embedding input must be nonempty text')
         # Every input goes to the captured alias even if the source tag changes.
-        return self._record(text, self._bound_embed(text))
+        return [self._record(text, raw) for text, raw in zip(values, self._bound_embed_batch(values), strict=True)]
 
     def _bound_split(self, text):
         return _split_by_end(text, self.maximum, len)
@@ -328,7 +378,9 @@ class OllamaBuildSession(CheckedEmbeddingSession):
             self._cleanup()
 
     def summary(self):
-        return {**super().summary(), 'source_model': self.source_model,
+        return {**super().summary(), 'embedding_http_request_count': self._embedding_http_request_count,
+                'transient_retry_count': self._transient_retry_count,
+                'source_model': self.source_model,
                 'runtime_model': self.runtime_model,
                 'limitation': 'External mutation of owned alias is unsupported; no per-response weight attestation.'}
 

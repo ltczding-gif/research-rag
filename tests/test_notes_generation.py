@@ -349,6 +349,49 @@ def test_interruption_marks_attempt_failed_and_keeps_active(tmp_path):
     assert store.latest_attempt()["error"] == "interrupted"
 
 
+def test_notes_batch_embeddings_are_bounded_and_stay_with_their_sections(tmp_path, monkeypatch):
+    notes_dir = tmp_path / "notes"
+    notes_dir.mkdir()
+    _write_note(notes_dir / "alpha_review_note.md", "PARENT01", "x" * 20)
+    client = FakeClient()
+    calls = []
+
+    class BatchOnlySession:
+        expected = {"provider": "fake", "model": "fixed", "revision": "test-v1", "dimensions": 2}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def split(self, text):
+            return [(index, index + 1, text[index:index + 1]) for index in range(len(text))]
+
+        def embed(self, text):
+            raise AssertionError("notes builder used single-input embedding")
+
+        def embed_batch(self, texts):
+            calls.append(list(texts))
+            return [[float(ord(text)), 1.] for text in texts]
+
+        def summary(self):
+            return {"request_count": sum(map(len, calls))}
+
+    session = BatchOnlySession()
+    monkeypatch.setattr(notes_builder, "create_build_embedding_session", lambda *args: session)
+    manifest, reused = _build(notes_dir, tmp_path / "chroma", client)
+
+    assert not reused
+    collection = client.get_collection(manifest["collection_name"])
+    assert calls and all(1 <= len(batch) <= 16 for batch in calls)
+    assert sum(map(len, calls)) == collection.count()
+    assert all(
+        record["embedding"] == [float(ord(record["document"])), 1.]
+        for record in collection.records.values()
+    )
+
+
 def test_main_returns_failure_and_forwards_explicit_removal_flag(monkeypatch):
     def fail_build(**_kwargs):
         raise RuntimeError("candidate failed")
