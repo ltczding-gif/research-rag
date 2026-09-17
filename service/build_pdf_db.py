@@ -438,10 +438,15 @@ def _write_candidate(
             metadatas=[item[2] for item in batch],
             embeddings=[item[3] for item in batch],
         )
-    expected_ids = {chunk.chunk_id for chunk in plan.chunks}
-    stored = collection.get(ids=sorted(expected_ids), include=[])
-    if collection.count() != len(plan.chunks) or set(stored["ids"]) != expected_ids:
+    expected_ids = sorted({chunk.chunk_id for chunk in plan.chunks})
+    if collection.count() != len(plan.chunks):
         raise PdfSourceError("candidate collection does not contain every prepared chunk")
+    # Chroma's SQLite metadata lookup binds each requested ID as a SQL variable.
+    for offset in range(0, len(expected_ids), 500):
+        requested = expected_ids[offset:offset + 500]
+        stored = collection.get(ids=requested, include=[])
+        if set(stored["ids"]) != set(requested):
+            raise PdfSourceError("candidate collection does not contain every prepared chunk")
 
 
 def _optional_env_path(name):

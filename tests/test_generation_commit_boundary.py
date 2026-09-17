@@ -608,3 +608,46 @@ def test_pdf_writer_batches_at_most_sixteen_and_keeps_vectors_with_their_chunks(
     assert {record[0]: record[1] for record in collection.records.values()} == {
         f'text-{index}': [float(index), 1.] for index in range(17)
     }
+
+
+@pytest.mark.parametrize('missing_last_id', [False, True])
+def test_pdf_writer_verifies_all_ids_with_bounded_sql_parameters(
+    pdf_builder, monkeypatch, missing_last_id,
+):
+    builder, client, store = pdf_builder
+    plan = SimpleNamespace(inventory=[SimpleNamespace(file_id='Main', status='success')],
+        documents=[], chunks=[SimpleNamespace(chunk_id=f'{i:04d}', file_id='Main', text=str(i))
+                              for i in range(1105)])
+    generation = candidate(store)
+    requested = []
+    original = client.create_collection
+
+    def create(**kwargs):
+        collection = original(**kwargs)
+        get = collection.get
+
+        def limited_get(*, ids, include):
+            if len(ids) > 500:
+                raise RuntimeError('too many SQL variables')
+            requested.extend(ids)
+            result = get(ids=ids, include=include)
+            if missing_last_id:
+                result['ids'] = [key for key in result['ids'] if key != '1104']
+            return result
+
+        collection.get = limited_get
+        return collection
+
+    monkeypatch.setattr(client, 'create_collection', create)
+
+    def write():
+        builder._write_candidate(client=client, store=store, generation=generation, plan=plan,
+            embed_index_text=lambda text: [1., .5],
+            atomic_write_text=sys.modules['index_generation'].atomic_write_text)
+
+    if missing_last_id:
+        with pytest.raises(builder.PdfSourceError, match='every prepared chunk'):
+            write()
+    else:
+        write()
+    assert requested == [f'{i:04d}' for i in range(1105)]
