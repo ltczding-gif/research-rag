@@ -4,7 +4,9 @@ Both builders share `service/embedding_session.py`. The session holds the expect
 embedding contract, validates output dimensions and finite/nonzero vectors, checks
 identity at relevant boundaries, and closes before the active pointer is published.
 A hashed `embedding-session.json` artifact records the assurance class, input and
-returned-vector fingerprints, request count, and cleanup warnings. It contains
+returned-vector fingerprints, successful input count (`request_count`, with
+`request_count_unit=input`), and cleanup warnings. Ollama also records HTTP
+attempts and separate transport/numerical retry counts. The receipt contains
 neither API keys nor input text. The vector fingerprint is of adapter-returned
 Python float values, not independently read-back Chroma bytes.
 
@@ -29,7 +31,8 @@ Uncertain copies/cleanup can leave an owned alias; its name is included in the
 failure or receipt for explicit inspection. Do not globally delete build-prefixed
 aliases: another build may still own one. Administrators must not mutate a running
 session's alias. Digest checks are not cryptographic per-response weight attestation.
-A real local Ollama copy/embed/delete smoke test is still required.
+Local deployment validation must also exercise actual Ollama copy/embed/delete;
+offline fakes do not establish that the installed runtime works.
 
 OpenAI-compatible remote APIs capture endpoint, model and credential, and retain the
 existing `operator_declared` revision limitation. The provider must enforce its
@@ -38,8 +41,15 @@ weights or prevent a provider changing the deployment behind a stable API name.
 Injected test adapters use before/after observed-contract checks, not stronger
 identity guarantees than their interfaces can supply.
 
-PDF writes now materialize at most the current 100-chunk embedding batch before each
-database write rather than embedding the entire corpus into a second Python list.
+Both builders submit at most 16 inputs per batch. Ollama uses one embedding HTTP
+request per batch; other providers retain serial embedding behavior. The complete
+Ollama response must pass vector validation before any input enters the receipt.
+Explicit transient connection failures and correctly sized nonfinite/zero vectors
+share a maximum of three attempts. Type, dimension, identity and response-count
+errors still fail immediately; persistently invalid output prevents publication.
+
+PDF writes materialize at most 100 vectors before each database write; notes write
+at most 16 sections. Neither builder embeds the entire corpus into a second list.
 This does not remove the prepared PDF IR from memory or claim an end-to-end speedup.
 PDF embedding-window subdivision and vector creation run inside the same open
 session. The final contract uses that session's expected identity; a healthy PDF

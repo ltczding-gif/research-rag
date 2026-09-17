@@ -1,5 +1,9 @@
 # Full-library validation and rollout plan
 
+This document preserves the Module 3 baseline and its original rollout scope.
+Current Modules 4–5 source accounting and acceptance status are recorded in the
+[canonical release report](CANONICAL_RELEASE.md).
+
 Status: Module 3 implemented, 2026-09-17. **Operational retrieval passed; full-library
 cited-answer quality acceptance is not yet passed.** Modules 1–2 provide the
 canonical evidence/answer workflow, but the current production store is legacy.
