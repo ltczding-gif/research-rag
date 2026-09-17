@@ -133,6 +133,36 @@ def test_legacy_search_is_explicitly_unverified(core, monkeypatch):
     assert "timing_note" in payload
 
 
+@pytest.mark.parametrize("neighbor_meta", [
+    {"pdf_path": "other.pdf", "zotero_parent_key": "OTHER"},
+    {"pdf_path": "hit.pdf", "zotero_parent_key": "OTHER"},
+    {"pdf_path": "hit.pdf", "source_sha256": "other-hash"},
+    {"pdf_path": "hit.pdf", "file_hash": "other-hash"},
+    {},
+    None,
+])
+def test_legacy_context_omits_cross_source_or_unknown_neighbors(core, monkeypatch, neighbor_meta):
+    metadata = {"pdf_path": "hit.pdf", "zotero_parent_key": "PARENT", "source_sha256": "hash", "file_hash": "hash"}
+    collection = _Collection(
+        query_result={
+            "ids": [["group_443_file_0_chunk_20"]], "documents": [["hit"]],
+            "metadatas": [[metadata]], "distances": [[0.2]],
+        },
+        neighbor_result={
+            "ids": ["group_443_file_0_chunk_19", "group_443_file_0_chunk_21"],
+            "documents": ["foreign text", "same-source next"],
+            "metadatas": [neighbor_meta, metadata],
+        },
+    )
+    monkeypatch.setattr(core, "pdf_col", collection)
+    monkeypatch.setattr(core, "pdf_generation", None)
+    monkeypatch.setattr(core, "chroma_ready", True)
+    payload, status = core.search_papers_chroma("query", include_context=True)
+    assert status == 200
+    assert payload["results"][0]["context"] == "[MATCH]hit[/MATCH] same-source next"
+    assert payload["results"][0]["evidence"]["verified"] is False
+
+
 def test_mcp_forwards_canonical_attachment_filters(monkeypatch):
     pytest.importorskip("mcp")
     service = Path(__file__).resolve().parents[1] / "service"

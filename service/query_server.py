@@ -771,13 +771,25 @@ def get_note():
 
 def _neighbor_chunk_ids(hit_id: str, chunk_index: int) -> tuple[str | None, str]:
     """Derive neighbor IDs from the actual hit ID for every supported schema."""
-    marker = "_chunk_"
-    if marker not in hit_id:
-        raise ValueError(f"unrecognized chunk id: {hit_id}")
-    prefix = hit_id.rsplit(marker, 1)[0]
-    previous = f"{prefix}{marker}{chunk_index - 1}" if chunk_index > 0 else None
-    following = f"{prefix}{marker}{chunk_index + 1}"
-    return previous, following
+    for marker in ("_chunk_", "_c"):
+        prefix, separator, number = hit_id.rpartition(marker)
+        if separator and number.isdigit():
+            # The stored ID is authoritative; retain chunk_index in the public
+            # helper signature for callers of the older ordinal schema.
+            index = int(number)
+            previous = f"{prefix}{marker}{index - 1}" if index > 0 else None
+            return previous, f"{prefix}{marker}{index + 1}"
+    raise ValueError(f"unrecognized chunk id: {hit_id}")
+
+
+def _same_legacy_source(hit: dict, neighbor: dict) -> bool:
+    """Legacy ordinal prefixes can collide; require matching source metadata."""
+    if not hit.get("pdf_path") or hit["pdf_path"] != neighbor.get("pdf_path"):
+        return False
+    return all(
+        not hit.get(key) or not neighbor.get(key) or hit[key] == neighbor[key]
+        for key in ("zotero_parent_key", "zotero_attachment_key", "source_sha256", "file_hash", "file_id")
+    )
 
 
 def search_papers_chroma(
@@ -838,7 +850,13 @@ def search_papers_chroma(
                     previous, following = _neighbor_chunk_ids(hit_id, meta.get("chunk_index", 0))
                     neighbor_ids = [identifier for identifier in (previous, following) if identifier]
                     neighbors = pdf_col.get(ids=neighbor_ids) if neighbor_ids else {"ids": [], "documents": []}
-                    neighbor_docs = dict(zip(neighbors["ids"], neighbors["documents"]))
+                    neighbor_docs = {
+                        identifier: document
+                        for identifier, document, neighbor_meta in zip(
+                            neighbors["ids"], neighbors["documents"], neighbors.get("metadatas") or []
+                        )
+                        if _same_legacy_source(meta, neighbor_meta or {})
+                    }
                     item["context"] = " ".join(filter(None, [neighbor_docs.get(previous, ""),
                                           f"[MATCH]{content}[/MATCH]", neighbor_docs.get(following, "")]))
             formatted_results.append(item)
