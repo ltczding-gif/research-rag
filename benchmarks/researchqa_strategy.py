@@ -7,6 +7,7 @@ callers inject a batch embedder and the already-defined reranker adapter.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -89,6 +90,7 @@ REFERENCE_PAGE_HINT_METHOD = "researchqa-page-hint-weak-v3"
 REFERENCE_SECTION_HINT_METHOD = "researchqa-section-hint-weak-v3"
 REFERENCE_FUZZY_METHOD = "nfkc-alnum-fuzzy-weak-v3"
 REFERENCE_EXACT_GOLD_VERSION = "auto-exact-v1"
+ADJUDICATION_SIDECAR_PROTOCOL_VERSION = "researchqa-adjudication-sidecar-v2"
 DEFAULT_FUZZY_THRESHOLD = 0.86
 PAPER_SCOPED_RETRIEVAL = "paper-scoped"
 RETRIEVER_IDS = ("dense", "bm25", "hybrid-rrf")
@@ -456,6 +458,7 @@ class _ReferenceAlignmentContext:
     pages: tuple[tuple[str, tuple[int, ...]], ...]
     page_records: tuple[DocumentPage, ...]
     file_hash: str | None
+    extractor_fingerprint: str | None
 
 
 def _build_reference_alignment_context(
@@ -478,6 +481,7 @@ def _build_reference_alignment_context(
     pages: tuple[tuple[str, tuple[int, ...]], ...] = ()
     page_records: tuple[DocumentPage, ...] = ()
     file_hash: str | None = None
+    extractor_fingerprint: str | None = None
     if document is not None:
         if document.paper_id != paper_id:
             raise StrategyContractError(
@@ -489,6 +493,7 @@ def _build_reference_alignment_context(
         )
         page_records = document.pages
         file_hash = document.file_hash
+        extractor_fingerprint = document.extractor_fingerprint
     return _ReferenceAlignmentContext(
         paper_id=paper_id,
         chunks=paper_chunks,
@@ -503,6 +508,7 @@ def _build_reference_alignment_context(
         pages=pages,
         page_records=page_records,
         file_hash=file_hash,
+        extractor_fingerprint=extractor_fingerprint,
     )
 
 
@@ -654,17 +660,70 @@ def _best_chunk_matches(
     return matches, best
 
 
+def question_manifest_sha256(questions: Sequence[Mapping[str, Any]]) -> str:
+    """Fingerprint current ordered question records for sidecar binding."""
+
+    return canonical_fingerprint({"questions": list(questions)})
+
+
+def question_fingerprint(question: Mapping[str, Any]) -> str:
+    """Fingerprint the current question and ordered evidence contract."""
+
+    return canonical_fingerprint(
+        {
+            "row_id": _required_text(question, "row_id"),
+            "paper_id": normalize_paper_id(question.get("paper_id")),
+            "domain": _required_text(question, "domain"),
+            "question_type": _required_text(question, "question_type"),
+            "question": _required_text(question, "question"),
+            "expected_references": question.get("expected_references"),
+        }
+    )
+
+
+def _required_sidecar_context(
+    *,
+    questions: Sequence[Mapping[str, Any]] | None,
+    dataset_id: str | None,
+    dataset_revision: str | None,
+) -> tuple[str, str, str]:
+    if not isinstance(dataset_id, str) or not dataset_id.strip():
+        raise StrategyContractError("adjudication sidecar requires caller dataset_id")
+    if not isinstance(dataset_revision, str) or not dataset_revision.strip():
+        raise StrategyContractError("adjudication sidecar requires caller dataset_revision")
+    if questions is None:
+        raise StrategyContractError("adjudication sidecar requires current questions")
+    return dataset_id.strip(), dataset_revision.strip(), question_manifest_sha256(questions)
+
+
 def _gold_adjudication_records(
     sidecar: Mapping[str, Any] | None,
+    *,
+    questions: Sequence[Mapping[str, Any]] | None = None,
+    dataset_id: str | None = None,
+    dataset_revision: str | None = None,
 ) -> Mapping[str, Mapping[str, Any]]:
     if sidecar is None:
         return {}
-    if sidecar.get("schema_version") != 1 or sidecar.get(
+    current_dataset_id, current_dataset_revision, manifest_sha256 = (
+        _required_sidecar_context(
+            questions=questions,
+            dataset_id=dataset_id,
+            dataset_revision=dataset_revision,
+        )
+    )
+    if sidecar.get("schema_version") != 2 or sidecar.get(
         "protocol_version"
-    ) != STRICT_EVIDENCE_PROTOCOL_VERSION:
+    ) != ADJUDICATION_SIDECAR_PROTOCOL_VERSION:
         raise StrategyContractError(
             "gold adjudication sidecar schema/protocol is unsupported"
         )
+    if sidecar.get("dataset_id") != current_dataset_id or sidecar.get(
+        "dataset_revision"
+    ) != current_dataset_revision:
+        raise StrategyContractError("gold adjudication sidecar dataset identity differs")
+    if sidecar.get("question_manifest_sha256") != manifest_sha256:
+        raise StrategyContractError("gold adjudication sidecar question manifest differs")
     records = sidecar.get("adjudications")
     if not isinstance(records, Mapping) or any(
         not isinstance(key, str) or not isinstance(value, Mapping)
@@ -676,13 +735,24 @@ def _gold_adjudication_records(
     return records
 
 
-def load_gold_adjudications(path: str | Path) -> Mapping[str, Any]:
+def load_gold_adjudications(
+    path: str | Path,
+    *,
+    questions: Sequence[Mapping[str, Any]],
+    dataset_id: str,
+    dataset_revision: str,
+) -> Mapping[str, Any]:
     """Load a strict sidecar; canonical-document validation occurs at mapping."""
 
     value = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(value, Mapping):
         raise StrategyContractError("gold adjudication sidecar must be an object")
-    _gold_adjudication_records(value)
+    _gold_adjudication_records(
+        value,
+        questions=questions,
+        dataset_id=dataset_id,
+        dataset_revision=dataset_revision,
+    )
     return value
 
 
@@ -720,7 +790,13 @@ def _validated_adjudication(
     alternative_id: str,
     record: Mapping[str, Any],
     context: _ReferenceAlignmentContext,
+    target: Mapping[str, Any],
 ) -> Mapping[str, Any]:
+    record_target = record.get("target")
+    if not isinstance(record_target, Mapping) or record_target != target:
+        raise StrategyContractError(
+            f"{alternative_id}: sidecar target differs from current input"
+        )
     if record.get("verification_state") != "adjudicated":
         raise StrategyContractError(
             f"{alternative_id}: sidecar state must be adjudicated"
@@ -795,7 +871,7 @@ def _validated_adjudication(
         )
     return {
         "mapped_item_ids": tuple(dict.fromkeys(item_ids)),
-        "match_method": "agent-adjudicated-sidecar-v1",
+        "match_method": "agent-adjudicated-sidecar-v2",
         "match_score": 1.0,
         "verification_state": "adjudicated",
         "gold_version": gold_version,
@@ -811,6 +887,9 @@ def map_question_references(
     document: CanonicalDocument | None = None,
     fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
     gold_adjudications: Mapping[str, Any] | None = None,
+    dataset_id: str | None = None,
+    dataset_revision: str | None = None,
+    dataset_questions: Sequence[Mapping[str, Any]] | None = None,
 ) -> EvidenceMapping:
     """Map one question's AND/OR reference groups to stable chunk IDs."""
 
@@ -822,11 +901,28 @@ def map_question_references(
         chunks,
         document,
     )
-    records = _gold_adjudication_records(gold_adjudications)
     row_id = _required_text(question, "row_id")
+    manifest_questions = dataset_questions if dataset_questions is not None else (question,)
+    manifest_rows = [_required_text(item, "row_id") for item in manifest_questions]
+    if len(manifest_rows) != len(set(manifest_rows)):
+        raise StrategyContractError("dataset_questions row_ids must be unique")
+    matching_questions = [
+        item for item in manifest_questions if _required_text(item, "row_id") == row_id
+    ]
+    if len(matching_questions) != 1:
+        raise StrategyContractError("current question is not present in dataset_questions")
+    if matching_questions[0] != question:
+        raise StrategyContractError("current question differs from dataset_questions")
+    records = _gold_adjudication_records(
+        gold_adjudications,
+        questions=manifest_questions,
+        dataset_id=dataset_id,
+        dataset_revision=dataset_revision,
+    )
     expected_ids = {
-        evidence_alternative_id(row_id, group_index, alternative_index)
-        for group_index, group in enumerate(question.get("expected_references", ()))
+        evidence_alternative_id(_required_text(item, "row_id"), group_index, alternative_index)
+        for item in manifest_questions
+        for group_index, group in enumerate(item.get("expected_references", ()))
         if isinstance(group, Mapping)
         for alternative_index, _ in enumerate(group.get("alternatives", ()))
     }
@@ -839,7 +935,16 @@ def map_question_references(
         question,
         context,
         fuzzy_threshold=fuzzy_threshold,
-        adjudication_records=records,
+        adjudication_records={
+            key: value
+            for key, value in records.items()
+            if key in {
+                evidence_alternative_id(row_id, group_index, alternative_index)
+                for group_index, group in enumerate(question.get("expected_references", ()))
+                if isinstance(group, Mapping)
+                for alternative_index, _ in enumerate(group.get("alternatives", ()))
+            }
+        },
     )
 
 
@@ -990,11 +1095,34 @@ def _map_question_with_context(
         reference_cache[cache_key] = result
         return result
 
+    targets = {
+        evidence_alternative_id(row_id, group_index, alternative_index): {
+            "paper_id": paper_id,
+            "source": {
+                "file_hash": context.file_hash,
+                "extractor_fingerprint": context.extractor_fingerprint,
+            },
+            "question": {
+                "row_id": row_id,
+                "fingerprint": question_fingerprint(question),
+            },
+            "group_index": group_index,
+            "alternative_index": alternative_index,
+            "reference_sha256": hashlib.sha256(
+                reference.encode("utf-8")
+            ).hexdigest(),
+        }
+        for group_index, group in enumerate(references)
+        if isinstance(group, Mapping)
+        for alternative_index, reference in enumerate(group.get("alternatives", ()))
+        if isinstance(reference, str)
+    } if adjudication_records else {}
     overrides = {
         alternative_id: _validated_adjudication(
             alternative_id,
             record,
             context,
+            targets[alternative_id],
         )
         for alternative_id, record in (adjudication_records or {}).items()
     }
@@ -1018,6 +1146,8 @@ def map_all_references(
     overall_minimum: float = 0.95,
     per_paper_minimum: float = 0.90,
     gold_adjudications: Mapping[str, Any] | None = None,
+    dataset_id: str | None = None,
+    dataset_revision: str | None = None,
 ) -> EvidenceMappingBundle:
     """Map all questions and retain an explicit unmapped-group ledger."""
 
@@ -1047,7 +1177,12 @@ def map_all_references(
             chunks_by_paper.get(paper_id, ()),
             document,
         )
-    adjudication_records = _gold_adjudication_records(gold_adjudications)
+    adjudication_records = _gold_adjudication_records(
+        gold_adjudications,
+        questions=questions,
+        dataset_id=dataset_id,
+        dataset_revision=dataset_revision,
+    )
     expected_alternative_ids = {
         evidence_alternative_id(row_id, group_index, alternative_index)
         for question, row_id in zip(questions, row_ids, strict=True)
@@ -2505,6 +2640,8 @@ def run_complete_candidate(
     p95_latency_ms: float | None = None,
     guardrails_passed: bool = True,
     gold_adjudications: Mapping[str, Any] | None = None,
+    dataset_id: str | None = None,
+    dataset_revision: str | None = None,
     evidence_mapping_cache: MutableMapping[
         str, EvidenceMappingBundle
     ]
@@ -2720,6 +2857,13 @@ def run_complete_candidate(
         )
 
     corpus = _prepare_candidate_corpus(candidate, documents, notes)
+    # Reject malformed or stale sidecars before a prior mapping-cache hit.
+    _gold_adjudication_records(
+        gold_adjudications,
+        questions=questions,
+        dataset_id=dataset_id,
+        dataset_revision=dataset_revision,
+    )
     mapping_cache_key = canonical_fingerprint(
         {
             "revision": REFERENCE_MATCH_REVISION,
@@ -2727,6 +2871,17 @@ def run_complete_candidate(
             "overall_minimum": mapping_overall_minimum,
             "per_paper_minimum": mapping_per_paper_minimum,
             "protocol_version": STRICT_EVIDENCE_PROTOCOL_VERSION,
+            "dataset_id": dataset_id,
+            "dataset_revision": dataset_revision,
+            "question_manifest_sha256": question_manifest_sha256(questions),
+            "canonical_documents": {
+                paper_id: {
+                    "file_hash": document.file_hash,
+                    "extractor_fingerprint": document.extractor_fingerprint,
+                    "page_hashes": [page.page_text_hash for page in document.pages],
+                }
+                for paper_id, document in sorted(documents.items())
+            },
             "gold_adjudications": gold_adjudications,
             "questions": questions,
             "pdf_chunks": [
@@ -2749,6 +2904,8 @@ def run_complete_candidate(
             overall_minimum=mapping_overall_minimum,
             per_paper_minimum=mapping_per_paper_minimum,
             gold_adjudications=gold_adjudications,
+            dataset_id=dataset_id,
+            dataset_revision=dataset_revision,
         )
         if evidence_mapping_cache is not None:
             evidence_mapping_cache[mapping_cache_key] = mapping
@@ -3536,6 +3693,7 @@ __all__ = [
     "CandidatePlan",
     "CandidateRunResult",
     "ConfirmationSelection",
+    "ADJUDICATION_SIDECAR_PROTOCOL_VERSION",
     "DEFAULT_FUZZY_THRESHOLD",
     "EmbedderAdapter",
     "EvidenceMappingBundle",
@@ -3573,6 +3731,8 @@ __all__ = [
     "map_question_references",
     "normalize_paper_id",
     "normalize_reference_text",
+    "question_fingerprint",
+    "question_manifest_sha256",
     "rank_stage_results",
     "run_complete_candidate",
 ]

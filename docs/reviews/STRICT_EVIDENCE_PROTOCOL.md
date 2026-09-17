@@ -1,5 +1,17 @@
 # ResearchQA strict evidence protocol v1
 
+## Adjudication sidecar v2
+
+Manual adjudications use `schema_version: 2` and protocol
+`researchqa-adjudication-sidecar-v2`.  The envelope binds caller-supplied
+`dataset_id`, `dataset_revision`, and the canonical SHA-256 of the current
+ordered question records.  Every record binds normalized paper ID, canonical
+document file hash/extractor fingerprint, row ID/question fingerprint,
+group/alternative positions, and exact UTF-8 reference hash before the
+existing `gold_version`, provenance `source_revision`, and canonical span checks run.  The
+position key remains a locator only.  v1 sidecars, absent identity fields, and
+identity mismatches fail closed; no current hash is copied into an old record.
+
 Protocol ID: `researchqa-strict-evidence-v1`. Results produced under the old
 chunk-ID overlap rule are historical `loose_hit_*` diagnostics and are not
 comparable to strict scores under the same metric name.
@@ -38,10 +50,21 @@ unknown alternative IDs, or invented spans fail closed.
 
 ```json
 {
-  "schema_version": 1,
-  "protocol_version": "researchqa-strict-evidence-v1",
+  "schema_version": 2,
+  "protocol_version": "researchqa-adjudication-sidecar-v2",
+  "dataset_id": "caller-owned dataset ID",
+  "dataset_revision": "caller-owned dataset revision",
+  "question_manifest_sha256": "<SHA-256 of current ordered question records>",
   "adjudications": {
     "ea-...": {
+      "target": {
+        "paper_id": "W1",
+        "source": {"file_hash": "<sha256>", "extractor_fingerprint": "<exact>"},
+        "question": {"row_id": "q1", "fingerprint": "<sha256>"},
+        "group_index": 0,
+        "alternative_index": 0,
+        "reference_sha256": "<sha256 of exact UTF-8 reference text>"
+      },
       "verification_state": "adjudicated",
       "gold_version": "audit-2026-09-17-v1",
       "provenance": {
@@ -67,10 +90,21 @@ unknown alternative IDs, or invented spans fail closed.
 ```
 
 `evidence_alternative_id(row_id, group_index, alternative_index)` produces the
-sidecar key. `load_gold_adjudications(path)` loads the envelope, and
+sidecar locator. `load_gold_adjudications(path, questions=..., dataset_id=...,
+dataset_revision=...)` validates the current envelope, and
 `map_all_references(..., gold_adjudications=sidecar)` performs canonical
-validation. `item_source_spans_from_chunks(chunks)` rebuilds the scorer input
+validation. `map_question_references`, `map_all_references`,
+`run_complete_candidate`, and offline `rescore_payload` receive the same
+caller-owned dataset context. `item_source_spans_from_chunks(chunks)` rebuilds the scorer input
 from a frozen IR/chunker without rerunning embedding or reranking models.
+
+For a full multi-question sidecar, `map_question_references` must receive
+`dataset_questions=<the complete frozen ordered manifest>`. It verifies unique
+row IDs, requires the current question to be the identical row in that
+manifest, validates the envelope and unknown locators against the full
+manifest, then applies only the current row's records. Without
+`dataset_questions`, this single-question API accepts only a one-question
+sidecar.
 
 ## Strict scoring
 

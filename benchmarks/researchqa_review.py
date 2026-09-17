@@ -14,6 +14,7 @@ from benchmarks.researchqa_scoring import (
 )
 from benchmarks.researchqa_strategy import (
     item_source_spans_from_chunks, map_all_references, normalize_paper_id,
+    question_manifest_sha256,
 )
 
 
@@ -63,6 +64,8 @@ def budget_prefix(ranked_ids: Sequence[str], chunks: Mapping[str, ResearchQAChun
 
 def rescore_payload(payload: Mapping, documents: Mapping, questions: Sequence[Mapping],
                     *, adjudications: Mapping | None = None,
+                    dataset_id: str | None = None,
+                    dataset_revision: str | None = None,
                     context_budget: int = 8000) -> dict:
     """Validate complete row/ID provenance and report full plus conditional scores.
 
@@ -80,6 +83,7 @@ def rescore_payload(payload: Mapping, documents: Mapping, questions: Sequence[Ma
     chunks = {chunk.chunk_id: chunk for values in by_paper.values() for chunk in values}
     mappings = map_all_references(
         questions, tuple(chunks.values()), documents=documents, gold_adjudications=adjudications,
+        dataset_id=dataset_id, dataset_revision=dataset_revision,
     )
     source_spans = item_source_spans_from_chunks(tuple(chunks.values()))
     rows = payload["question_results"]
@@ -136,6 +140,17 @@ def rescore_payload(payload: Mapping, documents: Mapping, questions: Sequence[Ma
     return {
         "schema_version": 1, "protocol_version": STRICT_EVIDENCE_PROTOCOL_VERSION,
         "candidate": dict(candidate), "classification": "offline-historical-rescore",
+        "dataset_id": dataset_id, "dataset_revision": dataset_revision,
+        "question_manifest_sha256": question_manifest_sha256(questions),
+        "adjudication_sidecar": (
+            {
+                "schema_version": adjudications.get("schema_version"),
+                "protocol_version": adjudications.get("protocol_version"),
+                "sha256": hashlib.sha256(canonical_json_bytes(adjudications)).hexdigest(),
+            }
+            if adjudications is not None
+            else None
+        ),
         "scope": "paper-scoped", "mapping": mappings.to_dict(),
         "denominator_policy": {"full": "verified-evidence lower bound over all expected groups; unresolved groups receive zero credit",
                                "conditional": "shared verified groups only; null when none verified"},
