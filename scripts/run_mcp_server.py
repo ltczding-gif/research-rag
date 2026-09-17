@@ -31,10 +31,12 @@ _VENV_PYTHONS = [
 
 
 def main() -> int:
-    current = Path(sys.executable).resolve()
+    # A POSIX venv Python may symlink to the base binary; its invocation path
+    # still selects a different environment, so do not resolve that symlink.
+    current = Path(sys.executable).absolute()
     for candidate in _VENV_PYTHONS:
         if candidate.exists():
-            if candidate.resolve() == current:
+            if candidate.absolute() == current:
                 break  # already running under the venv
             completed = subprocess.run(
                 [str(candidate), str(SERVER)],
