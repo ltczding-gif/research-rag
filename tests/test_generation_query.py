@@ -143,7 +143,7 @@ def test_invalid_role_and_legacy_ordinal_are_explicit(canonical):
     assert core.search_papers_chroma("evidence", paper_group=1)[1] == 400
 
 
-def test_cross_page_evidence_and_actual_neighbor_ids(canonical):
+def test_cross_page_context_deduplicates_overlapping_neighbor_text(canonical):
     core, store, reader, collection, records, metas, _ = canonical
     first = records[0]
     second = {**first, "pdf_page_index": 1, "normalized_text": "continues here", "page_text_hash": _hash("continues here")}
@@ -162,7 +162,9 @@ def test_cross_page_evidence_and_actual_neighbor_ids(canonical):
     assert status == 200
     hit = result["results"][0]
     assert [part["page_number"] for part in hit["evidence"]["segments"]] == [1, 2]
-    assert hit["context_evidence"][0]["chunk_id"] == "opaque-neighbor"
+    assert hit["context"] == f"[MATCH]{content}[/MATCH]"
+    assert [part["page_number"] for part in hit["context_source"]["segments"]] == [1, 2]
+    assert hit["context_source"]["for_chunk_id"] == "opaque-0"
 
 
 def test_full_note_reads_original_bytes_and_combines_filters(core, tmp_path, monkeypatch):

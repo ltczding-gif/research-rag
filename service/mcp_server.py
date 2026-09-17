@@ -64,7 +64,7 @@ def search_papers(
     n: int = 3,
     zotero_parent_key: str = "",
     second_query: str = "",
-    include_context: bool = False,
+    include_context: bool = True,
     zotero_attachment_key: str = "",
     source_role: str = "",
     pdf_filename: str = "",
@@ -74,9 +74,14 @@ def search_papers(
     Use zotero_parent_key (from a search_notes hit) to restrict to one
     paper's main text + SI. second_query overrides the embedding query
     (e.g. English technical terms extracted from a Chinese note) while
-    `query` is kept for logging. include_context=True stitches the
-    previous/next chunks around each match, with the match wrapped in
-    [MATCH]...[/MATCH]. Canonical indexes return page/span/hash verified evidence.
+    `query` is kept for logging. By default, canonical indexes return a bounded,
+    source-coordinate context with the match wrapped in [MATCH]...[/MATCH].
+    context_source verifies the full expanded text's page/span/hash locations;
+    content and evidence still describe the original ranked chunk. Read the
+    surrounding subject and conditions together; sentence boundaries do not
+    prove claim support. PDF unit typography is preserved, not interpreted.
+    include_context=False returns only the original chunks. Legacy indexes use
+    unverified previous/next chunk concatenation.
     zotero_attachment_key restricts to one exact attachment; source_role is
     "main" or "si". All supplied filters are combined with AND.
     """
