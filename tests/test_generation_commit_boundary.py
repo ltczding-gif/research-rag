@@ -432,6 +432,73 @@ def test_pdf_stdout_failure_does_not_poison_manifest(pdf_builder, monkeypatch):
     assert store.generation_usable(client, store.load_active())
 
 
+def test_pdf_splits_only_inside_the_bound_build_session(pdf_builder, monkeypatch):
+    builder, client, store = pdf_builder
+    provider = sys.modules['embedding_client']
+    sessions = load_module('pdf_bound_session_test', 'service/embedding_session.py')
+    calls = []
+
+    def unbound_split(text):
+        raise AssertionError('PDF preprocessing used the unbound provider splitter')
+
+    def bound_split(text):
+        calls.append(('split', text))
+        return [(0, len(text), text)]
+
+    def bound_embed(text):
+        calls.append(('embed', text))
+        return [1.0, 2.0]
+
+    def factory(expected, contract, embed, split):
+        return sessions.CheckedEmbeddingSession(expected, contract, bound_embed, bound_split)
+
+    def prepare_splits(plan, splitter):
+        for chunk in plan.chunks:
+            assert splitter(chunk.text) == [(0, len(chunk.text), chunk.text)]
+        return plan
+
+    monkeypatch.setattr(provider, 'split_embedding_text', unbound_split)
+    monkeypatch.setattr(sessions, 'create_build_embedding_session', factory)
+    monkeypatch.setitem(sys.modules, 'embedding_session', sessions)
+    monkeypatch.setattr(builder, 'split_prepared_chunks_for_embedding', prepare_splits)
+    assert builder.main([]) == 0
+    assert [kind for kind, _ in calls] == ['split'] * 3 + ['embed'] * 3
+    assert store.generation_usable(client, store.load_active())
+
+
+@pytest.mark.parametrize('drift_at', ['before_session_entry', 'during_split'])
+def test_pdf_window_identity_drift_preserves_previous_active(pdf_builder, monkeypatch, drift_at):
+    builder, client, store = pdf_builder
+    assert builder.main([]) == 0
+    old = store.load_active()
+    provider = sys.modules['embedding_client']
+    sessions = load_module('pdf_window_drift_test', 'service/embedding_session.py')
+    state = dict(provider.embedding_contract(), revision='A')
+    monkeypatch.setattr(provider, 'embedding_contract', lambda: dict(state))
+
+    def split(text):
+        if drift_at == 'during_split':
+            state['revision'] = 'B'
+        return [(0, len(text), text)]
+
+    def factory(expected, contract, embed, unbound_split):
+        if drift_at == 'before_session_entry':
+            state['revision'] = 'B'
+        return sessions.CheckedEmbeddingSession(expected, contract, embed, split)
+
+    def prepare_splits(plan, splitter):
+        for chunk in plan.chunks:
+            splitter(chunk.text)
+        return plan
+
+    monkeypatch.setattr(sessions, 'create_build_embedding_session', factory)
+    monkeypatch.setitem(sys.modules, 'embedding_session', sessions)
+    monkeypatch.setattr(builder, 'split_prepared_chunks_for_embedding', prepare_splits)
+    assert builder.main(['--rebuild']) == 1
+    assert store.load_active() == old
+    assert store.generation_usable(client, old)
+
+
 def test_orchestrator_stops_after_committed_warning(capsys):
     module = load_module('build_indexes_under_test', 'scripts/build_indexes.py')
     commands = module.build_commands('python', rebuild_notes=True, rebuild_papers=True)

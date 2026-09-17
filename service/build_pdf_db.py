@@ -545,27 +545,28 @@ def main(argv=None):
                 split_embedding_text,
             )
 
-        plan = split_prepared_chunks_for_embedding(plan, split_embedding_text)
-        sources = _inventory_payload(plan)
-        failure_sources = sources
-        contract = _build_contract(plan, embedding_contract, implementation_contract)
+        expected_embedding = embedding_contract()
         client = chromadb.PersistentClient(path=str(CHROMA_PATH))
         with store.writer_lock():
             active = store.load_active()
-            if (
-                plan.publishable
-                and not args.rebuild
-                and store.same_inputs(active, contract, sources)
-                and _active_generation_usable(store, client, active)
-            ):
-                print(f"[SKIP] Active PDF generation already matches inputs: {active['generation_id']}")
-                return 0
-            generation = store.begin(contract, sources)
-            _validate_prepared_build(plan)
             session = create_build_embedding_session(
-                contract["embedding"], embedding_contract, embed_index_text, split_embedding_text,
+                expected_embedding, embedding_contract, embed_index_text, split_embedding_text,
             )
             with session:
+                plan = split_prepared_chunks_for_embedding(plan, session.split)
+                sources = _inventory_payload(plan)
+                failure_sources = sources
+                contract = _build_contract(plan, lambda: session.expected, implementation_contract)
+                if (
+                    plan.publishable
+                    and not args.rebuild
+                    and store.same_inputs(active, contract, sources)
+                    and _active_generation_usable(store, client, active)
+                ):
+                    print(f"[SKIP] Active PDF generation already matches inputs: {active['generation_id']}")
+                    return 0
+                generation = store.begin(contract, sources)
+                _validate_prepared_build(plan)
                 _write_candidate(
                     client=client,
                     store=store,

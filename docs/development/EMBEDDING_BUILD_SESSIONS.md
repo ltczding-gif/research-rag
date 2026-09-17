@@ -41,6 +41,10 @@ identity guarantees than their interfaces can supply.
 PDF writes now materialize at most the current 100-chunk embedding batch before each
 database write rather than embedding the entire corpus into a second Python list.
 This does not remove the prepared PDF IR from memory or claim an end-to-end speedup.
+PDF embedding-window subdivision and vector creation run inside the same open
+session. The final contract uses that session's expected identity; a healthy PDF
+reuse also opens and validates the session rather than consulting an unbound splitter.
+Canonical extraction and base chunk preparation still precede the embedding session.
 
 ## Compatibility and unresolved matters
 
