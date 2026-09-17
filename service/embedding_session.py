@@ -41,10 +41,25 @@ def _fingerprint(value: object) -> str:
 
 
 def _vector(raw: Sequence[float], dimensions: int) -> list[float]:
-    result = [float(value) for value in raw]
-    if len(result) != dimensions or not all(math.isfinite(v) for v in result) or not any(result):
+    result, problem = _vector_problem(raw, dimensions)
+    if problem:
         raise ValueError("Embedding does not match the declared dimensions or finite/nonzero contract")
     return result
+
+
+def _vector_problem(raw: Sequence[float], dimensions: int):
+    try:
+        result = [float(value) for value in raw]
+    except (TypeError, ValueError):
+        return None, {'kind': 'type', 'dimensions': None, 'finite': False, 'nonzero': False}
+    finite, nonzero = all(math.isfinite(value) for value in result), any(result)
+    if len(result) != dimensions:
+        return result, {'kind': 'dimensions', 'dimensions': len(result),
+                        'finite': finite, 'nonzero': nonzero}
+    if not finite or not nonzero:
+        return result, {'kind': 'numeric', 'dimensions': len(result),
+                        'finite': finite, 'nonzero': nonzero}
+    return result, None
 
 
 def _reader(function: Callable, dimensions: int) -> Callable:
@@ -263,6 +278,7 @@ class OllamaBuildSession(CheckedEmbeddingSession):
         self.transport = transport or OllamaTransport(endpoint[:-len('/api/embed')])
         self._embedding_http_request_count = 0
         self._transient_retry_count = 0
+        self._invalid_vector_retry_count = 0
         self._copied = False
         super().__init__(expected, contract_fn, self._bound_embed, self._bound_split)
 
@@ -315,7 +331,6 @@ class OllamaBuildSession(CheckedEmbeddingSession):
             try:
                 response = self.transport.request('POST', '/api/embed', {
                     'model': self.runtime_model, 'input': list(texts), 'truncate': False})
-                break
             except OllamaRequestError as exc:
                 transient = any(marker in exc.detail.lower() for marker in (
                     'runner connection reset', 'connection reset', 'forcibly closed',
@@ -325,14 +340,28 @@ class OllamaBuildSession(CheckedEmbeddingSession):
                     raise
                 self._transient_retry_count += 1
                 time.sleep(1)
-        if (not isinstance(response.get('model'), str)
-                or _model_name(response['model']) != self.runtime_model):
-            raise EmbeddingIdentityError('Ollama response belongs to a different runtime model')
-        vectors = response.get('embeddings')
-        if not isinstance(vectors, list) or len(vectors) != len(texts):
-            raise ValueError('Ollama returned the wrong number of embeddings')
-        self._check_runtime()
-        return vectors
+                continue
+            if (not isinstance(response.get('model'), str)
+                    or _model_name(response['model']) != self.runtime_model):
+                raise EmbeddingIdentityError('Ollama response belongs to a different runtime model')
+            vectors = response.get('embeddings')
+            if not isinstance(vectors, list) or len(vectors) != len(texts):
+                raise ValueError('Ollama returned the wrong number of embeddings')
+            self._check_runtime()
+            problems = [(index, problem) for index, raw in enumerate(vectors)
+                        if (problem := _vector_problem(raw, self.dimensions)[1])]
+            if not problems:
+                return vectors
+            index, problem = next((entry for entry in problems if entry[1]['kind'] != 'numeric'),
+                                  problems[0])
+            detail = (f"Ollama returned invalid embedding at index {index}: "
+                      f"observed_dimensions={problem['dimensions']}, "
+                      f"finite={problem['finite']}, nonzero={problem['nonzero']}")
+            if problem['kind'] != 'numeric' or attempt == 2:
+                raise ValueError(detail)
+            self._invalid_vector_retry_count += 1
+            time.sleep(1)
+        raise AssertionError('unreachable Ollama embedding retry state')
 
     def embed(self, text):
         return self.embed_batch([text])[0]
@@ -380,6 +409,7 @@ class OllamaBuildSession(CheckedEmbeddingSession):
     def summary(self):
         return {**super().summary(), 'embedding_http_request_count': self._embedding_http_request_count,
                 'transient_retry_count': self._transient_retry_count,
+                'invalid_vector_retry_count': self._invalid_vector_retry_count,
                 'source_model': self.source_model,
                 'runtime_model': self.runtime_model,
                 'limitation': 'External mutation of owned alias is unsupported; no per-response weight attestation.'}

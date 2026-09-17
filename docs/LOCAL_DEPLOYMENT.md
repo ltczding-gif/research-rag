@@ -51,10 +51,13 @@ The embedding receipt's `request_count` remains an input count for compatibility
 between single-input and batched embeddings is not assumed.
 
 An explicit local runner connection reset, refusal or unexpected EOF may retry
-the same owned alias at most twice, one second apart. Each attempt rechecks the
-alias identity; input and identity errors are not retried. The HTTP count includes
-failed attempts, `transient_retry_count` records retries, and successful inputs
-are recorded only once.
+the same owned alias. Correctly sized vectors containing nonfinite values or
+only zeros may also retry. These failures share a maximum of three HTTP attempts,
+one second apart. Each attempt rechecks the alias identity; input, identity,
+vector type/dimension and response-count errors are not retried. The whole batch
+must validate before recording any successful input. The HTTP count includes
+failed attempts; `transient_retry_count` and `invalid_vector_retry_count` record
+the two recovery paths. Persistently invalid output still stops publication.
 
 On the audited Windows machine, `localhost` incurred a roughly two-second delay
 for every local HTTP request, while `127.0.0.1` did not. Use the actual measured

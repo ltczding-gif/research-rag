@@ -311,6 +311,45 @@ def test_ollama_batch_does_not_retry_invalid_input_or_exceed_retry_cap(sessions,
     assert len([call for call in daemon.calls if call[1] == '/api/embed']) == 3
     assert pauses == [1, 1]
 
+
+def test_ollama_batch_retries_numeric_invalid_vectors_before_recording_inputs(sessions, monkeypatch):
+    session, daemon = ollama(sessions)
+    responses = [
+        [[0., 0.], [float('nan'), .5]],
+        [[1., .5], [1., .5]],
+    ]
+    daemon.response_embeddings = lambda texts, _digest: responses.pop(0)
+    pauses = []
+    monkeypatch.setattr(sessions.time, 'sleep', pauses.append)
+    with session:
+        assert session.embed_batch(['one', 'two']) == [[1., .5], [1., .5]]
+    receipt = session.summary()
+    assert receipt['request_count'] == 2
+    assert receipt['embedding_http_request_count'] == 2
+    assert receipt['invalid_vector_retry_count'] == 1
+    assert pauses == [1]
+
+
+def test_ollama_batch_caps_numeric_invalid_vector_retries_and_never_retries_wrong_dimensions(sessions, monkeypatch):
+    pauses = []
+    monkeypatch.setattr(sessions.time, 'sleep', pauses.append)
+    session, daemon = ollama(sessions)
+    daemon.response_embeddings = lambda texts, _digest: [[0., 0.] for _ in texts]
+    with pytest.raises(ValueError, match='index 0.*observed_dimensions=2.*nonzero=False'):
+        with session:
+            session.embed_batch(['one', 'two'])
+    assert len([call for call in daemon.calls if call[1] == '/api/embed']) == 3
+    assert pauses == [1, 1]
+    with pytest.raises(RuntimeError):
+        session.summary()
+
+    session, daemon = ollama(sessions)
+    daemon.response_embeddings = lambda texts, _digest: [[1.] for _ in texts]
+    with pytest.raises(ValueError, match='observed_dimensions=1'):
+        with session:
+            session.embed_batch(['one', 'two'])
+    assert len([call for call in daemon.calls if call[1] == '/api/embed']) == 1
+
     session, daemon = ollama(sessions)
     daemon.after_embed = lambda d, body: d.models.update({body['model']: 'b'*64})
     with pytest.raises(sessions.EmbeddingIdentityError, match='alias'):
