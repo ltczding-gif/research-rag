@@ -99,6 +99,41 @@ def search_papers(
 
 
 @mcp.tool()
+def prepare_answer(query: str, n: int = 10, budget_codepoints: int = 8000,
+                   zotero_parent_key: str = "", second_query: str = "",
+                   zotero_attachment_key: str = "", source_role: str = "") -> dict:
+    """Prepare source evidence for a cited answer, with deduplication and a total budget.
+
+    Prefer this for answering a research question. Generate the answer yourself
+    using the returned instructions and evidence. Keep subject and experimental
+    conditions bound to each claim; name missing evidence instead of guessing.
+    Then call check_answer with this unchanged packet and your structured answer.
+    Only canonical PDF generations are supported. No answer model is called here.
+    second_query changes retrieval only; query must remain the user's question.
+    """
+    payload, _status = _core.prepare_answer_payload(query, n=n,
+        budget_codepoints=budget_codepoints, zotero_parent_key=zotero_parent_key or None,
+        second_query=second_query or None, zotero_attachment_key=zotero_attachment_key or None,
+        source_role=source_role or None)
+    return payload
+
+
+@mcp.tool()
+def check_answer(packet: dict, answer: dict) -> dict:
+    """Check structured claims against their original evidence before presenting them.
+
+    Pass the unchanged prepare_answer packet. answer has claims (each with text
+    and citations [{evidence_id, quote?}]) and missing_information (list of strings).
+    Without a quote the full cited fragment is attached as source evidence.
+    Checks supplied exact quotes and rereads canonical source evidence. On failure, repair
+    citations or remove unsupported claims. Semantic support still requires your
+    review: a valid quotation alone does not prove a scientific claim.
+    """
+    payload, _status = _core.check_answer_payload(packet, answer)
+    return payload
+
+
+@mcp.tool()
 def get_note(source: str = "", zotero_parent_key: str = "", summary_only: bool = False) -> dict:
     """Fetch the full content of one research note.
 

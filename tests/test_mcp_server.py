@@ -55,4 +55,4 @@ def test_mcp_server_registers_expected_tools():
     import json
 
     names = set(json.loads(completed.stdout.strip().splitlines()[-1]))
-    assert {"search_notes", "search_papers", "get_note", "index_status"} <= names
+    assert {"search_notes", "search_papers", "get_note", "index_status", "prepare_answer", "check_answer"} <= names

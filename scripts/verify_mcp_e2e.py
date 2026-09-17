@@ -269,10 +269,10 @@ async def _run_roundtrip(spawn_python: str, *, direct_server: bool = False) -> b
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-            # 1. list_tools contains the four expected tools.
+            # 1. list_tools contains the six expected tools.
             tools_res = await session.list_tools()
             names = {t.name for t in tools_res.tools}
-            expected = {"search_notes", "search_papers", "get_note", "index_status"}
+            expected = {"search_notes", "search_papers", "get_note", "index_status", "prepare_answer", "check_answer"}
             all_ok &= _record(
                 "list_tools exposes the 4 retrieval tools",
                 expected <= names,

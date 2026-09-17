@@ -32,6 +32,13 @@ POST http://127.0.0.1:18810/search_papers
 
 ## Parameters
 
+若目标是回答研究问题，而非仅展示原始命中，优先用 `prepare_answer`：
+传 `query`、`n`、`budget_codepoints`（默认且最多 8000），可附 parent/attachment/role
+过滤。返回去重、限长的 canonical 证据包；依其 instructions 逐项写 claims，
+再用 `check_answer(packet, answer)` 校验引用。引用 ID 必须来自该包；可选
+quote 必须逐字匹配，不填时自动绑定整段。科学条件是否支持主张仍须由回答者审阅。
+HTTP 对应 `/prepare_answer` 和 `/check_answer`。原始段落展示仍使用下方 search_papers。
+
 ### search_papers
 
 ```json

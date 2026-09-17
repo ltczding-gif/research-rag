@@ -93,6 +93,38 @@ def test_parent_attachment_role_are_combined_in_real_chroma(canonical):
     assert status == 200 and empty["results"] == []
 
 
+def test_answer_workflow_routes_use_real_canonical_sources(canonical):
+    core = canonical[0]
+    http = core.app.test_client()
+    response = http.post('/prepare_answer', json={'query': 'evidence', 'n': 1,
+                         'zotero_attachment_key': 'MAIN1', 'budget_codepoints': 8000})
+    assert response.status_code == 200
+    packet = response.get_json()
+    assert packet['used_codepoints'] == len('Evidence from MAIN1')
+    assert packet['evidence'][0]['source']['zotero_attachment_key'] == 'MAIN1'
+    answer = {'claims': [{'text': 'Evidence from MAIN1', 'citations': [{'evidence_id': 'E1'}]}],
+              'missing_information': []}
+    checked = http.post('/check_answer', json={'packet': packet, 'answer': answer})
+    assert checked.status_code == 200
+    assert checked.get_json()['citation_checks_passed']
+    assert checked.get_json()['claim_bindings'][0]['quote'] == 'Evidence from MAIN1'
+    assert checked.get_json()['semantic_support'] == 'requires_review'
+    answer['claims'][0]['citations'][0]['evidence_id'] = 'E99'
+    assert not http.post('/check_answer', json={'packet': packet, 'answer': answer}).get_json()['citation_checks_passed']
+    assert http.post('/check_answer', json={}).status_code == 400
+    assert http.post('/prepare_answer', json={'query': 'evidence', 'budget_codepoints': 8001}).status_code == 400
+    assert http.post('/prepare_answer', json={'query': 123}).status_code == 400
+    assert http.post('/prepare_answer', json=['bad']).status_code == 400
+
+
+def test_answer_workflow_refuses_legacy_but_handles_empty_canonical_results(canonical, monkeypatch):
+    core = canonical[0]
+    packet, status = core.prepare_answer_payload('evidence', n=1, zotero_parent_key='MISSING')
+    assert status == 200 and packet['status'] == 'insufficient_evidence'
+    monkeypatch.setattr(core, 'pdf_generation', None)
+    assert core.prepare_answer_payload('evidence')[1] == 409
+
+
 @pytest.mark.parametrize("filters", [{"source_role": "main"}, {"pdf_filename": "other.pdf"}])
 def test_known_attachment_rejects_conflicting_source_filters(canonical, filters):
     core, _, _, _, _, _, _ = canonical

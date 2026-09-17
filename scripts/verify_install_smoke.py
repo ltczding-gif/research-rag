@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LAUNCHER = ROOT / "scripts" / "run_mcp_server.py"
 SERVER = ROOT / "service" / "mcp_server.py"
-TOOLS = {"search_notes", "search_papers", "get_note", "index_status"}
+TOOLS = {"search_notes", "search_papers", "get_note", "index_status", "prepare_answer", "check_answer"}
 BASE_ENV = "LOCALRAG_INSTALL_SMOKE_BASE_PYTHON"
 TRACE_ENV = "LOCALRAG_INSTALL_SMOKE_TRACE"
 
