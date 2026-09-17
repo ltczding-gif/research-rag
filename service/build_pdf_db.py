@@ -477,29 +477,18 @@ def _build_contract(plan, embedding_contract, implementation_contract):
 
 def _record_failed_attempt(store, generation, error, sources=None):
     if store is None:
-        return
+        return "unknown"
     try:
         with store.writer_lock():
             attempt = generation or store.begin({}, sources or [])
-            store.fail(attempt, error)
+            return store.fail(attempt, error)
     except Exception:
         # Preserve the original build error when status recording itself fails.
-        pass
+        return "unknown"
 
 
 def _active_generation_usable(store, client, active):
-    if not active or active.get("item_count", 0) <= 0:
-        return False
-    try:
-        store.validate_artifacts(active)
-        collection = client.get_collection(active["collection_name"])
-        metadata = collection.metadata or {}
-        return (
-            collection.count() == active["item_count"]
-            and metadata.get("generation_id") == active["generation_id"]
-        )
-    except Exception:
-        return False
+    return bool(active and store.generation_usable(client, active))
 
 
 def main(argv=None):
@@ -592,15 +581,19 @@ def main(argv=None):
                 f"with {len(plan.chunks)} chunks"
             )
             return 0
-    except KeyboardInterrupt:
-        _record_failed_attempt(
-            store, generation, "interrupted", failure_sources
-        )
-        print("[INTERRUPTED] PDF build did not change the active generation.")
+    except KeyboardInterrupt as exc:
+        outcome = _record_failed_attempt(store, generation, exc, failure_sources)
+        if outcome == "committed":
+            print("[COMMITTED WITH WARNING] PDF generation is active despite interruption; inspect status.", file=sys.stderr)
+            return 3
+        print("[INTERRUPTED] Inspect index status before retrying; publication outcome may be unknown.")
         return 130
     except Exception as exc:
-        _record_failed_attempt(store, generation, exc, failure_sources)
-        print(f"[ERROR] PDF build failed; active generation unchanged: {exc}")
+        outcome = _record_failed_attempt(store, generation, exc, failure_sources)
+        if outcome == "committed":
+            print(f"[COMMITTED WITH WARNING] PDF generation is active: {exc}", file=sys.stderr)
+            return 3
+        print(f"[ERROR] PDF build stopped; inspect index status: {exc}")
         return 1
 
 if __name__ == "__main__":

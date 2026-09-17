@@ -18,8 +18,11 @@ def build_commands(
     rebuild_papers: bool = False,
     allow_removals: bool = False,
     notes_only: bool = False,
+    rebuild_notes: bool = False,
 ) -> list[list[str]]:
     notes = [python_executable, str(REPO_ROOT / "service" / "build_notes_db.py")]
+    if rebuild_notes:
+        notes.append("--rebuild")
     if allow_removals:
         notes.append("--allow-removals")
     commands = [notes]
@@ -42,6 +45,9 @@ def run_builds(
         label = "notes" if Path(command[1]).name == "build_notes_db.py" else "paper chunks"
         print(f"[{index}/{total}] Building {label} index...", flush=True)
         completed = runner(list(command), cwd=str(REPO_ROOT))
+        if completed.returncode == 3:
+            print(f"[COMMITTED WITH WARNING] {label} committed. Inspect status; remaining builds not started.", file=sys.stderr)
+            return 3
         if completed.returncode != 0:
             print(f"[ERROR] {label} index failed (exit {completed.returncode})", file=sys.stderr)
             return completed.returncode or 1
@@ -66,6 +72,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Build only the notes index.",
     )
+    parser.add_argument("--rebuild-notes", action="store_true",
+                        help="Force a fresh notes candidate without deleting active data.")
     args = parser.parse_args(argv)
     if args.notes_only and args.rebuild_papers:
         parser.error("--rebuild-papers cannot be used with --notes-only")
@@ -75,6 +83,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.rebuild_papers,
             args.allow_removals,
             args.notes_only,
+            args.rebuild_notes,
         )
     )
 

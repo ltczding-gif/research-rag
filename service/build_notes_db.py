@@ -26,7 +26,7 @@ from embedding_client import (
     get_embedding,  # noqa: F401 - retained as a legacy re-export
     split_embedding_text,
 )
-from index_generation import GenerationStore, implementation_contract
+from index_generation import GenerationStore, PublicationCommittedError, implementation_contract
 
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -241,6 +241,7 @@ def build_notes_generation(
     collection_name: str = COLLECTION_NAME,
     note_suffix: str = NOTE_SUFFIX,
     allow_removals: bool = False,
+    rebuild: bool = False,
     client_factory=chromadb.PersistentClient,
     embed_fn: Callable[[str], Sequence[float]] = embed_index_text,
     split_fn: Callable[[str], Sequence[tuple[int, int, str]]] = split_embedding_text,
@@ -281,18 +282,9 @@ def build_notes_generation(
 
             client = client_factory(path=str(chroma_path))
             active = store.load_active()
-            if store.same_inputs(active, contract, sources):
-                count = _collection_count(client, active["collection_name"])
-                if count <= 0 or count != active["item_count"]:
-                    raise NotesBuildError(
-                        "Active collection count does not match its manifest"
-                    )
-                try:
-                    store.validate_artifacts(active)
-                except ValueError:
-                    pass  # Rebuild missing or changed artifacts from current sources.
-                else:
-                    return active, True
+            if (not rebuild and store.same_inputs(active, contract, sources)
+                    and store.generation_usable(client, active)):
+                return active, True
 
             generation = store.begin(contract, sources)
             generation_dir = store.generation_path(generation)
@@ -365,12 +357,14 @@ def build_notes_generation(
             )
             return published, False
         except BaseException as exc:
-            if generation is None:
-                generation = store.begin(contract, sources)
-            store.fail(
-                generation,
-                "interrupted" if isinstance(exc, KeyboardInterrupt) else exc,
-            )
+            try:
+                if generation is None:
+                    generation = store.begin(contract, sources)
+                outcome = store.fail(generation, exc)
+            except Exception:
+                outcome = "unknown"  # Diagnostics must not replace the original exception.
+            if outcome == "committed" and not isinstance(exc, PublicationCommittedError):
+                raise PublicationCommittedError(generation["generation_id"], "notes build", exc) from exc
             raise
 
 
@@ -381,24 +375,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Allow sources absent from the full current snapshot to be withdrawn.",
     )
+    parser.add_argument("--rebuild", action="store_true",
+                        help="Force a fresh notes candidate without deleting active data.")
     args = parser.parse_args(argv)
     print("[INIT] Building immutable notes index generation...")
     print(f"  Notes dir:  {NOTES_DIR}")
     print(f"  ChromaDB:   {CHROMA_PATH}")
     print(f"  Collection: {COLLECTION_NAME}")
     try:
-        manifest, reused = build_notes_generation(allow_removals=args.allow_removals)
+        options = {"allow_removals": args.allow_removals}
+        if args.rebuild:
+            options["rebuild"] = True
+        manifest, reused = build_notes_generation(**options)
+    except PublicationCommittedError as exc:
+        print(f"[COMMITTED WITH WARNING] {exc}", file=sys.stderr)
+        return 3
     except KeyboardInterrupt:
-        print("[INTERRUPTED] Notes index build left the active generation unchanged.")
+        print("[INTERRUPTED] Inspect index status before retrying; publication outcome may be unknown.")
         return 130
     except Exception as exc:
         print(f"[FATAL] Notes index build failed: {exc}", file=sys.stderr)
         return 1
     action = "Reused" if reused else "Published"
-    print(
-        f"[DONE] {action} generation {manifest['generation_id']} "
-        f"({manifest['item_count']} sections)."
-    )
+    try:
+        print(
+            f"[DONE] {action} generation {manifest['generation_id']} "
+            f"({manifest['item_count']} sections)."
+        )
+    except (OSError, KeyboardInterrupt):
+        return 3  # The output stream failed, not the already committed build.
     return 0
 
 
