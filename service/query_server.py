@@ -832,23 +832,14 @@ def search_papers_chroma(
                 item["evidence"] = {"verified": False, "reason": "legacy index has no canonical provenance"}
             if include_context:
                 if pdf_generation:
-                    previous, following = meta.get("previous_chunk_id"), meta.get("next_chunk_id")
+                    item.update(pdf_generation.context(meta, content, hit_id))
                 else:
                     previous, following = _neighbor_chunk_ids(hit_id, meta.get("chunk_index", 0))
-                neighbor_ids = [identifier for identifier in (previous, following) if identifier]
-                neighbors = pdf_col.get(ids=neighbor_ids) if neighbor_ids else {"ids": [], "documents": [], "metadatas": []}
-                neighbor_docs = dict(zip(neighbors["ids"], neighbors["documents"]))
-                if pdf_generation:
-                    context_evidence = []
-                    if set(neighbors["ids"]) != set(neighbor_ids):
-                        raise ValueError("Canonical neighboring chunk is missing")
-                    for neighbor_id, doc, neighbor_meta in zip(neighbors["ids"], neighbors["documents"], neighbors["metadatas"]):
-                        if neighbor_meta["file_id"] != meta["file_id"]:
-                            raise ValueError("Canonical neighbor belongs to another source")
-                        context_evidence.append(pdf_generation.evidence(neighbor_meta, doc, neighbor_id))
-                    item["context_evidence"] = context_evidence
-                item["context"] = " ".join(filter(None, [neighbor_docs.get(previous, ""),
-                                      f"[MATCH]{content}[/MATCH]", neighbor_docs.get(following, "")]))
+                    neighbor_ids = [identifier for identifier in (previous, following) if identifier]
+                    neighbors = pdf_col.get(ids=neighbor_ids) if neighbor_ids else {"ids": [], "documents": []}
+                    neighbor_docs = dict(zip(neighbors["ids"], neighbors["documents"]))
+                    item["context"] = " ".join(filter(None, [neighbor_docs.get(previous, ""),
+                                          f"[MATCH]{content}[/MATCH]", neighbor_docs.get(following, "")]))
             formatted_results.append(item)
         payload = {"results": formatted_results, "query": query, "effective_query": effective_query,
                    "filters": where, "index_mode": "canonical" if pdf_generation else "legacy_unverified"}

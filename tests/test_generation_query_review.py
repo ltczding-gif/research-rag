@@ -66,7 +66,7 @@ def test_notes_only_health_is_ready(core, tmp_path, monkeypatch):
     assert payload["papers"]["ready"] is False
 
 
-def test_canonical_missing_neighbor_fails_closed(core, monkeypatch):
+def test_canonical_context_does_not_depend_on_neighbor_chunk_copies(core, monkeypatch):
     metadata = {
         "generation_id": "g1",
         "file_id": "file-1",
@@ -92,17 +92,22 @@ def test_canonical_missing_neighbor_fails_closed(core, monkeypatch):
         def evidence(self, _metadata, _content, chunk_id):
             return {"verified": True, "chunk_id": chunk_id}
 
+        def context(self, _metadata, content, chunk_id):
+            return {"context": f"[MATCH]{content}[/MATCH]",
+                    "context_source": {"verified": True, "for_chunk_id": chunk_id}}
+
     monkeypatch.setattr(core, "pdf_col", collection)
     monkeypatch.setattr(core, "pdf_generation", Reader())
     monkeypatch.setattr(core, "chroma_ready", True)
     monkeypatch.setattr(core, "embed_index_text", lambda _text: [1.0, 0.0])
+    monkeypatch.setattr(collection, "get", lambda **kwargs: pytest.fail("Canonical context must use page coordinates"))
 
     payload, status = core.search_papers_chroma(
         "query", include_context=True
     )
 
-    assert status == 409
-    assert "neighboring chunk is missing" in payload["error"]
+    assert status == 200
+    assert payload["results"][0]["context_source"]["verified"] is True
 
 
 def test_legacy_search_is_explicitly_unverified(core, monkeypatch):
@@ -159,7 +164,7 @@ def test_mcp_forwards_canonical_attachment_filters(monkeypatch):
                 "n": 3,
                 "zotero_parent_key": "PARENT",
                 "second_query": None,
-                "include_context": False,
+                "include_context": True,
                 "zotero_attachment_key": "ATTACHMENT",
                 "source_role": "si",
                 "pdf_filename": "supplement.pdf",

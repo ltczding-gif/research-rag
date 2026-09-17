@@ -423,6 +423,11 @@ POST /search_papers {
 
 2. 返回的 `context` 字段中，`[MATCH]...[/MATCH]` 之间是原始匹配段，展示时**加粗**：
 
+canonical 索引的扩展部分由 `context_source.segments` 给出完整页码、坐标和引句，
+原命中仍由 `evidence` 描述。`boundary_status` 为 `budget_cut` 的一侧尚未补到句界；
+句界启发式也不等同于科学条件完整。保留原文单位和图注，区分相邻的反应/测试条件。
+MCP 默认返回该上下文；HTTP 仍需显式设置 `include_context: true`。
+
 ```
 📄 {pdf_filename}（{主文/SI}）· 含上下文
 

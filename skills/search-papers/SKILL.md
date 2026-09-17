@@ -24,6 +24,7 @@ description: 在 PDF 原文库中检索原始论文段落，用于验证笔记�
 
 > **MCP 优先**：若会话内有 `research-rag` MCP 工具，直接调 `search_papers`
 > 工具（参数与下方 HTTP 接口同名同义），无需启动任何服务。
+> MCP 默认带上下文；HTTP 调用需显式传 `include_context: true`。
 
 ```
 POST http://127.0.0.1:18810/search_papers
@@ -40,7 +41,8 @@ POST http://127.0.0.1:18810/search_papers
   "zotero_parent_key": "ABC12345",  // 推荐：覆盖主文+SI
   "paper_group": 1-6,               // 向后兼容
   "pdf_filename": "...pdf",          // 向后兼容
-  "second_query": "英文术语版"       // WF4：笔记结论的英文翻译
+  "second_query": "英文术语版",      // WF4：笔记结论的英文翻译
+  "include_context": true           // 带可回查的原文上下文
 }
 ```
 
@@ -50,8 +52,16 @@ POST http://127.0.0.1:18810/search_papers
 {
   "results": [
     {
-      "content": "前后 chunk 拼接后的原文（约2400字符）",
-      "content_original": "原始匹配的 chunk（800字符）",
+      "content": "原始匹配的 chunk（排名及内容保持不变）",
+      "context": "前文 [MATCH]原始匹配的 chunk[/MATCH] 后文",
+      "evidence": {"verified": true, "chunk_id": "...", "segments": []},
+      "context_source": {
+        "verified": true,
+        "for_chunk_id": "...",
+        "text_format": "verbatim_canonical_pdf_text",
+        "boundary_status": {"start": "sentence_heuristic", "end": "source_end"},
+        "segments": []
+      },
       "metadata": {
         "pdf_filename": "...",
         "zotero_parent_key": "ABC12345",
@@ -83,8 +93,11 @@ POST http://127.0.0.1:18810/search_papers
 ```
 
 **重要**：
-- 展示 content 字段的完整内容（已拼接前后 chunk，约2400字符）
-- 不要只挑一句话，展示完整段落
+- 有 `context` 时用它展示匹配段与周围原文；`content` 始终只是原始命中块。
+- canonical 上下文按同一附件的原文坐标生成，通常不超过 3200 字符，不重复拼入相邻块的重叠文本；超长原始命中不会被静默截断。
+- 引用扩展内容时使用 `context_source.segments` 的页码、坐标和引句；原始命中仍使用 `evidence`。`context_source` 取代旧版只列相邻块的 `context_evidence`。
+- `budget_cut` 表示该侧尚未补到句界，不能把当前片段当作完整条件。`sentence_heuristic` 仅表示检测到句界，不代表科学证据完整。
+- 保留原文数值、单位和图注；不要把相邻 MOR/ORR、主文/SI 的条件互相套用。PDF 抽取的上下标不明确时回查原 PDF，不自行修正单位。
 - 先展示原文，再提供翻译
 
 ## 入库新 PDF（维护说明）
