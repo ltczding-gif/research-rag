@@ -272,7 +272,8 @@ def notes_builder(generation_module, monkeypatch, tmp_path):
     chroma = ModuleType('chromadb')
     chroma.PersistentClient = lambda **kwargs: client
     for name, value in {'config': config, 'embedding_client': embedding, 'chromadb': chroma,
-                        'index_generation': generation_module}.items():
+                        'index_generation': generation_module,
+                        'embedding_session': load_module('session_for_builder_tests', 'service/embedding_session.py')}.items():
         monkeypatch.setitem(sys.modules, name, value)
     builder = load_module('notes_commit_under_test', 'service/build_notes_db.py')
     config.NOTES_DIR.mkdir()
@@ -469,3 +470,46 @@ def test_recovery_refuses_symlink_escape(generation_module, tmp_path, location):
                       expected_manifest_fingerprint=g.fingerprint(active))
     if location == 'pointer':
         assert external.read_text() == '{broken'
+
+
+def test_notes_model_change_during_generation_blocks_publication(notes_builder):
+    builder, client, store = notes_builder
+    old, _ = builder.build_notes_generation()
+    contract = {'provider': 'fake', 'model': 'fixed', 'revision': 'A', 'dimensions': 2}
+    calls = 0
+    def embed(text):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            contract['revision'] = 'B'
+        return [1, .5]
+    with pytest.raises(ValueError, match='contract changed'):
+        builder.build_notes_generation(rebuild=True, embed_fn=embed,
+                                       embedding_contract_fn=lambda: dict(contract))
+    assert calls == 2
+    assert store.load_active() == old
+    assert store.latest_attempt()['state'] == 'failed'
+
+
+def test_pdf_writer_embeds_only_current_batch_before_first_write(pdf_builder, monkeypatch):
+    builder, client, store = pdf_builder
+    source = SimpleNamespace(file_id='Main', status='success')
+    plan = SimpleNamespace(inventory=[source], documents=[],
+        chunks=[SimpleNamespace(chunk_id=str(i), file_id='Main', text=str(i)) for i in range(205)])
+    generation = candidate(store)
+    embedded, at_write = [], []
+    original = client.create_collection
+    def create(**kwargs):
+        col = original(**kwargs)
+        add = col.add
+        def observed_add(**values):
+            at_write.append(len(embedded))
+            add(**values)
+        col.add = observed_add
+        return col
+    monkeypatch.setattr(client, 'create_collection', create)
+    builder._write_candidate(client=client, store=store, generation=generation, plan=plan,
+        embed_index_text=lambda text: embedded.append(text) or [1, .5],
+        atomic_write_text=sys.modules['index_generation'].atomic_write_text)
+    assert at_write == [100, 200, 205]
+    assert len(embedded) == 205

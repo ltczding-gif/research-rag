@@ -26,7 +26,12 @@ from embedding_client import (
     get_embedding,  # noqa: F401 - retained as a legacy re-export
     split_embedding_text,
 )
-from index_generation import GenerationStore, PublicationCommittedError, implementation_contract
+from index_generation import (
+    GenerationStore, PublicationCommittedError, atomic_write_json, implementation_contract,
+)
+from embedding_session import (
+    BUILD_SESSION_POLICY, EmbeddingIdentityError, create_build_embedding_session,
+)
 
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -213,9 +218,11 @@ def _pipeline_contract(note_suffix: str, embedding):
     return {
         "embedding": embedding,
         "pipeline": implementation_contract(
-            [Path(__file__), Path(__file__).with_name("index_generation.py")],
+            [Path(__file__), Path(__file__).with_name("index_generation.py"),
+             Path(__file__).with_name("embedding_session.py")],
             {
                 "schema": _PIPELINE_SCHEMA,
+                "embedding_session_policy": BUILD_SESSION_POLICY,
                 "note_suffix": note_suffix,
                 "identity": "filename-md5-v1",
                 "artifact": "verbatim-utf8-note-v1",
@@ -302,47 +309,60 @@ def build_notes_generation(
 
             artifacts = {"notes": {}}
             item_count = 0
-            for note in notes:
-                artifact_relative = f"notes/{note['note_id']}.md"
-                artifact_path = generation_dir / artifact_relative
-                artifact_path.write_bytes(note["raw"])
-                artifacts["notes"][note["note_id"]] = artifact_relative
+            session = create_build_embedding_session(
+                embedding_metadata, embedding_contract_fn, embed_fn, split_fn,
+            )
+            with session:
+                for note in notes:
+                    artifact_relative = f"notes/{note['note_id']}.md"
+                    artifact_path = generation_dir / artifact_relative
+                    artifact_path.write_bytes(note["raw"])
+                    artifacts["notes"][note["note_id"]] = artifact_relative
 
-                for section_start, section_end, title in _section_ranges(note["text"]):
-                    section_text = note["text"][section_start:section_end]
-                    for local_start, local_end, chunk_text in _validated_splits(
-                        section_text, split_fn
-                    ):
-                        start = section_start + local_start
-                        end = section_start + local_end
-                        embedding = [float(value) for value in embed_fn(chunk_text)]
-                        if (
-                            len(embedding) != dimensions
-                            or not all(math.isfinite(value) for value in embedding)
-                            or not any(embedding)
+                    for section_start, section_end, title in _section_ranges(note["text"]):
+                        section_text = note["text"][section_start:section_end]
+                        for local_start, local_end, chunk_text in _validated_splits(
+                            section_text, session.split
                         ):
-                            raise NotesBuildError(
-                                "Embedding does not match the declared dimensions"
+                            start = section_start + local_start
+                            end = section_start + local_end
+                            try:
+                                embedding = [float(value) for value in session.embed(chunk_text)]
+                            except EmbeddingIdentityError:
+                                raise
+                            except ValueError as exc:
+                                raise NotesBuildError(str(exc)) from exc
+                            if (
+                                len(embedding) != dimensions
+                                or not all(math.isfinite(value) for value in embedding)
+                                or not any(embedding)
+                            ):
+                                raise NotesBuildError(
+                                    "Embedding does not match the declared dimensions"
+                                )
+                            record_id = f"{note['note_id']}:{start}:{end}"
+                            collection.upsert(
+                                ids=[record_id],
+                                documents=[chunk_text],
+                                embeddings=[embedding],
+                                metadatas=[
+                                    {
+                                        "note_id": note["note_id"],
+                                        "source_file": note["path"].name,
+                                        "zotero_parent_key": note["zotero_parent_key"],
+                                        "start": start,
+                                        "end": end,
+                                        "section_title": title,
+                                        "generation_id": generation["generation_id"],
+                                        "embedding_truncated": False,
+                                    }
+                                ],
                             )
-                        record_id = f"{note['note_id']}:{start}:{end}"
-                        collection.upsert(
-                            ids=[record_id],
-                            documents=[chunk_text],
-                            embeddings=[embedding],
-                            metadatas=[
-                                {
-                                    "note_id": note["note_id"],
-                                    "source_file": note["path"].name,
-                                    "zotero_parent_key": note["zotero_parent_key"],
-                                    "start": start,
-                                    "end": end,
-                                    "section_title": title,
-                                    "generation_id": generation["generation_id"],
-                                    "embedding_truncated": False,
-                                }
-                            ],
-                        )
-                        item_count += 1
+                            item_count += 1
+
+            receipt = "embedding-session.json"
+            atomic_write_json(generation_dir / receipt, session.summary())
+            artifacts["embedding_session"] = receipt
 
             actual_count = int(collection.count())
             if item_count <= 0 or actual_count != item_count:
