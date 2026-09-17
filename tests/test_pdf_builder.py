@@ -513,7 +513,7 @@ def test_builder_writes_isolated_generation_pages_and_canonical_metadata(
     )
     chroma_path = tmp_path / "chroma"
     fake_embedding = types.SimpleNamespace(
-        embedding_contract=lambda: {"provider": "test", "model": "fixed-2d"},
+        embedding_contract=lambda: {"provider": "test", "model": "fixed-2d", "dimensions": 2},
         embed_index_text=lambda text: [float(len(text)), 1.0],
         split_embedding_text=lambda text: [(0, len(text), text)],
     )
@@ -539,7 +539,17 @@ def test_builder_writes_isolated_generation_pages_and_canonical_metadata(
     collection = client.get_collection(active["collection_name"])
     stored = collection.get(include=["metadatas", "documents"])
 
-    assert active["artifacts"] == {"pages": "pages.jsonl"}
+    assert active["artifacts"] == {
+        "pages": "pages.jsonl",
+        "embedding_session": "embedding-session.json",
+    }
+    receipt = json.loads(
+        (store.generation_path(active) / "embedding-session.json").read_text(encoding="utf-8")
+    )
+    assert receipt["request_count"] == len(plan.chunks)
+    assert receipt["assurance"] == "observed-adapter-contract"
+    assert receipt["bitwise_reproducibility_claim"] is False
+    assert store.validate_artifacts(active)
     assert active["item_count"] == len(plan.chunks) == collection.count()
     assert collection.metadata["hnsw:space"] == "cosine"
     assert [page["pdf_page_index"] for page in pages] == [0, 1]
@@ -595,7 +605,7 @@ def test_failed_complete_inventory_attempt_preserves_active_generation(
         sys.modules,
         "embedding_client",
         types.SimpleNamespace(
-            embedding_contract=lambda: {"provider": "test", "model": "fixed-2d"},
+            embedding_contract=lambda: {"provider": "test", "model": "fixed-2d", "dimensions": 2},
             embed_index_text=lambda text: [float(len(text)), 1.0],
             split_embedding_text=lambda text: [(0, len(text), text)],
         ),

@@ -334,11 +334,15 @@ Use `scripts/build_indexes.py` after a generation batch.
 | `papers` | Declared `pdf_N_path` attachments | Canonical page/span chunks, further split to fit the embedding window | Exact parent + attachment identity |
 
 Builders publish complete candidate generations through an atomic active pointer.
-Failures preserve the previous index; removing sources requires `--allow-removals`.
+Failures before activation preserve the previous index; post-commit warnings require
+status inspection before retrying. Removing sources requires `--allow-removals`.
 The final-reference truncation policy remains, with its code bound into the build
 contract. Model swaps are checked even when vector dimensions match. See
 [the index-generation contract](docs/INDEX_GENERATIONS.md) for migration, exact
 attachment identity, verified citations, notes-only builds, and offline rollback.
+For damaged active pointers, use the explicit [recovery procedure](docs/development/GENERATION_RECOVERY.md).
+[Build-session guarantees](docs/development/EMBEDDING_BUILD_SESSIONS.md) describe
+provider identity binding and its limits.
 
 At query time the terminal agent spawns `scripts/run_mcp_server.py`. The launcher
 switches into the repository's service-capable venv, then starts the stdio MCP server.
