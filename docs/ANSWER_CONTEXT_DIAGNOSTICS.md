@@ -77,3 +77,6 @@ was absent, obscured by irrelevant context, or cited incorrectly. Do not
 automatically label every difference a retrieval defect. Failure with complete
 oracle evidence supports further answer/citation diagnosis. Neither arm alone
 licenses a general release-quality or cross-paper synthesis claim.
+
+The [initial v5 results and next implementation plan](plans/2026-09-17-answer-diagnostics-v5-results.md)
+record the ten local outputs' findings and remaining evaluation boundaries.
