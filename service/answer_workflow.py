@@ -29,6 +29,12 @@ give the supported partial answer and name only missing information needed to
 answer the question. Do not request unrelated details or reject a supported
 qualitative observation because a percentage was not reported.
 An empty claims list is appropriate when nothing relevant is supported.
+Evidence IDs are local to this packet. Never reuse an ID or quote from another
+packet; pass each unchanged packet and only its own claims to check_answer.
+Before declaring needed evidence missing, use search_notes and get_note to
+identify the relevant paper, then prepare_answer with its discovered parent key.
+For a comparison across papers, retrieve each paper separately and divide the
+total source budget between the final packets; check each packet separately.
 Review scientific support yourself; check_answer only checks source/citation
 integrity, not whether the claim follows from its quotes.
 Example shape: {"claims":[{"text":"A supported statement.","citations":[
