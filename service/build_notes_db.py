@@ -313,6 +313,44 @@ def build_notes_generation(
                 embedding_metadata, embedding_contract_fn, embed_fn, split_fn,
             )
             with session:
+                pending = []
+
+                def flush_pending():
+                    nonlocal item_count
+                    if not pending:
+                        return
+                    try:
+                        embeddings = session.embed_batch([record[1] for record in pending])
+                    except EmbeddingIdentityError:
+                        raise
+                    except ValueError as exc:
+                        raise NotesBuildError(str(exc)) from exc
+                    if len(embeddings) != len(pending):
+                        raise NotesBuildError("embedding batch did not return every prepared section")
+                    validated = []
+                    for record, raw_embedding in zip(pending, embeddings, strict=True):
+                        try:
+                            embedding = [float(value) for value in raw_embedding]
+                        except (TypeError, ValueError) as exc:
+                            raise NotesBuildError("Embedding does not match the declared dimensions") from exc
+                        if (
+                            len(embedding) != dimensions
+                            or not all(math.isfinite(value) for value in embedding)
+                            or not any(embedding)
+                        ):
+                            raise NotesBuildError(
+                                "Embedding does not match the declared dimensions"
+                            )
+                        validated.append(embedding)
+                    collection.upsert(
+                        ids=[record[0] for record in pending],
+                        documents=[record[1] for record in pending],
+                        embeddings=validated,
+                        metadatas=[record[2] for record in pending],
+                    )
+                    item_count += len(pending)
+                    pending.clear()
+
                 for note in notes:
                     artifact_relative = f"notes/{note['note_id']}.md"
                     artifact_path = generation_dir / artifact_relative
@@ -326,26 +364,11 @@ def build_notes_generation(
                         ):
                             start = section_start + local_start
                             end = section_start + local_end
-                            try:
-                                embedding = [float(value) for value in session.embed(chunk_text)]
-                            except EmbeddingIdentityError:
-                                raise
-                            except ValueError as exc:
-                                raise NotesBuildError(str(exc)) from exc
-                            if (
-                                len(embedding) != dimensions
-                                or not all(math.isfinite(value) for value in embedding)
-                                or not any(embedding)
-                            ):
-                                raise NotesBuildError(
-                                    "Embedding does not match the declared dimensions"
-                                )
                             record_id = f"{note['note_id']}:{start}:{end}"
-                            collection.upsert(
-                                ids=[record_id],
-                                documents=[chunk_text],
-                                embeddings=[embedding],
-                                metadatas=[
+                            pending.append(
+                                (
+                                    record_id,
+                                    chunk_text,
                                     {
                                         "note_id": note["note_id"],
                                         "source_file": note["path"].name,
@@ -355,10 +378,12 @@ def build_notes_generation(
                                         "section_title": title,
                                         "generation_id": generation["generation_id"],
                                         "embedding_truncated": False,
-                                    }
-                                ],
+                                    },
+                                )
                             )
-                            item_count += 1
+                            if len(pending) == 16:
+                                flush_pending()
+                flush_pending()
 
             receipt = "embedding-session.json"
             atomic_write_json(generation_dir / receipt, session.summary())

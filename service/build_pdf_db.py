@@ -393,6 +393,7 @@ def _write_candidate(
     plan,
     embed_index_text,
     atomic_write_text,
+    embed_batch=None,
 ):
     generation_id = generation["generation_id"]
     generation_path = store.generation_path(generation)
@@ -413,25 +414,39 @@ def _write_candidate(
     sources = _source_lookup(plan)
     # Bound peak embedding materialization to the current write batch.
     for offset in range(0, len(plan.chunks), 100):
-        batch = [
-            (
-                chunk.chunk_id,
-                chunk.text,
-                _chunk_metadata(chunk, sources[chunk.file_id], generation_id),
-                embed_index_text(chunk.text),
+        batch = []
+        write_chunks = plan.chunks[offset:offset + 100]
+        for embed_offset in range(0, len(write_chunks), 16):
+            chunks = write_chunks[embed_offset:embed_offset + 16]
+            texts = [chunk.text for chunk in chunks]
+            embeddings = (embed_batch(texts) if embed_batch is not None
+                          else [embed_index_text(text) for text in texts])
+            if len(embeddings) != len(chunks):
+                raise PdfSourceError("embedding batch did not return every prepared chunk")
+            batch.extend(
+                (
+                    chunk.chunk_id,
+                    chunk.text,
+                    _chunk_metadata(chunk, sources[chunk.file_id], generation_id),
+                    embedding,
+                )
+                for chunk, embedding in zip(chunks, embeddings, strict=True)
             )
-            for chunk in plan.chunks[offset:offset + 100]
-        ]
         collection.add(
             ids=[item[0] for item in batch],
             documents=[item[1] for item in batch],
             metadatas=[item[2] for item in batch],
             embeddings=[item[3] for item in batch],
         )
-    expected_ids = {chunk.chunk_id for chunk in plan.chunks}
-    stored = collection.get(ids=sorted(expected_ids), include=[])
-    if collection.count() != len(plan.chunks) or set(stored["ids"]) != expected_ids:
+    expected_ids = sorted({chunk.chunk_id for chunk in plan.chunks})
+    if collection.count() != len(plan.chunks):
         raise PdfSourceError("candidate collection does not contain every prepared chunk")
+    # Chroma's SQLite metadata lookup binds each requested ID as a SQL variable.
+    for offset in range(0, len(expected_ids), 500):
+        requested = expected_ids[offset:offset + 500]
+        stored = collection.get(ids=requested, include=[])
+        if set(stored["ids"]) != set(requested):
+            raise PdfSourceError("candidate collection does not contain every prepared chunk")
 
 
 def _optional_env_path(name):
@@ -574,6 +589,7 @@ def main(argv=None):
                     plan=plan,
                     embed_index_text=session.embed,
                     atomic_write_text=atomic_write_text,
+                    embed_batch=session.embed_batch,
                 )
             atomic_write_json(
                 store.generation_path(generation) / "embedding-session.json", session.summary(),

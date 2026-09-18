@@ -96,6 +96,8 @@ research context.
 - Six stdio MCP tools: `search_notes`, `search_papers`, `get_note`, `index_status`, `prepare_answer`, and `check_answer`.
 - [Cited answer workflow](docs/ANSWER_WORKFLOW.md): prepare a deduplicated evidence packet within an 8000-character source budget, answer with your MCP client, then check source citations.
 - [Full-library validation and rollout plan](docs/FULL_LIBRARY_VALIDATION.md): inventory coverage, legacy-context repairs, measured limits, and the canonical migration acceptance gate.
+- [Local deployment and recovery](docs/LOCAL_DEPLOYMENT.md): reconcile sources, build a separate candidate, verify the actual client entrypoint, and retain a rollback target.
+- [Canonical library release](docs/CANONICAL_RELEASE.md): Modules 4–5 source coverage, build recovery, real-client acceptance and measured limitations.
 - Cross-platform guided setup, a synthetic demo that needs no Zotero library or LLM API key, health checks, and recovery commands.
 - A ready-to-use catalysis domain pack plus a template for creating new fields.
 

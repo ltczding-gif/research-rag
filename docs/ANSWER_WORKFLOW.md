@@ -33,6 +33,18 @@ the client reviews whether each scientific statement follows from that evidence.
    After checking, review semantic support yourself, then show the returned
    `answer` and use `claim_bindings` to expose source pages and quotations.
 
+Evidence IDs belong to one packet: `E1` in two packets can refer to different
+papers. Keep each final packet unchanged and check only claims supported by that
+packet. Do not carry a citation ID forward when preparing a replacement packet.
+
+When first-pass evidence is insufficient, discover the relevant paper with
+`search_notes` and `get_note`, then repeat preparation with the parent key
+returned by those tools. For a comparison, discover each named study separately
+and allocate the total source budget across its final packets (for example,
+4000 codepoints per paper for a two-paper, 8000-codepoint answer). Check each
+packet's claims independently. A focused follow-up preserves the original
+question; it must not guess a source key or import a value from memory.
+
 The equivalent HTTP endpoints are `POST /prepare_answer` with the search
 arguments, and `POST /check_answer` with `{"packet": ..., "answer": ...}`.
 Malformed requests return errors; failed citation checks return
