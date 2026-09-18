@@ -4,9 +4,9 @@ This document preserves the Module 3 baseline and its original rollout scope.
 Current Modules 4–5 source accounting and acceptance status are recorded in the
 [canonical release report](CANONICAL_RELEASE.md).
 
-Status: Module 3 implemented, 2026-09-17. **Operational retrieval passed; full-library
-cited-answer quality acceptance is not yet passed.** Modules 1–2 provide the
-canonical evidence/answer workflow, but the current production store is legacy.
+At Module 3 closeout on 2026-09-17, **operational retrieval passed; full-library
+cited-answer quality acceptance remained open.** Modules 1–2 provided the
+canonical evidence/answer workflow, while the production store was still legacy.
 
 ## Scope and reproducibility
 
@@ -119,7 +119,7 @@ Module 3 closes the inventory, operational validation and identified service
 repairs. It leaves full-library quality acceptance open as an explicit migration
 gate, rather than approving the current legacy library for reliable answers.
 
-## Next modules
+## Original scope of Modules 4–5
 
 ### Module 4 — candidate migration and product integration
 

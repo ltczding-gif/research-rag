@@ -95,6 +95,12 @@ Codex supports a project-scoped `.codex/config.toml` in trusted projects, with
 from measured full-library initialization, rather than assuming the default ten
 seconds is enough. [Official MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
 
+Set `required = true` for this project's Research-RAG server so the initial tool
+catalog waits for it. Increasing `startup_timeout_sec` alone is insufficient:
+optional servers have a separate default one-second initial-catalog grace. A
+real client run returned no tools while the accepted full library needed about
+ten seconds to initialize. Keep this setting scoped to the project server.
+
 Test the exact persisted client command in two fresh MCP sessions. Confirm the
 accepted generation IDs and repeat discovery, retrieval and citation checking.
 Existing server processes pin the generation they loaded, so reconnect the client
@@ -117,5 +123,12 @@ observed separately from an SDK transport smoke test.
 - Generation publication is atomic, but embedding builds do not yet resume a
   partially written generation automatically. Preserve diagnostic artifacts and
   any independently verified extraction cache before deciding to rebuild.
+- Large PDF collections verify final ID coverage in bounded queries. If an
+  older build failed only at that final check, complete stored vectors may be
+  recoverable through a separately audited new-generation copy. This requires
+  exact fresh source/page/text/metadata agreement and full stored-vector
+  readback. Preserve the failed seal; do not relabel it complete or invent a
+  missing embedding-session receipt. This is an operator recovery, not automatic
+  partial-build resume; see the [recorded release](CANONICAL_RELEASE.md).
 - Clean-install/launcher CI and real-data acceptance have different purposes.
   Both must pass before reporting a release as complete.
