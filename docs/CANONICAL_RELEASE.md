@@ -201,8 +201,8 @@ automatically.
   candidate tool discovery and answer workflow: observed and reviewed.
 - Release closeout requires green checks on the final PR head, merge, main
   synchronization and a further native client smoke using the persisted entry
-  on released code. PR #17 records the merge; the local release receipt records
-  the final main commit and observed MCP response.
+  on released code. Consult PR #17 for merge status; the local closeout receipt
+  must record the final main commit and observed MCP response after that check.
 
 The old snapshot has passed a real MCP readiness check: 150,244 PDF chunks and
 2,140 legacy note records. It remains a usable fallback with explicitly
