@@ -1,0 +1,1066 @@
+{
+  "schema_version": 1,
+  "plan_revision": 5,
+  "updated_at": "2026-09-17T01:52:00.481540+00:00",
+  "purpose": "Three-round consolidated plan: historical implementation retained; four new confirmed gaps await repair; Alpha only",
+  "baselines": {
+    "product": "874ed222532b43f09a004244b552cbf46399b6b9",
+    "evaluation": "0af3569025ec6eeba84814c8a1043891a82b8590"
+  },
+  "source_documents": [
+    "ROUND2_REVIEW.md",
+    "docs/reviews/2026-09-16-review-pack/research_rag_review_2026-09-16.md",
+    "docs/reviews/2026-09-16-assessment/ASSESSMENT.md",
+    "docs/reviews/2026-09-16-round2/ROUND2_ASSESSMENT.md",
+    "docs/reviews/2026-09-17-round3/ROUND3_REVIEW_2026-09-17.md",
+    "docs/reviews/2026-09-17-round3/ROUND3_ASSESSMENT.md"
+  ],
+  "supersedes_planning_only": [
+    "docs/reviews/2026-09-16-review-pack/IMPLEMENTATION_HANDOFF.md",
+    "docs/reviews/2026-09-16-review-pack/acceptance_plan.json",
+    "docs/reviews/2026-09-16-assessment/ASSESSMENT.md"
+  ],
+  "human_readable_plan": "docs/reviews/IMPROVEMENT_PLAN.md",
+  "issues": [
+    {
+      "id": "P01",
+      "title": "索引失败保留旧版本",
+      "scope": "product",
+      "priority": "P0",
+      "source": "round1:P0-1",
+      "work_package": "W2",
+      "diagnostic_evidence": "isolated_reproduction_round1",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "P02",
+      "title": "来源完整性与附件身份",
+      "scope": "product",
+      "priority": "P0",
+      "source": "round1:P0-2;round1:identity",
+      "work_package": "W2",
+      "diagnostic_evidence": "isolated_reproduction_round1",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "P03",
+      "title": "配置及模型空间指纹",
+      "scope": "product",
+      "priority": "P0",
+      "source": "round1:P0-3",
+      "work_package": "W2",
+      "diagnostic_evidence": "static_and_reproduction_round1",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "P04",
+      "title": "失败退出码与ready一致",
+      "scope": "product",
+      "priority": "P0",
+      "source": "local-round1:addendum",
+      "work_package": "W2",
+      "diagnostic_evidence": "static_and_reproduction_round1",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "P05",
+      "title": "IR到MCP的证据定位",
+      "scope": "product",
+      "priority": "P0",
+      "source": "round1:P0-4",
+      "work_package": "W3",
+      "diagnostic_evidence": "static_and_real_pdf_parameter_comparison_round1",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "P06",
+      "title": "服务评测合同与计时边界",
+      "scope": "product_and_evaluation",
+      "priority": "P1",
+      "source": "round1:P0-5;round2:06",
+      "work_package": "W4",
+      "diagnostic_evidence": "static_confirmed",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "P07",
+      "title": "笔记检索输入截断",
+      "scope": "product",
+      "priority": "P1",
+      "source": "round1:notes-P1;round2:08",
+      "work_package": "W5",
+      "diagnostic_evidence": "original_function_reproduction",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "P08",
+      "title": "组合过滤及MCP附件筛选",
+      "scope": "product",
+      "priority": "P1",
+      "source": "round2:07",
+      "work_package": "W3",
+      "diagnostic_evidence": "original_function_reproduction",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "P09",
+      "title": "笔记改名撤回后索引收敛",
+      "scope": "product",
+      "priority": "P1",
+      "source": "round2:09",
+      "work_package": "W2",
+      "diagnostic_evidence": "planner_reproduction_and_static_builder",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "P10",
+      "title": "HTTP日志丢更新",
+      "scope": "http_compatibility",
+      "priority": "P2",
+      "source": "round2:10",
+      "work_package": "W7",
+      "diagnostic_evidence": "controlled_interleaving",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "E01",
+      "title": "弱提示不能直接成为gold",
+      "scope": "evaluation",
+      "priority": "P0",
+      "source": "round2:01",
+      "work_package": "W1",
+      "diagnostic_evidence": "original_function_and_hash_bound_historical_artifact",
+      "fix_status": "implemented_validated",
+      "limitation": "Alignment/coverage implementation validated; agent adjudication is not human scientific annotation."
+    },
+    {
+      "id": "E02",
+      "title": "完整证据覆盖评分",
+      "scope": "evaluation",
+      "priority": "P0",
+      "source": "round2:02",
+      "work_package": "W1",
+      "diagnostic_evidence": "original_function_reproduction",
+      "fix_status": "implemented_validated",
+      "limitation": "Alignment/coverage implementation validated; agent adjudication is not human scientific annotation."
+    },
+    {
+      "id": "E03",
+      "title": "笔记来源覆盖与固定anchor解释",
+      "scope": "evaluation",
+      "priority": "P1",
+      "source": "round2:03",
+      "work_package": "W4",
+      "diagnostic_evidence": "config_code_and_historical_artifacts",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "E04",
+      "title": "完成态缓存自动绑定实现",
+      "scope": "evaluation",
+      "priority": "P0",
+      "source": "round2:04",
+      "work_package": "W1",
+      "diagnostic_evidence": "fingerprint_reproduction_and_static_loader",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "E05",
+      "title": "零命中BM25不参与融合",
+      "scope": "evaluation",
+      "priority": "P1",
+      "source": "round2:05",
+      "work_package": "W4",
+      "diagnostic_evidence": "original_function_reproduction",
+      "fix_status": "implemented_validated"
+    },
+    {
+      "id": "R3-01",
+      "title": "提交后异常改写 active manifest",
+      "scope": "product",
+      "priority": "P1",
+      "source": "round3:R3-01",
+      "work_package": "R3-A",
+      "diagnostic_evidence": "current_full_function_offline_reproduction",
+      "evidence": [
+        ".codex/round3-review-20260917/generation-checks/results.json"
+      ],
+      "fix_status": "confirmed_unfixed",
+      "related_historical_issues": [
+        "P01",
+        "P04"
+      ]
+    },
+    {
+      "id": "R3-02",
+      "title": "笔记同输入损坏修复及集合身份漏检",
+      "scope": "product",
+      "priority": "P1",
+      "source": "round3:R3-02",
+      "work_package": "R3-A",
+      "diagnostic_evidence": "current_full_function_offline_reproduction",
+      "evidence": [
+        ".codex/round3-review-20260917/generation-checks/results.json"
+      ],
+      "fix_status": "confirmed_unfixed",
+      "related_historical_issues": [
+        "P01",
+        "P09"
+      ]
+    },
+    {
+      "id": "R3-03",
+      "title": "构建期间同维度模型身份可漂移",
+      "scope": "product",
+      "priority": "P1",
+      "source": "round3:R3-03",
+      "work_package": "R3-A",
+      "diagnostic_evidence": "notes_full_function_offline_reproduction_pdf_static",
+      "evidence": [
+        ".codex/round3-review-20260917/model-identity-results.json"
+      ],
+      "fix_status": "confirmed_unfixed",
+      "related_historical_issues": [
+        "P03"
+      ]
+    },
+    {
+      "id": "R3-04",
+      "title": "sidecar 缺问题及参考版本绑定",
+      "scope": "evaluation",
+      "priority": "P1",
+      "source": "round3:R3-04",
+      "work_package": "R3-B",
+      "diagnostic_evidence": "current_research_mapper_offline_reproduction",
+      "evidence": [
+        ".codex/round3-review-20260917/sidecar-checks/controlled-results.json"
+      ],
+      "fix_status": "confirmed_unfixed",
+      "related_historical_issues": [
+        "E01",
+        "E04"
+      ]
+    }
+  ],
+  "work_packages": [
+    {
+      "id": "W0",
+      "title": "冻结实施基线与协议版本",
+      "depends_on": [],
+      "status": "implemented_validated"
+    },
+    {
+      "id": "W1",
+      "title": "gold、严格覆盖和缓存指纹",
+      "depends_on": [
+        "W0"
+      ],
+      "status": "implemented_validated"
+    },
+    {
+      "id": "W2",
+      "title": "可靠generation与来源生命周期",
+      "depends_on": [
+        "W0"
+      ],
+      "status": "implemented_validated"
+    },
+    {
+      "id": "W3",
+      "title": "证据引用与查询范围",
+      "depends_on": [
+        "W2"
+      ],
+      "status": "implemented_validated"
+    },
+    {
+      "id": "W4",
+      "title": "最小策略比较与分阶段计时",
+      "depends_on": [
+        "W1"
+      ],
+      "status": "implemented_validated",
+      "serving_parity_depends_on": [
+        "W3"
+      ]
+    },
+    {
+      "id": "W5",
+      "title": "笔记按节检索表示",
+      "depends_on": [
+        "W2",
+        "W3"
+      ],
+      "status": "implemented_validated"
+    },
+    {
+      "id": "W6",
+      "title": "候选发布验收",
+      "depends_on": [
+        "W2",
+        "W3"
+      ],
+      "status": "executed_release_gate_failed",
+      "conditional_dependencies": {
+        "change_default_retrieval_strategy": [
+          "W4"
+        ],
+        "claim_note_section_retrieval": [
+          "W5"
+        ],
+        "claim_concurrent_http_logging": [
+          "W7"
+        ]
+      }
+    },
+    {
+      "id": "W7",
+      "title": "可选HTTP日志一致性",
+      "depends_on": [
+        "W0"
+      ],
+      "status": "implemented_validated"
+    }
+  ],
+  "acceptance_cases": [
+    {
+      "id": "EVID-MAP-01",
+      "issue_ids": [
+        "E01"
+      ],
+      "criterion": "无关页码或章节提示不进入已验证gold",
+      "result": "passed",
+      "actual": "页码和章节弱提示不能直接成为 exact/adjudicated gold；负例测试通过。",
+      "evidence": [
+        ".codex/execution-20260917/strict-independent-review.md",
+        ".codex/execution-20260917/gold-audit/strict-sidecar.reviewed-v4.json"
+      ]
+    },
+    {
+      "id": "EVID-MAP-02",
+      "issue_ids": [
+        "E01"
+      ],
+      "criterion": "真实版次差异有裁定记录；数值、否定、条件冲突不能由模糊分数放行",
+      "result": "passed",
+      "actual": "数值、运算符、否定及条件校验通过；451 个 alternative 精确对齐、84 个代理裁定、1 个弱提示保留。尚无人类科学审阅。",
+      "evidence": [
+        ".codex/execution-20260917/gold-audit/strict-sidecar.reviewed-v4.json"
+      ]
+    },
+    {
+      "id": "EVID-COVER-01",
+      "issue_ids": [
+        "E02"
+      ],
+      "criterion": "1/100字符交集不能得到完整证据满分",
+      "result": "passed",
+      "actual": "仅有部分字符交集不能获得严格完整证据分。",
+      "evidence": [
+        ".codex/execution-20260917/strict-contract-tests.txt"
+      ]
+    },
+    {
+      "id": "EVID-COVER-02",
+      "issue_ids": [
+        "E02"
+      ],
+      "criterion": "跨块区间并集、组内OR和组间AND正确，重叠不重复计数",
+      "result": "passed",
+      "actual": "跨块区间并集、重叠去重、必需 spans/组的 AND 及 alternatives 的 OR 已验证。",
+      "evidence": [
+        ".codex/execution-20260917/strict-contract-tests.txt"
+      ]
+    },
+    {
+      "id": "EVID-COVER-03",
+      "issue_ids": [
+        "E02"
+      ],
+      "criterion": "Top-K与固定上下文预算均记录，候选使用同一冻结gold集合",
+      "result": "passed",
+      "actual": "三条路线共用冻结的 254 题、239 道有 reference 题和 380 个必需组，同时记录 Top-K 与 8000 Unicode 字符整块前缀预算。",
+      "evidence": [
+        ".codex/execution-20260917/minimal-comparison-v1/summary.json",
+        ".codex/execution-20260917/minimal-note-retry-v2/summary.json"
+      ]
+    },
+    {
+      "id": "EVAL-GUARD-01",
+      "issue_ids": [
+        "E01",
+        "E02"
+      ],
+      "criterion": "保留不同evaluable_set阻断和无reference为null，公开分母与未裁定量",
+      "result": "passed",
+      "actual": "不同可评价集合仍阻断比较；无 reference 的指标为 null；完整预期分母和共同已验证条件分母均保留。",
+      "evidence": [
+        ".codex/execution-20260917/historical-strict-reviewed-v4.json"
+      ]
+    },
+    {
+      "id": "CACHE-01",
+      "issue_ids": [
+        "E04"
+      ],
+      "criterion": "相关源码改变使完成态缓存失效，缺少新指纹的旧结果不得静默接受",
+      "result": "passed",
+      "actual": "相关源码、依赖和模型实现指纹可使旧完成态结果失效，缺少新版指纹不静默复用。",
+      "evidence": [
+        ".codex/execution-20260917/cache-independent-review.md"
+      ]
+    },
+    {
+      "id": "CACHE-02",
+      "issue_ids": [
+        "E04"
+      ],
+      "criterion": "只改评分复用经版本核验的检索轨迹；模型/模板改变只失效受影响缓存层",
+      "result": "passed",
+      "actual": "分层缓存测试验证：仅改评分可保留经验证的检索和向量；修改层只失效对应产物。",
+      "evidence": [
+        ".codex/execution-20260917/cache-independent-review.md"
+      ]
+    },
+    {
+      "id": "INGEST-01",
+      "issue_ids": [
+        "P01"
+      ],
+      "criterion": "embedding/add失败与切换前中断保留旧active可查",
+      "result": "passed",
+      "actual": "候选失败保留旧 active；真实缺失 SI 失败及注入 embedding/add/中断回归均通过。",
+      "evidence": [
+        ".codex/execution-20260917/pdf-lifecycle-real-validation/validation-results.json",
+        ".codex/execution-20260917/product-full-pytest-tokenizers0232.txt"
+      ]
+    },
+    {
+      "id": "INGEST-02",
+      "issue_ids": [
+        "P01",
+        "P03"
+      ],
+      "criterion": "candidate使用自身ledger，发布核验与上一代回滚可用",
+      "result": "passed",
+      "actual": "完整不可变快照、版本清单、产物哈希、回滚和显式受限清理均通过验证。",
+      "evidence": [
+        ".codex/execution-20260917/maintenance-real-validation/validation-results.json"
+      ]
+    },
+    {
+      "id": "SOURCE-01",
+      "issue_ids": [
+        "P02"
+      ],
+      "criterion": "MAIN成功但SI空白或缺失明确未完成，可恢复重试",
+      "result": "passed",
+      "actual": "缺失、空或错误来源不得发布；真实缺失 SI 返回非零且保留 active。",
+      "evidence": [
+        ".codex/execution-20260917/pdf-lifecycle-real-validation/validation-results.json"
+      ]
+    },
+    {
+      "id": "SOURCE-02",
+      "issue_ids": [
+        "P02"
+      ],
+      "criterion": "主文缺失及同名附件不导致角色或parent漂移",
+      "result": "passed",
+      "actual": "精确 parent/attachment 身份、稀疏声明序号和 MAIN/SI 角色保留；同名歧义及角色回归通过。",
+      "evidence": [
+        ".codex/execution-20260917/pdf-independent-review.md"
+      ]
+    },
+    {
+      "id": "VERSION-01",
+      "issue_ids": [
+        "P03"
+      ],
+      "criterion": "抽取/切块/同维度模型替换检测失配且查询阻断",
+      "result": "passed",
+      "actual": "来源、抽取、切块、模型、revision、维度进入合同；同维度换模型仍阻断查询。",
+      "evidence": [
+        ".codex/execution-20260917/product-full-pytest-tokenizers0232.txt"
+      ]
+    },
+    {
+      "id": "STATUS-01",
+      "issue_ids": [
+        "P04"
+      ],
+      "criterion": "部分失败退出码、统一构建入口、index_status一致，不误报ready",
+      "result": "passed",
+      "actual": "失败返回非零，active 可用性与 latest_attempt 分离；支持 notes-only。",
+      "evidence": [
+        ".codex/execution-20260917/product-full-pytest-tokenizers0232.txt"
+      ]
+    },
+    {
+      "id": "LIFECYCLE-01",
+      "issue_ids": [
+        "P09"
+      ],
+      "criterion": "改名不产生重复active内容，确认撤回后不可检索",
+      "result": "passed",
+      "actual": "真实笔记改名/撤回和真实 PDF SI 显式撤回/回滚通过，不产生重复 active 实体。",
+      "evidence": [
+        ".codex/execution-20260917/notes-real-validation/validation-results.json",
+        ".codex/execution-20260917/pdf-lifecycle-real-validation/validation-results.json"
+      ]
+    },
+    {
+      "id": "LIFECYCLE-02",
+      "issue_ids": [
+        "P09"
+      ],
+      "criterion": "扫描失败、根目录不可用或意外空快照不自动清空active",
+      "result": "passed",
+      "actual": "目录失联、空扫描、未授权撤回均不清空 active；全量扫描和 allow-removals 门通过回归。",
+      "evidence": [
+        ".codex/execution-20260917/product-full-pytest-tokenizers0232.txt"
+      ]
+    },
+    {
+      "id": "INSTALL-MODES-01",
+      "issue_ids": [
+        "P01",
+        "P03"
+      ],
+      "criterion": "notes-only及既有调用保持支持",
+      "result": "passed",
+      "actual": "notes-only 回归及全新隔离索引的默认 FastEmbed/Chroma demo 8/8 通过；本机使用 direct-server，未测试 launcher 重新选择解释器。",
+      "evidence": [
+        ".codex/execution-20260917/fresh-install-validation/validation-report.md"
+      ]
+    },
+    {
+      "id": "CITATION-01",
+      "issue_ids": [
+        "P05"
+      ],
+      "criterion": "真实MAIN/SI quote可按物理页和半开span回读并核对hash",
+      "result": "passed",
+      "actual": "真实 30 次 MCP 请求返回来源绑定的物理页、hash 和半开 span 引用；最终 550 chunks、225 页。",
+      "evidence": [
+        ".codex/execution-20260917/acceptance/serving-v1/mcp-results-final/summary.json"
+      ]
+    },
+    {
+      "id": "CITATION-02",
+      "issue_ids": [
+        "P05"
+      ],
+      "criterion": "跨页、同名附件、内容版本变化和邻接上下文正确",
+      "result": "passed",
+      "actual": "跨页派生分隔符、同名附件、版本不符和真实邻接引用通过验证。",
+      "evidence": [
+        ".codex/execution-20260917/query-independent-review.md",
+        ".codex/execution-20260917/pdf-independent-review.md"
+      ]
+    },
+    {
+      "id": "FILTER-01",
+      "issue_ids": [
+        "P08"
+      ],
+      "criterion": "parent与附件条件AND传到数据库；冲突明确报错",
+      "result": "passed",
+      "actual": "组合 AND 过滤经真实 Chroma 验证；已知附件与 parent/角色/文件名冲突返回 400，未知附件返回空结果。",
+      "evidence": [
+        ".codex/execution-20260917/product-full-pytest-tokenizers0232.txt"
+      ]
+    },
+    {
+      "id": "FILTER-02",
+      "issue_ids": [
+        "P08"
+      ],
+      "criterion": "MCP支持可选附件类型筛选且旧调用兼容",
+      "result": "passed",
+      "actual": "MCP 可选附件/角色过滤正确转发，旧调用兼容，真实 SI 定向查询通过。",
+      "evidence": [
+        ".codex/execution-20260917/acceptance/serving-v1/mcp-results-final/summary.json"
+      ]
+    },
+    {
+      "id": "RRF-01",
+      "issue_ids": [
+        "E05"
+      ],
+      "criterion": "零词项命中不投票，空稀疏支路保持dense结果",
+      "result": "passed",
+      "actual": "BM25 分数小于等于零不参与投票，稀疏支路为空时保持 dense 顺序。",
+      "evidence": [
+        ".codex/execution-20260917/strict-contract-tests.txt"
+      ]
+    },
+    {
+      "id": "RRF-02",
+      "issue_ids": [
+        "E05"
+      ],
+      "criterion": "不足K正命中与ID改名不会引入零信息候选投票",
+      "result": "passed",
+      "actual": "少于 K 的稀疏命中及无关 ID 改名回归通过，不引入零信息候选。",
+      "evidence": [
+        ".codex/execution-20260917/strict-contract-tests.txt"
+      ]
+    },
+    {
+      "id": "NOTE-ROUTE-01",
+      "issue_ids": [
+        "E03"
+      ],
+      "criterion": "每篇非空note/backlink覆盖可查，空路由按冻结规则回退",
+      "result": "passed",
+      "actual": "事先选择的 section 笔记路线 20/20 合格，条目与 backlink 覆盖已记录；首轮 HTTP 400 和原配置重试结果同时保留。",
+      "evidence": [
+        ".codex/execution-20260917/minimal-comparison-v1/inputs.json",
+        ".codex/execution-20260917/minimal-comparison-v1/summary.json",
+        ".codex/execution-20260917/minimal-note-retry-v2/summary.json"
+      ]
+    },
+    {
+      "id": "PARITY-PERF-01",
+      "issue_ids": [
+        "P06"
+      ],
+      "criterion": "相同内核/索引/配置下core与MCP的ID顺序范围引用一致",
+      "result": "passed",
+      "actual": "最终 generation 的 core/MCP 30/30 请求中，ID 顺序、过滤、范围、内容、metadata 和 evidence 完全一致，距离差最大为 0。",
+      "evidence": [
+        ".codex/execution-20260917/acceptance/serving-v1/parity-final/core-parity.json"
+      ]
+    },
+    {
+      "id": "PARITY-PERF-02",
+      "issue_ids": [
+        "P06"
+      ],
+      "criterion": "embedding/retrieval/rerank/serialization/total与冷热状态分别记录",
+      "result": "passed",
+      "actual": "五个服务计时阶段、客户端总耗时、进程初始化、模型冷启动及温查询分别记录；不声称磁盘冷启动或 SLA。",
+      "evidence": [
+        ".codex/execution-20260917/acceptance/serving-v1/parity-perf/validation-results.json"
+      ]
+    },
+    {
+      "id": "NOTE-TAIL-01",
+      "issue_ids": [
+        "P07"
+      ],
+      "criterion": "尾部独有条件和否定结论进入检索表示，全文读取不变",
+      "result": "passed",
+      "actual": "真实 8610 字符中英混合长笔记形成 17 节，尾部条件可检索且全文字节一致；实际 128-token 窗口覆盖另行验证。",
+      "evidence": [
+        ".codex/execution-20260917/notes-real-validation/validation-results.json"
+      ]
+    },
+    {
+      "id": "LOG-01",
+      "issue_ids": [
+        "P10"
+      ],
+      "criterion": "不同session、同幂等键、追加动作和中途崩溃恢复通过",
+      "result": "passed",
+      "actual": "9 项并发、碰撞及恢复回归通过；合同限定单进程写入，不承诺跨进程事务。",
+      "evidence": [
+        ".codex/execution-20260917/product-full-pytest-tokenizers0232.txt"
+      ]
+    },
+    {
+      "id": "RELEASE-01",
+      "issue_ids": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P08",
+        "P09"
+      ],
+      "criterion": "新安装、相关回归、真实PDF到MCP及冻结30题验收通过才考虑Beta",
+      "result": "failed",
+      "actual": "功能和跨平台 CI 通过；最终 v4 固定客户端仅 11/22 可回答题、3/8 无答案题通过，11 题有答案级引用错误，且 human_reviewed=false。保持 Alpha。v3 单独保留，不跨轮择优。",
+      "evidence": [
+        ".codex/execution-20260917/acceptance/serving-v1/answer-independent-review-v4.md",
+        ".codex/execution-20260917/product-release-gate-review.md"
+      ]
+    }
+  ],
+  "historical_rr1_audit": {
+    "payload_sha256": "24081b092dd40d2a191529e55e2e6ac110dd3378ef857abfce9adb0f3408da29",
+    "bound_to_committed_manifest": true,
+    "alternatives_total": 536,
+    "hint_alternatives": 25,
+    "hint_alternatives_below_0_86": 22,
+    "questions_with_below_threshold_hints": 18,
+    "minimum_hint_score": 0.3087885985748218,
+    "strict_rescoring_completed": true,
+    "scientific_error_count": null,
+    "new_winner": false,
+    "strict_rescoring_evidence": ".codex/execution-20260917/historical-strict-reviewed-v4.json",
+    "strict_protocol": "researchqa-strict-evidence-v1",
+    "note": "严格重评已完成，不宣称新赢家；人工科学审阅尚未完成。"
+  },
+  "pilot_protocol": {
+    "total_questions": 30,
+    "answerable": 22,
+    "unanswerable": 8,
+    "papers_range": [
+      6,
+      10
+    ],
+    "minimum_si_groups": 3,
+    "primary_types": {
+      "lookup": 10,
+      "cross_paper": 6,
+      "si_specific": 6,
+      "unanswerable": 8
+    },
+    "proposed_gate": {
+      "fully_supported_answerable": 20,
+      "no_fabrication_unanswerable": 8,
+      "all_citations_correct": true
+    },
+    "global_query_gold_paper_filter_allowed": false,
+    "answer_refusal_is_fixed_client_workflow": true
+  },
+  "status": {
+    "review_consolidated": true,
+    "product_code_changed": true,
+    "evaluation_code_changed": true,
+    "fixes_implemented": true,
+    "acceptance_executed": true,
+    "full_suite_rerun": true,
+    "models_or_sweep_rerun": true,
+    "git_branch_merged": true,
+    "beta_released": false
+  },
+  "execution": {
+    "status": "completed_with_unmet_release_gate",
+    "report": "docs/reviews/2026-09-17-execution/EXECUTION_REPORT.md",
+    "product_merge_commit": "8de824d6758d91c45a5e750194abc127e8d85961",
+    "research_protocol_merge_commit": "98ce5c47c66894cd0b922699c32334406812286a",
+    "product_pr": 6,
+    "protocol_pr": 5,
+    "old_pr4_merged": false,
+    "production_active_switched": false,
+    "paid_api_calls": 0,
+    "gemini_calls": 0,
+    "human_scientific_review": false,
+    "current_release_level": "Alpha",
+    "research_performance_iteration": "merged",
+    "completed_at": "2026-09-16T18:54:52.529692+00:00",
+    "research_performance_pr": 7,
+    "research_performance_merge_commit": "0262686c4536b0f77ef6284bdbf8c92166fea9bb",
+    "final_checkout": "main",
+    "final_checkout_commit": "8de824d6758d91c45a5e750194abc127e8d85961"
+  },
+  "open_followups": [
+    {
+      "id": "FOLLOWUP-01",
+      "status": "unmet_release_gate",
+      "title": "固定客户端的答案支持、拒答和引用质量",
+      "evidence": ".codex/execution-20260917/acceptance/serving-v1/answer-adjudication-v4.json",
+      "next_step": "先完成R3-A/B；五项人工复核可独立进行。旧30题仅开发回归；oracle诊断不算检索成绩，正式结论用另行冻结holdout。"
+    },
+    {
+      "id": "FOLLOWUP-02",
+      "status": "quality_gap_confirmed",
+      "title": "跨论文证据覆盖",
+      "actual": "2/6 full gold coverage in frozenW6; total16/22.",
+      "next_step": "已确认六个gold缺失均在Top10候选/选段层，非此次入库丢失/预算裁切。R3-A/B后再按新全库协议实验，保持dense默认。"
+    },
+    {
+      "id": "FOLLOWUP-03",
+      "status": "runtime_variation_reproduced",
+      "title": "同源重建的本地 embedding 漂移",
+      "actual": "Same loaded model and identical requests produced different vectors in controlled samples; historical gold coverage unchanged.",
+      "evidence": ".codex/followup-20260917-1h/vector-drift/controlled-analysis.json",
+      "next_step": "后续策略实验固定同一份文档与query向量缓存；本轮不继续追查底层kernel、不改产品阈值。"
+    },
+    {
+      "id": "FOLLOWUP-04",
+      "status": "human_review_pending",
+      "title": "gold 科学充分性与严格完整性标准",
+      "actual": "L04 -0.6 V has source support; incorrect-value attribution withdrawn, actual E6 citation gap remains. Five rubric/alternative-support questions await human review.",
+      "next_step": "先集中裁定必答范围与替代证据，若改标准另开版本并同协议重评；不改写历史分数。",
+      "evidence": ".codex/followup-20260917-1h/failure-audit/HUMAN_REVIEW.md"
+    }
+  ],
+  "validation_runs": {
+    "product": {
+      "full_suite": "passed",
+      "tests_passed": 344,
+      "ci_jobs_passed": 9,
+      "ci_run_id": 35133570181
+    },
+    "research_protocol": {
+      "ci_jobs_passed": 9,
+      "ci_run_id": 35125173446
+    },
+    "research_performance": {
+      "full_suite": "passed",
+      "focused_tests_passed": 59,
+      "independent_cache_tests_passed": 4,
+      "ci_run_id": 35135807902,
+      "ci": "passed",
+      "pr": 7,
+      "tests_passed": 551,
+      "full_suite_seconds": 619.44,
+      "ci_jobs_passed": 9,
+      "independent_review": "passed",
+      "head_commit": "47ce1a2ffb7a00617e0d2d6b57dc8cbeb92d43e8"
+    },
+    "model_scope": "本地固定 embedding 和回答模型运行，三策略最小对照；未重跑完整历史 sweep。",
+    "full_historical_sweep_rerun": false,
+    "paid_remote_models_run": false
+  },
+  "evidence_policy": {
+    "scope": "用户已明确授权发布 revision 5 计划、第三轮原评审及核验报告；原始运行工件和研究数据继续保留本地。",
+    "local_prefix": ".codex/",
+    "visibility": "review_documents_public_raw_evidence_local_private",
+    "description": "Evidence/source paths outside the published document set are local provenance references, not downloadable repository artifacts. Historical scientific measurements cannot be independently reproduced from these documents alone."
+  },
+  "followup_1h": {
+    "status": "completed_early_at_user_request",
+    "started_at": "2026-09-17T00:10:52Z",
+    "finished_at": "2026-09-17T00:34:04.959409+00:00",
+    "report": "docs/reviews/2026-09-17-followup/FOLLOWUP_REPORT.md",
+    "pr": 8,
+    "pr_state": "MERGED",
+    "main_commit": "6865af20471b5c1ae7a1821f35a464d807134b9c",
+    "local_tests_passed": 346,
+    "local_tests_seconds": 14.69,
+    "ci_run_id": 35166269522,
+    "ci_jobs_passed": 12,
+    "install_smoke_platforms": 3,
+    "independent_code_review": "passed",
+    "source_attribution": "completed_with_human_pending_items",
+    "vector_drift": "controlled_reproduction_completed_internal_cause_not_isolated",
+    "additional_strategy_pilot": "cancelled_before_execution",
+    "paid_api_calls": 0,
+    "gemini_calls": 0,
+    "production_active_switched": false,
+    "old_scores_modified": false
+  },
+  "current_verified_baselines": {
+    "product": "6865af20471b5c1ae7a1821f35a464d807134b9c",
+    "evaluation": "0262686c4536b0f77ef6284bdbf8c92166fea9bb"
+  },
+  "historical_status_scope": "Existing status/execution/validation_runs and first 15 issues/29 acceptance cases describe previously executed work, not completion of the new Round3 requirements.",
+  "round3_acceptance_cases": [
+    {
+      "id": "R3-COMMIT-01",
+      "issue_ids": [
+        "R3-01"
+      ],
+      "criterion": "manifest/active替换前后、返回前、成功输出异常：提交前旧active可读，提交后新active完整且manifest不可被fail改写",
+      "result": "not_run",
+      "note": "修复后的验收尚未执行；缺陷复现不等于修复通过。"
+    },
+    {
+      "id": "R3-RECOVERY-01",
+      "issue_ids": [
+        "R3-01",
+        "R3-02"
+      ],
+      "criterion": "损坏active有显式受控恢复入口，核验目标manifest/hash/artifacts/collection；不依赖先读取坏active，不静默选择任意generation",
+      "result": "not_run",
+      "note": "修复后的验收尚未执行；缺陷复现不等于修复通过。"
+    },
+    {
+      "id": "R3-REUSE-01",
+      "issue_ids": [
+        "R3-02"
+      ],
+      "criterion": "同源集合缺失、少记录、同count错generation身份、缺工件均可构建新candidate；不先删旧集合，失败保留可用active",
+      "result": "not_run",
+      "note": "修复后的验收尚未执行；缺陷复现不等于修复通过。"
+    },
+    {
+      "id": "R3-REBUILD-01",
+      "issue_ids": [
+        "R3-02"
+      ],
+      "criterion": "正常同输入复用；notes显式rebuild生成新generation；与PDF语义一致，命名空间隔离，原始来源不改写",
+      "result": "not_run",
+      "note": "修复后的验收尚未执行；缺陷复现不等于修复通过。"
+    },
+    {
+      "id": "R3-MODEL-01",
+      "issue_ids": [
+        "R3-03"
+      ],
+      "criterion": "稳定身份可发布；同维度A→B与A→B→A不能发布混合空间；覆盖notes/PDF，实际请求目标与预期合同绑定",
+      "result": "not_run",
+      "note": "修复后的验收尚未执行；缺陷复现不等于修复通过。"
+    },
+    {
+      "id": "R3-MODEL-02",
+      "issue_ids": [
+        "R3-03"
+      ],
+      "criterion": "区分不可变身份、轮询竞态、operator_declared和同身份数值非确定性；不得以仅最终检查宣称消除ABA",
+      "result": "not_run",
+      "note": "修复后的验收尚未执行；缺陷复现不等于修复通过。"
+    },
+    {
+      "id": "R3-SIDECAR-01",
+      "issue_ids": [
+        "R3-04"
+      ],
+      "criterion": "同row_id改问题、参考数值/否定、交换alternative、换paper或dataset版本均拒绝旧裁定；同冻结输入可复用",
+      "result": "not_run",
+      "note": "修复后的验收尚未执行；缺陷复现不等于修复通过。"
+    },
+    {
+      "id": "R3-SIDECAR-02",
+      "issue_ids": [
+        "R3-04"
+      ],
+      "criterion": "旧v1不自动补当前hash转可信；重新核对生成v2并保留provenance；原文quote与参考允许合法非字面对应",
+      "result": "not_run",
+      "note": "修复后的验收尚未执行；缺陷复现不等于修复通过。"
+    },
+    {
+      "id": "R3-SIDECAR-03",
+      "issue_ids": [
+        "R3-04"
+      ],
+      "criterion": "新旧协议不得混比；弱映射仍不计主分母；修改实现/题目/裁定后完成缓存失效，合法未变向量可复用",
+      "result": "not_run",
+      "note": "修复后的验收尚未执行；缺陷复现不等于修复通过。"
+    }
+  ],
+  "current_status": {
+    "review_consolidated": true,
+    "review_round": 3,
+    "new_issues_confirmed": 4,
+    "new_issues_fixed": 0,
+    "all_known_fixes_complete": false,
+    "this_turn_scope": "review_verification_and_local_plan_update_only",
+    "product_code_changed_this_turn": false,
+    "evaluation_code_changed_this_turn": false,
+    "new_model_calls": 0,
+    "beta_released": false,
+    "release_level": "Alpha"
+  },
+  "current_next_iterations": [
+    {
+      "id": "R3-A",
+      "target": "main",
+      "issues": [
+        "R3-01",
+        "R3-02",
+        "R3-03"
+      ],
+      "status": "planned_not_started",
+      "depends_on": [],
+      "scope": "索引提交点、可审计恢复、同输入修复、构建身份；不引入检索算法/热切换框架"
+    },
+    {
+      "id": "R3-B",
+      "target": "research",
+      "issues": [
+        "R3-04"
+      ],
+      "status": "planned_not_started",
+      "depends_on": [
+        "R3-A"
+      ],
+      "scope": "sidecar v2目标身份、旧裁定重核对、新版本缓存/分母；不整体合并PR4"
+    },
+    {
+      "id": "R3-HUMAN",
+      "target": "scientific_review",
+      "status": "human_review_pending",
+      "depends_on": [],
+      "scope": "L04/L03/L10/C05/C06五项范围及替代证据裁定，可独立推进；历史分数不改写"
+    },
+    {
+      "id": "R3-C",
+      "target": "service_evaluation",
+      "status": "planned_not_started",
+      "depends_on": [
+        "R3-A",
+        "R3-B"
+      ],
+      "scientific_conclusion_gate": "R3-HUMAN",
+      "scope": "先复用已有parity/评分工件，仅补必要evidence适配；oracle诊断与独立holdout分开，冻结同一向量缓存"
+    },
+    {
+      "id": "R3-D",
+      "target": "answer_workflow",
+      "status": "conditional_not_started",
+      "depends_on": [
+        "R3-C",
+        "R3-HUMAN"
+      ],
+      "scope": "一次一个回答/引用改动，证据不足展示缺口；质量门通过后才扩大演示声明"
+    }
+  ],
+  "round3_review": {
+    "status": "verified_plan_updated_no_implementation",
+    "assessment": "docs/reviews/2026-09-17-round3/ROUND3_ASSESSMENT.md",
+    "source_manifest": "docs/reviews/2026-09-17-round3/SOURCE_MANIFEST.json",
+    "baseline_plan_revision": 4,
+    "reviewer_raw_checks_supplied": false,
+    "reviewer_claimed_checks_not_represented_as_our_checks": true,
+    "new_repair_acceptance_executed": false,
+    "production_active_switched": false,
+    "old_scores_modified": false,
+    "implementation_authorization": "No new execution window inferred from attached review; current request is plan update."
+  },
+  "review_status_corrections": [
+    {
+      "topic": "three_route_comparison",
+      "actual": "completed_in_private_artifacts; note original-config retry completed after preserved HTTP400; fixed paper-scoped result, not serving/global performance",
+      "coverage_ndcg_at_10": {
+        "dense": 0.7646168354215896,
+        "hybrid": 0.7730787082283818,
+        "section_note_assisted": 0.3549379177148486
+      },
+      "evidence": [
+        ".codex/execution-20260917/minimal-comparison-v1/summary.json",
+        ".codex/execution-20260917/minimal-note-retry-v2/summary.json"
+      ]
+    },
+    {
+      "topic": "global_pilot",
+      "actual": "cancelled_before_execution; no new model/retrieval results",
+      "evidence": ".codex/followup-20260917-1h/global-retrieval-pilot/cancelled-before-execution.json"
+    },
+    {
+      "topic": "answer_v4",
+      "actual": "old frozen agent criteria, not fully human-scientifically-adjudicated accuracy",
+      "answerable_pass": "11/22",
+      "refusal_judgment_correct": "7/8",
+      "unanswerable_all_requirements_pass": "3/8",
+      "L04": "wrong_value_attribution_withdrawn; E6 citation gap and rubric scope pending",
+      "evidence": "docs/reviews/2026-09-17-followup/FOLLOWUP_REPORT.md"
+    },
+    {
+      "topic": "embedding_variation",
+      "actual": "same-identity identical-request variation reproduced locally; exact internal cause not isolated; separate from R3-03 identity drift",
+      "evidence": ".codex/followup-20260917-1h/vector-drift/controlled-analysis.json"
+    }
+  ],
+  "publication": {
+    "status": "authorized_document_publication",
+    "scope": [
+      "docs/reviews/IMPROVEMENT_PLAN.md",
+      "docs/reviews/improvement-plan.json",
+      "docs/reviews/2026-09-17-round3/ROUND3_ASSESSMENT.md",
+      "docs/reviews/2026-09-17-round3/ROUND3_REVIEW_2026-09-17.md",
+      "docs/reviews/2026-09-17-round3/SOURCE_MANIFEST.json",
+      "docs/reviews/README.md"
+    ],
+    "authorization": "User explicitly requested pushing these review and plan materials.",
+    "raw_run_artifacts_uploaded": false,
+    "historical_review_archives_uploaded": false,
+    "new_fixes_implemented": false
+  }
+}
