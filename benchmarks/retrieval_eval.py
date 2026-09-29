@@ -37,12 +37,15 @@ _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA_RE = re.compile(r"^[a-f0-9]{64}$")
 
 # Retrieval strategies: keyword arguments for query_server.search_papers_chroma
-# and prepare_answer_payload. Each pins its mode explicitly so a server-side
-# LOCALRAG_RETRIEVAL_MODE default can never change what a strategy measures.
+# and prepare_answer_payload. Each pins its mode and reranking explicitly so
+# server-side defaults (LOCALRAG_RETRIEVAL_MODE, LOCALRAG_RERANK_DEFAULT) can
+# never change what a strategy measures.
 STRATEGIES: dict[str, dict[str, Any]] = {
-    "dense": {"retrieval_mode": "dense"},
-    "lexical": {"retrieval_mode": "lexical"},
-    "hybrid": {"retrieval_mode": "hybrid"},
+    "dense": {"retrieval_mode": "dense", "rerank": False},
+    "lexical": {"retrieval_mode": "lexical", "rerank": False},
+    "hybrid": {"retrieval_mode": "hybrid", "rerank": False},
+    "dense-rerank": {"retrieval_mode": "dense", "rerank": True},
+    "hybrid-rerank": {"retrieval_mode": "hybrid", "rerank": True},
 }
 
 
@@ -606,8 +609,14 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
                 raise SuiteError(f"{query.query_id}: prepare_answer failed ({status}): {packet.get('error')}")
         per_query[query.query_id] = score_query(scored, runs[0], ks, packet)
         if diagnostic_depth and diagnostic_depth > depth:
-            diagnostic_pool = ({"candidate_pool_depth": core._candidate_depth(depth)}
-                               if strategy == "hybrid" else {})
+            # Pin every pool the scored search used, so the deeper list extends
+            # the scored ranking instead of re-ranking a larger pool.
+            stage1 = core._rerank_pool_depth(depth) if params.get("rerank") else depth
+            diagnostic_pool = {}
+            if params.get("retrieval_mode") == "hybrid":
+                diagnostic_pool["candidate_pool_depth"] = core._candidate_depth(stage1)
+            if params.get("rerank"):
+                diagnostic_pool["rerank_pool_depth"] = stage1
             deep, status = core.search_papers_chroma(
                 query=query.text, n=diagnostic_depth, second_query=query.second_query,
                 include_context=False, **query.filters, **params, **vector, **diagnostic_pool)
@@ -651,7 +660,9 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
                   "unscorable_spans": len(unscorable),
                   "evidence_fingerprint": evidence_fingerprint(suite, unscorable_ids)},
         "index": index_fingerprint(core),
-        "strategy": {"name": strategy, "params": params, "depth": depth},
+        "strategy": {"name": strategy, "params": params, "depth": depth,
+                     "reranker": ({key: value for key, value in core.reranker.identity().items()
+                                   if key != "endpoint"} if params.get("rerank") else None)},
         "settings": {"ks": list(ks), "repetitions": max(1, repetitions), "packet_budget": packet_budget,
                      "primary_metric": PRIMARY_METRIC,
                      "diagnostic_depth": diagnostic_depth if diagnostic_depth and diagnostic_depth > depth else None},

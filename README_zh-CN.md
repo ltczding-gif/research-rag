@@ -521,7 +521,8 @@ CI 在支持的 Python 版本上覆盖 Windows、macOS 和 Linux。合成演示�
 - 默认检索只使用稠密向量，因此可能漏掉精确的化学式、数值和缩写。在维护者的文献库上，top-10
   检索覆盖了 31 个标注证据区间中的 17 个（[报告](docs/reports/CANONICAL_RELEASE.md#real-mcp-diagnostic-results)）。
   关键词 + 向量的混合检索已可选启用（`retrieval_mode=hybrid` 或 `LOCALRAG_RETRIEVAL_MODE`），
-  只有在[检索评测](docs/RETRIEVAL_EVAL.md)中胜出后才会成为默认。目前还没有重排。
+  只有在[检索评测](docs/RETRIEVAL_EVAL.md)中胜出后才会成为默认。cross-encoder 重排同样为可选
+  （`LOCALRAG_RERANKER`，`rerank=true`）。
 - 默认 FastEmbed 模型（`paraphrase-multilingual-MiniLM-L12-v2`，128 token 窗口）是为零配置
   而选，并非为质量而选；上述实测使用的是 Ollama `qwen3-embedding:4b`。
 - PDF 段落来自 `pdfplumber` 的页面文本；表格、公式和图片内容不会作为结构保留。

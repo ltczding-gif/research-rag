@@ -168,6 +168,7 @@ retrieved (Route B).
 | `dense` | Vector search only (the server default). |
 | `lexical` | Keyword (BM25, SQLite FTS5) search only; a diagnostic. |
 | `hybrid` | `LOCALRAG_HYBRID_CANDIDATES` (default 50; more only when n exceeds it) candidates from each, fused by reciprocal rank fusion (k=60); ties keep dense order. The pool does not depend on n, so top-10 at n=20 equals top-10 at n=10. |
+| `dense-rerank`, `hybrid-rerank` | The first `LOCALRAG_RERANK_CANDIDATES` (default 50) hits of `dense` / `hybrid`, reordered by the configured cross-encoder. Needs `LOCALRAG_RERANKER`. The reranker's provider, model and revision are recorded with the run. |
 
 `lexical` and `hybrid` need the keyword index of the active papers generation.
 `scripts/build_indexes.py` builds it after each papers build;
@@ -180,6 +181,46 @@ Keyword retrieval only proposes chunk IDs. Returned text always comes from the
 pinned Chroma collection and passes the same canonical source verification as
 dense hits. A stale or damaged keyword index can lower recall, but it cannot
 add unverified text or hits outside the requested filters.
+
+### Reranking
+
+A cross-encoder reads the original question together with each candidate
+passage. It only reorders the first-stage pool, so it can fix *ranking*
+misses (gold between rank 11 and the pool size) but not *recall* misses. The
+pool is fixed and does not depend on n. Scores are rounded to 5 decimals
+before sorting, so tiny GPU nondeterminism cannot reorder near ties.
+Remaining ties keep first-stage order.
+
+- `LOCALRAG_RERANKER=fastembed` runs `jinaai/jina-reranker-v2-base-multilingual`
+  (about 1.1 GB) in-process on the CPU. It needs no setup; expect seconds per
+  query for 50 candidates.
+- `LOCALRAG_RERANKER=http` calls a `/v1/rerank` endpoint in the Jina/Cohere
+  shape. With an NVIDIA GPU, llama.cpp serving `BAAI/bge-reranker-v2-m3` is a
+  strong multilingual choice. It runs next to Ollama, which keeps serving
+  embeddings:
+
+  ```bash
+  # a GGUF conversion of BAAI/bge-reranker-v2-m3, e.g. Q8_0 (~0.6 GB)
+  llama-server -m bge-reranker-v2-m3-Q8_0.gguf --reranking --port 8012 -ngl 99
+  # if the endpoint rejects requests, add: --pooling rank
+  ```
+
+  ```text
+  LOCALRAG_RERANKER=http
+  LOCALRAG_RERANK_URL=http://127.0.0.1:8012
+  LOCALRAG_RERANK_MODEL=bge-reranker-v2-m3
+  LOCALRAG_RERANK_REVISION=<sha256 of the .gguf file>
+  ```
+
+  On Windows, `certutil -hashfile bge-reranker-v2-m3-Q8_0.gguf SHA256` prints
+  the revision.
+
+```bash
+python benchmarks/scripts/retrieval_eval.py run --suite <eval set> --suite-id w6-v2 \
+    --query-vectors <vectors> --diagnostic-depth 100 \
+    --strategy dense --strategy hybrid --strategy dense-rerank --strategy hybrid-rerank \
+    --label "rerank bge-reranker-v2-m3 over 50 candidates"
+```
 
 ## Recording scores
 

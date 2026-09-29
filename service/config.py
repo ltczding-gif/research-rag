@@ -149,6 +149,23 @@ RETRIEVAL_MODE: str = os.environ.get("LOCALRAG_RETRIEVAL_MODE", "dense").strip()
 HYBRID_CANDIDATES: int = int(os.environ.get("LOCALRAG_HYBRID_CANDIDATES", "50"))
 
 
+# --- Optional reranking of source-passage candidates ---
+#
+# `none` (default), `fastembed` (in-process cross-encoder, CPU) or `http`
+# (a /v1/rerank endpoint such as llama.cpp `llama-server --reranking`).
+RERANKER: str = os.environ.get("LOCALRAG_RERANKER", "none").strip().lower() or "none"
+RERANK_MODEL: str = os.environ.get("LOCALRAG_RERANK_MODEL", "").strip()
+RERANK_URL: str = os.environ.get("LOCALRAG_RERANK_URL", "").strip()
+RERANK_API_KEY: str = os.environ.get("LOCALRAG_RERANK_API_KEY", "")
+# Operator-declared model revision for http rerankers (e.g. the GGUF sha256).
+RERANK_REVISION: str = os.environ.get("LOCALRAG_RERANK_REVISION", "").strip()
+# First-stage candidates reranked per query (at least n).
+RERANK_CANDIDATES: int = int(os.environ.get("LOCALRAG_RERANK_CANDIDATES", "50"))
+# Whether searches rerank when the caller does not say; stays off until
+# docs/RETRIEVAL_EVAL.md measurements justify it.
+RERANK_DEFAULT: bool = os.environ.get("LOCALRAG_RERANK_DEFAULT", "0").strip().lower() in ("1", "true", "on", "yes")
+
+
 # --- Query server ---
 
 HOST: str = os.environ.get("LOCALRAG_HOST", "127.0.0.1")

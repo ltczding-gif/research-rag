@@ -46,6 +46,13 @@ include breaking changes.
   machines that cannot hold the embedding model and the index together.
   `run --diagnostic-depth N` records where each gold span first appears, to
   separate ranking misses from recall misses.
+- Opt-in cross-encoder reranking of source-passage candidates:
+  `LOCALRAG_RERANKER=fastembed` (in-process,
+  jina-reranker-v2-base-multilingual) or `http` (a `/v1/rerank` endpoint such as
+  llama.cpp serving bge-reranker-v2-m3). `search_papers` and `prepare_answer`
+  accept `rerank`. The default stays off (`LOCALRAG_RERANK_DEFAULT`). The
+  retrieval evaluation adds the `dense-rerank` and `hybrid-rerank` strategies
+  and records the reranker's identity.
 - `CONTRIBUTING.md`, `SECURITY.md`, this changelog, issue templates and a pull
   request template.
 
