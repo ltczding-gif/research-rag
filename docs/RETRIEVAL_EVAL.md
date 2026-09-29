@@ -21,8 +21,13 @@ Gold evidence is pinned to **canonical source coordinates**: PDF file hash,
 physical page index, canonical page-text hash and a character interval. It is
 never pinned to chunk IDs. The same eval set therefore scores any chunker,
 embedding model or retrieval strategy that serves the same extracted pages.
-If extraction changes a page's text, that evidence is reported as
-*unscorable* rather than silently counted as a miss.
+If extraction changes a page's text, that evidence becomes *unscorable*. By
+default `run` then **fails** and lists it, so it can be re-resolved against the
+current extraction. With `--allow-unscorable` such spans are excluded instead.
+Every run records a fingerprint of the exact gold spans it scored, and
+`compare` never pairs two runs whose fingerprints differ. A gain can therefore
+not come from dropping hard evidence. A run also fails when an eval set has no
+scorable evidence at all.
 
 | Metric | Meaning |
 |---|---|
@@ -33,7 +38,7 @@ If extraction changes a page's text, that evidence is reported as
 | `span_coverage_macro@k` | Per-query coverage averaged over queries. |
 | `doc_recall@k` | Share of relevant papers (by Zotero parent key) present in the top-k. |
 | `mrr` | Reciprocal rank of the first hit overlapping any gold span. |
-| `packet_span_coverage`, `packet_complete` | The same span and group coverage for the `prepare_answer` evidence packet at the given budget (default 8,000 code points). This is what an answering agent actually receives. |
+| `packet_span_coverage`, `packet_complete` | The same span and group coverage for the `prepare_answer` evidence packet at the given budget (default 8,000 code points), built with the query's own filters. This is what an answering agent actually receives. |
 | `latency_seconds` | p50/p95/max per search call, plus the first call. |
 | `stability` | Queries whose top-k set (and order) is identical across repetitions. |
 
@@ -123,6 +128,11 @@ optionally a `group`. Then:
 python benchmarks/scripts/retrieval_eval.py resolve --suite pool.jsonl --output eval.jsonl
 ```
 
+`resolve` is lossless. Only candidates it converts into evidence leave the
+list. Unjudged candidates, candidates judged non-relevant, and relevant
+candidates whose quote could not be located stay in the output for the next
+round. Problems are listed, and the command exits non-zero.
+
 Quotes are required so that gold spans do not inherit one chunker's
 boundaries. `--allow-chunk-spans` accepts whole candidates when you
 deliberately accept that bias. When new strategies exist, pool again with
@@ -172,7 +182,8 @@ Each run appends one record to `benchmarks/results/retrieval-ledger.jsonl`
 - the strategy and its parameters;
 - the metrics, overall and per slice;
 - latency and stability;
-- the unscorable evidence IDs;
+- the number and IDs of any excluded unscorable spans and the scored-evidence
+  fingerprint;
 - per-query numbers.
 
 It never contains query text, passage text, paths or parent keys. The ledger
@@ -188,7 +199,9 @@ python benchmarks/scripts/retrieval_eval.py compare --suite-id w6-v2 --baseline 
 
 The table shows each run's headline metrics and, against the baseline, the
 paired per-query delta of the primary metric. It includes a bootstrap 95%
-interval and wins/losses/ties.
+interval and wins/losses/ties. A run on a different eval-set version, or one
+that scored a different set of gold spans, is shown as *not comparable*
+instead of receiving a delta.
 
 ## Decision rule for retrieval changes
 

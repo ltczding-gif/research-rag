@@ -87,6 +87,7 @@ def cmd_run(args) -> int:
     for strategy in args.strategy or ["dense"]:
         record = ev.run_strategy(core, suite, strategy, ks=ks, repetitions=args.repetitions,
                                  packet_budget=args.packet_budget or None,
+                                 allow_unscorable=args.allow_unscorable,
                                  progress=(lambda m: print(m, file=sys.stderr)) if args.verbose else None)
         if args.label:
             record["label"] = args.label
@@ -102,8 +103,8 @@ def cmd_run(args) -> int:
                if overall.get("packet_span_coverage") is not None else "")
             + f", mrr={overall['mrr'] or 0:.3f}")
         if record["unscorable"]:
-            print(f"  warning: {len(record['unscorable'])} evidence spans are unscorable against this "
-                  "generation (see the run record).", file=sys.stderr)
+            print(f"  warning: {len(record['unscorable'])} gold spans were excluded as unscorable; this run "
+                  "pairs only with runs that scored the same evidence.", file=sys.stderr)
     if not args.no_ledger:
         print(f"Recorded in {args.ledger}")
     return 0
@@ -155,6 +156,9 @@ def main(argv=None) -> int:
     run.add_argument("--label", help="free-text note stored with the run")
     run.add_argument("--ledger", default=str(ev.DEFAULT_LEDGER))
     run.add_argument("--details", help="also write the full run record to this JSON file")
+    run.add_argument("--allow-unscorable", action="store_true",
+                     help="score despite gold spans the active generation cannot score (excluded; "
+                          "such runs pair only with runs that scored the same evidence)")
     run.add_argument("--no-ledger", action="store_true")
     run.add_argument("--verbose", action="store_true")
     run.set_defaults(func=cmd_run)

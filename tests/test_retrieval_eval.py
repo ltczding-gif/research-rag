@@ -171,8 +171,9 @@ def test_suite_validation_rejects_bad_records(tmp_path):
 
 
 def test_paired_delta_reports_direction_and_interval():
-    base = {"per_query": {f"q{i}": {"span_coverage@10": 0.0} for i in range(10)}}
-    better = {"per_query": {f"q{i}": {"span_coverage@10": 1.0 if i < 6 else 0.0} for i in range(10)}}
+    suite = {"sha256": "s1", "evidence_fingerprint": "f1"}
+    base = {"suite": suite, "per_query": {f"q{i}": {"span_coverage@10": 0.0} for i in range(10)}}
+    better = {"suite": suite, "per_query": {f"q{i}": {"span_coverage@10": 1.0 if i < 6 else 0.0} for i in range(10)}}
     delta = ev.paired_delta(base, better)
     assert delta["mean_delta"] == pytest.approx(0.6)
     assert delta["wins"] == 6 and delta["losses"] == 0 and delta["ties"] == 4
@@ -209,15 +210,79 @@ def test_run_scores_a_real_generation_and_ledger_holds_no_private_text(core, tmp
     assert ev.read_ledger(ledger)[0]["run_id"] == record["run_id"]
 
 
-def test_changed_extraction_is_reported_as_unscorable(core, tmp_path):
+def test_unscorable_gold_fails_the_run_unless_explicitly_allowed(core, tmp_path):
     stale = _span(core, "ATTA", 1, "retains 95% activity", "e1")
     stale["page_text_hash"] = "f" * 64
     suite = ev.load_suite(_write_suite(tmp_path / "s.jsonl", [
-        {"query_id": "q1", "text": "durability", "evidence": [stale]}]))
-    record = ev.run_strategy(core, suite, "dense", ks=(10,), packet_budget=None)
-    assert record["suite"]["unscorable_spans"] == 1
+        {"query_id": "q1", "text": "durability", "evidence": [
+            stale, _span(core, "ATTS", 0, "Co loading of 1.2 wt%", "e2")]}]))
+    with pytest.raises(ev.SuiteError, match="unscorable.*canonical page text changed"):
+        ev.run_strategy(core, suite, "dense", ks=(10,), packet_budget=None)
+    record = ev.run_strategy(core, suite, "dense", ks=(10,), packet_budget=None, allow_unscorable=True)
+    assert record["suite"]["unscorable_spans"] == 1 and record["suite"]["scored_spans"] == 1
     assert record["unscorable"][0]["reason"] == "canonical page text changed"
-    assert record["metrics"]["overall"]["span_coverage@10"] is None
+
+
+def test_runs_that_scored_different_gold_are_never_paired(core, tmp_path, monkeypatch):
+    # Same eval-set file; the second run happens after a re-extraction made one
+    # hard-to-find span unscorable. Dropping it must not look like a gain.
+    suite = ev.load_suite(_write_suite(tmp_path / "s.jsonl", [
+        {"query_id": "q1", "text": "nickel", "evidence": [_span(core, "ATTA", 1, "retains 95% activity", "e1")]},
+        {"query_id": "q2", "text": "nickel", "evidence": [_span(core, "ATTB", 0, "240 mV", "e2")]},
+    ]))
+    full = ev.run_strategy(core, suite, "dense", ks=(1, 10), packet_budget=None)
+    original = ev.check_scorable
+    monkeypatch.setattr(ev, "check_scorable", lambda s, p: [
+        *original(s, p), {"query_id": "q1", "evidence_id": "e1", "reason": "canonical page text changed"}])
+    reduced = ev.run_strategy(core, suite, "dense", ks=(1, 10), packet_budget=None, allow_unscorable=True)
+    assert full["suite"]["sha256"] == reduced["suite"]["sha256"]
+    assert full["suite"]["evidence_fingerprint"] != reduced["suite"]["evidence_fingerprint"]
+    assert ev.paired_delta(full, reduced, "span_coverage@1")["not_comparable"] == "different scored evidence"
+    table = ev.compare_table([full, reduced], ["span_coverage@1"], primary="span_coverage@1")
+    assert "not comparable: different scored evidence" in table
+    assert "excluded unscorable gold spans" in table
+
+
+def test_empty_eval_sets_never_produce_a_successful_record(core, tmp_path):
+    official = ev.load_official_suite(REPO_ROOT / "benchmarks", "s5")
+    with pytest.raises(ev.SuiteError, match="no queries"):
+        ev.run_strategy(core, official, "dense")
+    no_gold = ev.load_suite(_write_suite(tmp_path / "s.jsonl", [{"query_id": "q1", "text": "cobalt"}]))
+    with pytest.raises(ev.SuiteError, match="no scorable gold evidence"):
+        ev.run_strategy(core, no_gold, "dense")
+
+
+def test_packet_scoring_uses_the_same_filters_as_retrieval(core, tmp_path):
+    # Gold lies in ATTA; the query is restricted to ATTB.pdf. Both scores must be 0.
+    suite = ev.load_suite(_write_suite(tmp_path / "s.jsonl", [
+        {"query_id": "q1", "text": "cobalt durability", "filters": {"pdf_filename": "ATTB.pdf"},
+         "evidence": [_span(core, "ATTA", 1, "retains 95% activity", "e1")]}]))
+    record = ev.run_strategy(core, suite, "dense", ks=(10,), packet_budget=8000)
+    overall = record["metrics"]["overall"]
+    assert overall["span_coverage@10"] == 0.0
+    assert overall["packet_span_coverage"] == 0.0
+    packet, status = core.prepare_answer_payload("cobalt durability", pdf_filename="ATTB.pdf")
+    assert status == 200
+    assert {item["metadata"]["zotero_attachment_key"] for item in packet["evidence"]} == {"ATTB"}
+
+
+def test_resolve_is_lossless_for_candidates_it_does_not_convert(core, tmp_path):
+    pooled = ev.pool_candidates(core, ev.load_suite(_write_suite(
+        tmp_path / "s.jsonl", [{"query_id": "q1", "text": "cobalt nickel durability loading"}])), ["dense"], depth=4)
+    candidates = pooled.queries[0].candidates
+    assert len(candidates) == 4
+    converted, bad_quote, irrelevant, unjudged = candidates
+    converted.update(relevance=3, quote=converted["text"][:12])
+    bad_quote.update(relevance=3, quote="text that is not on this page")
+    irrelevant.update(relevance=0)
+    path = tmp_path / "judged.jsonl"
+    path.write_text(json.dumps(ev.dump_query(pooled.queries[0])) + "\n", encoding="utf-8")
+    resolved, problems = ev.resolve_suite(ev.load_suite(path), ev.load_pages(core.pdf_generation))
+    query = resolved.queries[0]
+    assert len(query.evidence) == 1
+    remaining = {c["candidate_id"] for c in query.candidates}
+    assert remaining == {bad_quote["candidate_id"], irrelevant["candidate_id"], unjudged["candidate_id"]}
+    assert len(problems) == 1 and "found 0 times" in problems[0]
 
 
 def test_quote_only_evidence_must_be_resolved_before_running(core, tmp_path):
@@ -265,7 +330,8 @@ def test_pool_then_judge_then_resolve_round_trip(core, tmp_path):
 
 def test_compare_table_marks_baseline_and_suite_version_drift():
     def record(run_id, value, sha="s1"):
-        return {"run_id": run_id, "strategy": {"name": "dense"}, "suite": {"sha256": sha},
+        return {"run_id": run_id, "strategy": {"name": "dense"},
+                "suite": {"sha256": sha, "evidence_fingerprint": "f1", "unscorable_spans": 0},
                 "index": {"papers_generation_id": "abcdef1234", "embedding": {"provider": "p", "model": "m"}},
                 "metrics": {"overall": {"span_coverage@10": value}},
                 "per_query": {"q1": {"span_coverage@10": value}, "q2": {"span_coverage@10": value}}}

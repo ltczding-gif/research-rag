@@ -453,10 +453,26 @@ def index_fingerprint(core) -> dict:
     }
 
 
+def evidence_fingerprint(suite: Suite, excluded: set[tuple[str, str]]) -> str:
+    """Identity of the exact gold spans a run scored; runs compare only when equal."""
+    items = sorted((query.query_id, span.evidence_id, span.file_hash, span.pdf_page_index,
+                    span.page_text_hash, span.char_start, span.char_end, span.group)
+                   for query in suite.queries for span in query.scored_evidence
+                   if (query.query_id, span.evidence_id) not in excluded)
+    return hashlib.sha256(json.dumps(items).encode("utf-8")).hexdigest()
+
+
 def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetitions: int = 1,
-                 packet_budget: int | None = None, clock: Callable[[], float] = time.perf_counter,
+                 packet_budget: int | None = None, allow_unscorable: bool = False,
+                 clock: Callable[[], float] = time.perf_counter,
                  progress: Callable[[str], None] | None = None) -> dict:
-    """Evaluate one strategy on every query; returns a ledger-ready record."""
+    """Evaluate one strategy on every query; returns a ledger-ready record.
+
+    Gold spans that the active generation cannot score (page missing or
+    re-extracted) fail the run unless allow_unscorable is set; then they are
+    excluded and the run's evidence fingerprint changes, so `compare` refuses
+    to pair it with runs that scored a different evidence set.
+    """
     if strategy not in STRATEGIES:
         raise SuiteError(f"Unknown strategy {strategy!r}; known: {', '.join(sorted(STRATEGIES))}")
     unresolved = [q.query_id for q in suite.queries if q.unresolved]
@@ -467,8 +483,17 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
     depth = max(ks)
     params = STRATEGIES[strategy]
     pages = load_pages(core.pdf_generation)
+    if not suite.queries:
+        raise SuiteError(f"Eval set {suite.suite_id!r} has no queries")
     unscorable = check_scorable(suite, pages)
     unscorable_ids = {(item["query_id"], item["evidence_id"]) for item in unscorable}
+    if unscorable and not allow_unscorable:
+        sample = ", ".join(f"{i['query_id']}/{i['evidence_id']} ({i['reason']})" for i in unscorable[:5])
+        raise SuiteError(f"{len(unscorable)} gold spans are unscorable against this generation: {sample}. "
+                         "Re-resolve them against the current extraction, or pass --allow-unscorable "
+                         "(such runs are not comparable with runs that scored the full set).")
+    if suite.evidence_count - len(unscorable) <= 0:
+        raise SuiteError(f"Eval set {suite.suite_id!r} has no scorable gold evidence; nothing to measure")
     per_query, latencies, stability = {}, [], {"membership_identical": 0, "order_identical": 0}
     slices: dict[str, list[str]] = {}
     for index, query in enumerate(suite.queries, 1):
@@ -486,9 +511,10 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
             runs.append(payload["results"])
         packet = None
         if packet_budget:
+            # Same filters as retrieval: packet and search scores share one scope.
             packet, status = core.prepare_answer_payload(
                 query.text, n=10, budget_codepoints=packet_budget, second_query=query.second_query,
-                **{k: v for k, v in query.filters.items() if k != "pdf_filename"})
+                **query.filters)
             if status != 200:
                 raise SuiteError(f"{query.query_id}: prepare_answer failed ({status}): {packet.get('error')}")
         per_query[query.query_id] = score_query(scored, runs[0], ks, packet)
@@ -512,7 +538,9 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
         "git": git_state(),
         "suite": {"suite_id": suite.suite_id, "sha256": suite.sha256, "source": suite.source,
                   "queries": len(suite.queries), "evidence_spans": suite.evidence_count,
-                  "unscorable_spans": len(unscorable)},
+                  "scored_spans": suite.evidence_count - len(unscorable),
+                  "unscorable_spans": len(unscorable),
+                  "evidence_fingerprint": evidence_fingerprint(suite, unscorable_ids)},
         "index": index_fingerprint(core),
         "strategy": {"name": strategy, "params": params, "depth": depth},
         "settings": {"ks": list(ks), "repetitions": max(1, repetitions), "packet_budget": packet_budget,
@@ -550,9 +578,26 @@ def read_ledger(path: str | Path = DEFAULT_LEDGER) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def comparable(baseline: dict, candidate: dict) -> str | None:
+    """Reason two runs cannot be paired, or None when they scored identical gold."""
+    if baseline["suite"].get("sha256") != candidate["suite"].get("sha256"):
+        return "different eval-set version"
+    before = baseline["suite"].get("evidence_fingerprint")
+    after = candidate["suite"].get("evidence_fingerprint")
+    if not before or not after or before != after:
+        return "different scored evidence"
+    return None
+
+
 def paired_delta(baseline: dict, candidate: dict, metric: str = PRIMARY_METRIC, *,
                  resamples: int = 2000, seed: int = 0) -> dict:
-    """Per-query paired comparison with a bootstrap 95% interval of the mean delta."""
+    """Per-query paired comparison with a bootstrap 95% interval of the mean delta.
+
+    Runs that scored different gold evidence are never paired.
+    """
+    reason = comparable(baseline, candidate)
+    if reason:
+        return {"metric": metric, "queries": 0, "not_comparable": reason}
     shared = sorted(set(baseline["per_query"]) & set(candidate["per_query"]))
     deltas = []
     for query_id in shared:
@@ -582,6 +627,9 @@ def compare_table(records: list[dict], metrics: list[str], baseline_id: str | No
     if len(hashes) > 1:
         lines.append("> Warning: these runs used different versions of the eval set; "
                      "deltas across versions are not comparable.\n")
+    if any(r["suite"].get("unscorable_spans") for r in records):
+        lines.append("> Warning: some runs excluded unscorable gold spans; they are paired only with "
+                     "runs that scored the same evidence.\n")
     header = ["run", "strategy", "generation", "embedding", *metrics, f"Δ {primary} (95% CI)", "W/L/T"]
     lines.append("| " + " | ".join(header) + " |")
     lines.append("|" + "---|" * len(header))
@@ -596,7 +644,9 @@ def compare_table(records: list[dict], metrics: list[str], baseline_id: str | No
             cells += ["–", "–"]
         else:
             delta = paired_delta(baseline, record, primary)
-            if delta.get("queries"):
+            if delta.get("not_comparable"):
+                cells += [f"not comparable: {delta['not_comparable']}", "–"]
+            elif delta.get("queries"):
                 low, high = delta["ci95"]
                 cells += [f"{delta['mean_delta']:+.3f} ({low:+.3f}, {high:+.3f})",
                           f"{delta['wins']}/{delta['losses']}/{delta['ties']}"]
@@ -697,12 +747,13 @@ def resolve_suite(suite: Suite, pages: dict, *, min_relevance: int = SCORED_RELE
             else:
                 remaining.append(item)
         query.unresolved = remaining
+        # Lossless: only candidates converted into evidence leave the list.
+        # Unjudged, non-relevant and unresolvable candidates stay for later rounds.
         kept = []
         for candidate in query.candidates:
             relevance = candidate.get("relevance")
-            if relevance is None:
-                continue  # unjudged candidates are dropped from the resolved suite
-            if relevance < min_relevance:
+            if relevance is None or relevance < min_relevance:
+                kept.append(candidate)
                 continue
             base = {"evidence_id": f"{query.query_id}-{candidate['candidate_id']}",
                     "group": candidate.get("group") or candidate["candidate_id"], "relevance": relevance}
@@ -712,6 +763,8 @@ def resolve_suite(suite: Suite, pages: dict, *, min_relevance: int = SCORED_RELE
                               [pages[key] for key in keys if key in pages])
                 if span:
                     query.evidence.append(span)
+                else:
+                    kept.append(candidate)
             elif allow_chunk_spans:
                 for index, raw in enumerate(candidate["spans"]):
                     query.evidence.append(EvidenceSpan(
