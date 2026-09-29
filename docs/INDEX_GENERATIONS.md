@@ -17,6 +17,16 @@ missing from the current full snapshot to be withdrawn from both requested index
 An unavailable root, empty scan, invalid note, missing declared PDF, empty PDF text,
 or unresolved PDF identity fails the build instead of silently shrinking coverage.
 
+After the papers build, the command also writes the generation's keyword index
+(`derived/lexical-v1.sqlite` inside the generation directory), which hybrid and
+lexical retrieval use. It is derived and outside the sealed artifact inventory.
+It records its generation ID, collection, item count and a digest of chunk IDs
+and text hashes, and it is rejected at load time if any of these differ from
+the active generation. It is deleted with its generation. A failure here exits
+with the committed-with-warning status 3 and leaves dense retrieval
+unaffected. `--no-keyword-index` skips it. `scripts/build_lexical_index.py`
+builds it for an existing generation without re-embedding.
+
 Notes require a nonempty `zotero_parent_key`. Their original UTF-8 bytes are stored
 with each generation; headings and the actual embedding window determine retrieval
 sections. All source characters remain represented. `get_note` returns the complete

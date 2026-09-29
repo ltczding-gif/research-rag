@@ -36,10 +36,13 @@ FILTER_FIELDS = ("zotero_parent_key", "zotero_attachment_key", "source_role", "p
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA_RE = re.compile(r"^[a-f0-9]{64}$")
 
-# Retrieval strategies: keyword arguments for query_server.search_papers_chroma.
-# New strategies (hybrid, reranking, ...) register here with their parameters.
+# Retrieval strategies: keyword arguments for query_server.search_papers_chroma
+# and prepare_answer_payload. Each pins its mode explicitly so a server-side
+# LOCALRAG_RETRIEVAL_MODE default can never change what a strategy measures.
 STRATEGIES: dict[str, dict[str, Any]] = {
-    "dense": {},
+    "dense": {"retrieval_mode": "dense"},
+    "lexical": {"retrieval_mode": "lexical"},
+    "hybrid": {"retrieval_mode": "hybrid"},
 }
 
 
@@ -514,7 +517,7 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
             # Same filters as retrieval: packet and search scores share one scope.
             packet, status = core.prepare_answer_payload(
                 query.text, n=10, budget_codepoints=packet_budget, second_query=query.second_query,
-                **query.filters)
+                **query.filters, **params)
             if status != 200:
                 raise SuiteError(f"{query.query_id}: prepare_answer failed ({status}): {packet.get('error')}")
         per_query[query.query_id] = score_query(scored, runs[0], ks, packet)

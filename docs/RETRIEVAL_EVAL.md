@@ -161,11 +161,35 @@ retrieved (Route B).
 - Freeze a version once scores are recorded. Any edit changes the suite hash,
   and `compare` warns when runs used different versions.
 
+## Strategies
+
+| Strategy | What it runs |
+|---|---|
+| `dense` | Vector search only (the server default). |
+| `lexical` | Keyword (BM25, SQLite FTS5) search only; a diagnostic. |
+| `hybrid` | Up to `LOCALRAG_HYBRID_CANDIDATES` (default 50, at least 4×n) candidates from each, fused by reciprocal rank fusion (k=60); ties keep dense order. |
+
+`lexical` and `hybrid` need the keyword index of the active papers generation.
+`scripts/build_indexes.py` builds it after each papers build;
+`scripts/build_lexical_index.py` builds it for an existing generation without
+re-embedding. Each strategy pins its mode explicitly, so a server default set
+in `.env` never changes what a strategy measures. Evidence packets are
+prepared with the same mode.
+
+Keyword retrieval only proposes chunk IDs. Returned text always comes from the
+pinned Chroma collection and passes the same canonical source verification as
+dense hits. A stale or damaged keyword index can lower recall, but it cannot
+add unverified text or hits outside the requested filters.
+
 ## Recording scores
 
 ```bash
 python benchmarks/scripts/retrieval_eval.py run --suite ~/research-rag-eval/w6-v2.jsonl \
     --suite-id w6-v2 --strategy dense --label "baseline qwen3-embedding:4b"
+
+# after scripts/build_lexical_index.py, same eval set and generation:
+python benchmarks/scripts/retrieval_eval.py run --suite ~/research-rag-eval/w6-v2.jsonl \
+    --suite-id w6-v2 --strategy lexical --strategy hybrid --label "hybrid rrf k=60, 50 candidates"
 ```
 
 Defaults: k = 5, 10, 20; three repetitions per query; packet budget 8000;

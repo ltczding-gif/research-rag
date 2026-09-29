@@ -554,10 +554,13 @@ checklist, [CHANGELOG.md](CHANGELOG.md) for release notes, and
 
 ## Known limitations
 
-- Retrieval is dense-vector only: there is no keyword/BM25 fusion or reranking yet, so
-  exact formulas, numeric values and abbreviations can be missed. On the maintainer's
-  library, top-10 retrieval covered 17 of 31 labelled evidence spans
-  ([report](docs/reports/CANONICAL_RELEASE.md#real-mcp-diagnostic-results)).
+- Default retrieval is dense-vector only, so exact formulas, numeric values and
+  abbreviations can be missed. On the maintainer's library, top-10 retrieval covered 17
+  of 31 labelled evidence spans
+  ([report](docs/reports/CANONICAL_RELEASE.md#real-mcp-diagnostic-results)). Hybrid
+  keyword + vector retrieval is available as an opt-in (`retrieval_mode=hybrid` or
+  `LOCALRAG_RETRIEVAL_MODE`) and becomes the default only once it wins on the
+  [retrieval evaluation](docs/RETRIEVAL_EVAL.md). There is no reranking yet.
 - The default FastEmbed model (`paraphrase-multilingual-MiniLM-L12-v2`, 128-token window)
   is chosen for zero-setup, not quality. The measured results above used Ollama
   `qwen3-embedding:4b`.
