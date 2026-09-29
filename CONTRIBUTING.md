@@ -12,8 +12,10 @@ reproduction steps are as valuable as code.
   and follow [docs/Domain_Pack_Authoring_Guide.md](docs/Domain_Pack_Authoring_Guide.md).
   Validate it with `python scanner/bootstrap_domain_pack.py --validate <field>`.
 - **Retrieval and parsing quality**: see the roadmap in the README. Changes that
-  affect ranking should report their effect on the benchmark suite in
-  [`benchmarks/`](benchmarks/README.md).
+  affect ranking must be scored with
+  [`docs/RETRIEVAL_EVAL.md`](docs/RETRIEVAL_EVAL.md). Record the baseline and
+  candidate runs in the score ledger and cite their run IDs and the `compare`
+  table in the pull request.
 - **Documentation**: fixes to the README, `docs/` and skills.
 
 For larger changes, open an issue first so the design can be agreed before you

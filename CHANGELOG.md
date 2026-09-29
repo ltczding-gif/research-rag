@@ -26,6 +26,12 @@ include breaking changes.
 
 ### Added
 
+- Retrieval evaluation: `benchmarks/scripts/retrieval_eval.py` scores retrieval
+  strategies against coordinate-pinned gold evidence (span coverage@k, query
+  completeness, MRR, evidence-packet coverage, latency and stability), builds
+  eval sets from quotes or pooled judgments, and appends every run to a
+  text-free score ledger under `benchmarks/results/`. Method and decision rule:
+  `docs/RETRIEVAL_EVAL.md`.
 - `CONTRIBUTING.md`, `SECURITY.md`, this changelog, issue templates and a pull
   request template.
 

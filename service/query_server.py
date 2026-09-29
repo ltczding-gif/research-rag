@@ -900,7 +900,8 @@ def search_papers():
 
 
 def prepare_answer_payload(query, n=10, budget_codepoints=8000, zotero_parent_key=None,
-                           second_query=None, zotero_attachment_key=None, source_role=None):
+                           second_query=None, zotero_attachment_key=None, source_role=None,
+                           pdf_filename=None):
     """Search then prepare bounded canonical evidence for the host's answer model."""
     if not isinstance(query, str) or not query.strip():
         return {'error': 'query must be a nonempty string'}, 400
@@ -909,7 +910,8 @@ def prepare_answer_payload(query, n=10, budget_codepoints=8000, zotero_parent_ke
     if isinstance(budget_codepoints, bool) or not isinstance(budget_codepoints, int) or not 256 <= budget_codepoints <= 8000:
         return {'error': 'budget_codepoints must be an integer between 256 and 8000'}, 400
     payload, status = search_papers_chroma(query, n=n, zotero_parent_key=zotero_parent_key,
-        second_query=second_query, zotero_attachment_key=zotero_attachment_key, source_role=source_role)
+        second_query=second_query, zotero_attachment_key=zotero_attachment_key, source_role=source_role,
+        pdf_filename=pdf_filename)
     if status != 200:
         return payload, status
     try:

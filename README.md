@@ -578,7 +578,8 @@ checklist, [CHANGELOG.md](CHANGELOG.md) for release notes, and
 Planned directions, in priority order:
 
 1. **Retrieval quality**: hybrid keyword + vector retrieval, cross-encoder reranking and
-   a stronger default embedding model, each measured on the benchmark suite.
+   a stronger default embedding model, each scored with the
+   [retrieval evaluation method](docs/RETRIEVAL_EVAL.md) and recorded in its ledger.
 2. **Parsing quality**: optional layout-aware PDF extractors that keep tables, equations
    and figure captions while reusing the same page/span evidence coordinates.
 3. **Packaging**: an installable package with a one-line MCP server launch.

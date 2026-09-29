@@ -20,6 +20,7 @@ maintained alongside the code.
 | [development/EMBEDDING_BUILD_SESSIONS.md](development/EMBEDDING_BUILD_SESSIONS.md) | Provider identity binding during builds and its limits |
 | [development/GENERATION_RECOVERY.md](development/GENERATION_RECOVERY.md) | Repairing a damaged active-generation pointer |
 | [../skills/literature-processor/references/subagent-host-contract.md](../skills/literature-processor/references/subagent-host-contract.md) | The exit-code-200 sub-agent manifest protocol |
+| [RETRIEVAL_EVAL.md](RETRIEVAL_EVAL.md) | Building eval sets, scoring retrieval strategies and keeping a score ledger |
 | [../benchmarks/README.md](../benchmarks/README.md) | Public retrieval benchmark contract (in progress) |
 
 ## Validation reports
