@@ -177,7 +177,7 @@ def _candidate_depth(n):
     return max(HYBRID_CANDIDATES, n)
 
 
-def _candidate_hits(mode, effective_query, n, where, filters, query_args):
+def _candidate_hits(mode, effective_query, n, where, filters, query_args, candidate_pool_depth=None):
     """Ranked (id, document, metadata, distance, retrieval) tuples for one mode.
 
     The keyword index only proposes IDs. Text and metadata always come from the
@@ -190,7 +190,7 @@ def _candidate_hits(mode, effective_query, n, where, filters, query_args):
         return [(hit_id, doc, meta, distance, {"mode": "dense", "dense_rank": rank})
                 for rank, (hit_id, doc, meta, distance) in enumerate(zip(
                     results["ids"][0], results["documents"][0], results["metadatas"][0], distances[0]), 1)]
-    depth = _candidate_depth(n)
+    depth = candidate_pool_depth if candidate_pool_depth is not None else _candidate_depth(n)
     rankings, dense_rows = {}, {}
     if mode == "hybrid":
         results = pdf_col.query(**query_args, n_results=depth, where=where)
@@ -881,12 +881,15 @@ def search_papers_chroma(
     query, n=3, zotero_parent_key=None, paper_group=None, pdf_filename=None,
     second_query=None, include_context=False, zotero_attachment_key=None,
     source_role=None, source_type=None, retrieval_mode=None, query_vector=None,
+    candidate_pool_depth=None,
 ):
     """Search one pinned generation; all supplied source filters are ANDed.
 
     query_vector (core only, used by evaluation) supplies a precomputed query
     embedding for the canonical generation instead of calling the provider.
     The caller must have verified it against the generation's embedding contract.
+    candidate_pool_depth (core only) keeps hybrid diagnostics on the same
+    candidate pool as the scored search, even when requesting deeper results.
     """
     if not chroma_ready or pdf_col is None:
         return {"error": "ChromaDB not initialized"}, 503
@@ -939,7 +942,8 @@ def search_papers_chroma(
                            "source_role": source_role, "pdf_filename": pdf_filename}
         formatted_results = []
         for hit_id, content, meta, distance, retrieval in _candidate_hits(
-                mode, effective_query, n, where, lexical_filters, query_args):
+                mode, effective_query, n, where, lexical_filters, query_args,
+                candidate_pool_depth=candidate_pool_depth):
             item = {"id": hit_id, "content": content, "metadata": meta,
                     "distance": distance, "retrieval": retrieval}
             if pdf_generation:

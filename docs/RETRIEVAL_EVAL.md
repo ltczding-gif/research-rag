@@ -242,7 +242,10 @@ reveal what the queries are about.
 for each gold span the rank at which it is first fully covered
 (`span_first_covered_ranks`), plus `span_coverage@100` and
 `covered_rank_median`. Metrics at the requested k are unchanged. The deeper
-list tells a ranking problem apart from a recall problem:
+list tells a ranking problem apart from a recall problem. Hybrid diagnostics
+keep the same per-retriever candidate pool as the scored search; the run fails
+if the deeper result does not preserve its top-k prefix. The two default 50-candidate
+pools may contain fewer than 100 distinct hits.
 
 - spans found between rank 11 and 100 can be fixed by reranking;
 - spans absent from the top 100 need better candidates: keyword search, query

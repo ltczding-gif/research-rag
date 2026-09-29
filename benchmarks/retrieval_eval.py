@@ -606,11 +606,16 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
                 raise SuiteError(f"{query.query_id}: prepare_answer failed ({status}): {packet.get('error')}")
         per_query[query.query_id] = score_query(scored, runs[0], ks, packet)
         if diagnostic_depth and diagnostic_depth > depth:
+            diagnostic_pool = ({"candidate_pool_depth": core._candidate_depth(depth)}
+                               if strategy == "hybrid" else {})
             deep, status = core.search_papers_chroma(
                 query=query.text, n=diagnostic_depth, second_query=query.second_query,
-                include_context=False, **query.filters, **params, **vector)
+                include_context=False, **query.filters, **params, **vector, **diagnostic_pool)
             if status != 200:
                 raise SuiteError(f"{query.query_id}: diagnostic search failed ({status}): {deep.get('error')}")
+            scored_ids = [hit["id"] for hit in runs[0]]
+            if [hit["id"] for hit in deep["results"][:len(scored_ids)]] != scored_ids:
+                raise SuiteError(f"{query.query_id}: diagnostic ranking diverges from the scored top-{depth}")
             ranks = first_covered_ranks(scored, deep["results"])
             per_query[query.query_id]["span_first_covered_ranks"] = ranks
             per_query[query.query_id][f"spans_covered@{diagnostic_depth}"] = sum(r is not None for r in ranks)

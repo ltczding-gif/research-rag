@@ -226,6 +226,41 @@ def test_diagnostic_depth_records_first_covered_rank_without_changing_scores(cor
     assert deep["settings"]["diagnostic_depth"] == 5 and plain["settings"]["diagnostic_depth"] is None
 
 
+def test_hybrid_diagnostic_keeps_the_scored_candidate_pool(lexical, tmp_path, monkeypatch):
+    core, _, _ = lexical
+    monkeypatch.setattr(core, "HYBRID_CANDIDATES", 1)
+    calls = []
+    search = core.search_papers_chroma
+
+    def recorded(*args, **kwargs):
+        calls.append((kwargs.get("n"), kwargs.get("candidate_pool_depth")))
+        return search(*args, **kwargs)
+
+    monkeypatch.setattr(core, "search_papers_chroma", recorded)
+    record = ev.run_strategy(core, _suite(core, tmp_path), "hybrid", ks=(1,),
+                             packet_budget=None, diagnostic_depth=4)
+    assert (1, None) in calls and (4, 1) in calls
+    for row in record["per_query"].values():
+        ranks = row["span_first_covered_ranks"]
+        assert row["span_coverage@1"] == sum(rank is not None and rank <= 1 for rank in ranks) / len(ranks)
+
+
+def test_diagnostic_rejects_a_changed_scored_prefix(lexical, tmp_path, monkeypatch):
+    core, _, _ = lexical
+    search = core.search_papers_chroma
+
+    def changed(*args, **kwargs):
+        payload, status = search(*args, **kwargs)
+        if status == 200 and kwargs.get("n") == 4:
+            payload["results"] = list(reversed(payload["results"]))
+        return payload, status
+
+    monkeypatch.setattr(core, "search_papers_chroma", changed)
+    with pytest.raises(ev.SuiteError, match="diagnostic ranking diverges"):
+        ev.run_strategy(core, _suite(core, tmp_path), "hybrid", ks=(1,),
+                        packet_budget=None, diagnostic_depth=4)
+
+
 def test_hybrid_candidate_pool_does_not_depend_on_requested_n(core, monkeypatch):  # noqa: F811
     monkeypatch.setattr(core, "HYBRID_CANDIDATES", 50)
     assert core._candidate_depth(3) == core._candidate_depth(10) == core._candidate_depth(20) == 50
