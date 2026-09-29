@@ -32,6 +32,8 @@ they are not setup instructions.
 
 - [reports/FULL_LIBRARY_VALIDATION.md](reports/FULL_LIBRARY_VALIDATION.md)
 - [reports/CANONICAL_RELEASE.md](reports/CANONICAL_RELEASE.md)
+- [reports/W6_RERANK_EVALUATION.md](reports/W6_RERANK_EVALUATION.md) — fixed-pool
+  dense/hybrid/reranker comparison, regressions, costs and held-out limitations
 
 ## Archive
 
