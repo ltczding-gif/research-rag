@@ -2,12 +2,13 @@
 """Build retrieval eval sets and record/compare retrieval scores.
 
 Subcommands
+  embed-queries  compute query vectors only (no index is loaded)
   pool     attach pooled retrieval candidates to each query for judging
   resolve  turn quotes and judged candidates into canonical evidence spans
   run      score strategies on an eval set and append the runs to the ledger
   compare  print recorded runs for one eval set with paired deltas
 
-All commands except `compare` read the active canonical papers generation
+All commands except `compare` and `embed-queries` read the active canonical papers generation
 configured by .env / LOCALRAG_* (the same index the MCP server serves).
 See docs/RETRIEVAL_EVAL.md.
 """
@@ -52,6 +53,21 @@ def write_suite(suite: ev.Suite, path: str) -> None:
     Path(path).write_text(text, encoding="utf-8")
 
 
+def cmd_embed_queries(args) -> int:
+    """Embed queries with the configured provider without loading Chroma."""
+    service = str(REPO_ROOT / "service")
+    if service not in sys.path:
+        sys.path.insert(0, service)
+    from embedding_client import embed_index_text, embedding_contract
+
+    suite = load_suite(args)
+    data = ev.embed_queries(suite, embed_index_text, embedding_contract)
+    Path(args.output).write_text(json.dumps(data), encoding="utf-8")
+    print(f"Wrote {len(data['vectors'])} query vectors ({data['embedding'].get('model')}) to {args.output}.")
+    print("Keep this file with the private eval set: embeddings can reveal query content.")
+    return 0
+
+
 def cmd_pool(args) -> int:
     core = load_core()
     suite = ev.pool_candidates(core, load_suite(args), args.strategy or ["dense"], args.depth)
@@ -84,10 +100,14 @@ def cmd_run(args) -> int:
     if 10 not in ks:
         print("note: primary metric span_coverage@10 needs k=10; adding it.", file=sys.stderr)
         ks = sorted({*ks, 10})
+    vectors, vectors_sha = (ev.load_query_vectors(args.query_vectors, suite, core.pdf_generation)
+                            if args.query_vectors else (None, None))
     for strategy in args.strategy or ["dense"]:
         record = ev.run_strategy(core, suite, strategy, ks=ks, repetitions=args.repetitions,
                                  packet_budget=args.packet_budget or None,
                                  allow_unscorable=args.allow_unscorable,
+                                 query_vectors=vectors, query_vectors_sha256=vectors_sha,
+                                 diagnostic_depth=args.diagnostic_depth,
                                  progress=(lambda m: print(m, file=sys.stderr)) if args.verbose else None)
         if args.label:
             record["label"] = args.label
@@ -131,6 +151,11 @@ def main(argv=None) -> int:
         p.add_argument("--suite-id", help="name recorded in the ledger (default: file stem)")
         p.add_argument("--official", metavar="SUITE_ID", help="use benchmarks/ official ledgers, e.g. s5")
 
+    embed = sub.add_parser("embed-queries", help="compute query vectors without loading the index")
+    suite_args(embed)
+    embed.add_argument("--output", required=True, help="vector file; keep it outside the repository")
+    embed.set_defaults(func=cmd_embed_queries)
+
     pool = sub.add_parser("pool", help="attach pooled candidates for judging")
     suite_args(pool)
     pool.add_argument("--strategy", action="append", choices=sorted(ev.STRATEGIES))
@@ -159,6 +184,10 @@ def main(argv=None) -> int:
     run.add_argument("--allow-unscorable", action="store_true",
                      help="score despite gold spans the active generation cannot score (excluded; "
                           "such runs pair only with runs that scored the same evidence)")
+    run.add_argument("--query-vectors", help="precomputed vectors from embed-queries (latency becomes "
+                                             "retrieval-only)")
+    run.add_argument("--diagnostic-depth", type=int,
+                     help="also record where each gold span first appears within this many hits, e.g. 100")
     run.add_argument("--no-ledger", action="store_true")
     run.add_argument("--verbose", action="store_true")
     run.set_defaults(func=cmd_run)

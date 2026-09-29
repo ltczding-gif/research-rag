@@ -41,6 +41,11 @@ include breaking changes.
   `--no-keyword-index` to skip it. `scripts/build_lexical_index.py` adds it to
   an existing generation without re-embedding. The retrieval evaluation adds
   the `lexical` and `hybrid` strategies.
+- Retrieval evaluation: `embed-queries` and `run --query-vectors` score with
+  precomputed query vectors bound to the eval set and embedding contract, for
+  machines that cannot hold the embedding model and the index together.
+  `run --diagnostic-depth N` records where each gold span first appears, to
+  separate ranking misses from recall misses.
 - `CONTRIBUTING.md`, `SECURITY.md`, this changelog, issue templates and a pull
   request template.
 

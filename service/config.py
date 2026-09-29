@@ -145,7 +145,7 @@ OPENAI_EMBED_MODEL: str = os.environ.get(
 # `auto`:            hybrid when the keyword index exists, otherwise dense.
 # Change the default only after docs/RETRIEVAL_EVAL.md measurements justify it.
 RETRIEVAL_MODE: str = os.environ.get("LOCALRAG_RETRIEVAL_MODE", "dense").strip().lower() or "dense"
-# Candidates fetched from each retriever before fusion (at least 4 x n).
+# Candidates fetched from each retriever before fusion (at least n).
 HYBRID_CANDIDATES: int = int(os.environ.get("LOCALRAG_HYBRID_CANDIDATES", "50"))
 
 

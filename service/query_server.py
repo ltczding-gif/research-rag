@@ -17,6 +17,7 @@ ChromaDB connection (useful for tests).
 from flask import Flask, request, jsonify
 import chromadb
 import json
+import math
 import os
 import re
 import yaml
@@ -167,6 +168,15 @@ def _resolve_retrieval_mode(requested):
     return mode, None
 
 
+def _candidate_depth(n):
+    """Per-retriever candidates before fusion; independent of n up to the limit.
+
+    Keeping the pool fixed makes top-k identical whether a caller asks for 10
+    or 20 results, so evaluation at depth 20 measures what agents receive.
+    """
+    return max(HYBRID_CANDIDATES, n)
+
+
 def _candidate_hits(mode, effective_query, n, where, filters, query_args):
     """Ranked (id, document, metadata, distance, retrieval) tuples for one mode.
 
@@ -180,7 +190,7 @@ def _candidate_hits(mode, effective_query, n, where, filters, query_args):
         return [(hit_id, doc, meta, distance, {"mode": "dense", "dense_rank": rank})
                 for rank, (hit_id, doc, meta, distance) in enumerate(zip(
                     results["ids"][0], results["documents"][0], results["metadatas"][0], distances[0]), 1)]
-    depth = max(HYBRID_CANDIDATES, 4 * n)
+    depth = _candidate_depth(n)
     rankings, dense_rows = {}, {}
     if mode == "hybrid":
         results = pdf_col.query(**query_args, n_results=depth, where=where)
@@ -870,9 +880,14 @@ def _same_legacy_source(hit: dict, neighbor: dict) -> bool:
 def search_papers_chroma(
     query, n=3, zotero_parent_key=None, paper_group=None, pdf_filename=None,
     second_query=None, include_context=False, zotero_attachment_key=None,
-    source_role=None, source_type=None, retrieval_mode=None,
+    source_role=None, source_type=None, retrieval_mode=None, query_vector=None,
 ):
-    """Search one pinned generation; all supplied source filters are ANDed."""
+    """Search one pinned generation; all supplied source filters are ANDed.
+
+    query_vector (core only, used by evaluation) supplies a precomputed query
+    embedding for the canonical generation instead of calling the provider.
+    The caller must have verified it against the generation's embedding contract.
+    """
     if not chroma_ready or pdf_col is None:
         return {"error": "ChromaDB not initialized"}, 503
     mode, mode_error = _resolve_retrieval_mode(retrieval_mode)
@@ -905,6 +920,14 @@ def search_papers_chroma(
         embedding_started = perf_counter()
         if mode == "lexical":
             query_args = {}
+        elif query_vector is not None:
+            if not pdf_generation:
+                raise ValueError("Precomputed query vectors require a canonical papers generation")
+            dimensions = pdf_generation.manifest["contract"]["embedding"]["dimensions"]
+            vector = [float(value) for value in query_vector]
+            if len(vector) != dimensions or not all(math.isfinite(value) for value in vector):
+                raise ValueError("Precomputed query vector does not match the generation's dimensions")
+            query_args = {"query_embeddings": [vector]}
         elif pdf_generation:
             query_args = {"query_embeddings": [_query_vector(effective_query, pdf_generation)]}
         else:
@@ -983,7 +1006,7 @@ def search_papers():
 
 def prepare_answer_payload(query, n=10, budget_codepoints=8000, zotero_parent_key=None,
                            second_query=None, zotero_attachment_key=None, source_role=None,
-                           pdf_filename=None, retrieval_mode=None):
+                           pdf_filename=None, retrieval_mode=None, query_vector=None):
     """Search then prepare bounded canonical evidence for the host's answer model."""
     if not isinstance(query, str) or not query.strip():
         return {'error': 'query must be a nonempty string'}, 400
@@ -993,7 +1016,7 @@ def prepare_answer_payload(query, n=10, budget_codepoints=8000, zotero_parent_ke
         return {'error': 'budget_codepoints must be an integer between 256 and 8000'}, 400
     payload, status = search_papers_chroma(query, n=n, zotero_parent_key=zotero_parent_key,
         second_query=second_query, zotero_attachment_key=zotero_attachment_key, source_role=source_role,
-        pdf_filename=pdf_filename, retrieval_mode=retrieval_mode)
+        pdf_filename=pdf_filename, retrieval_mode=retrieval_mode, query_vector=query_vector)
     if status != 200:
         return payload, status
     try:
