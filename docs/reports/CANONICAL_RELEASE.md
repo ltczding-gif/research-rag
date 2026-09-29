@@ -105,8 +105,8 @@ the declared limits. Recovery made no new embedding requests. Both failed
 generations remain sealed and retained. The configured-client results below
 use this recovered generation.
 
-See [deployment and recovery](LOCAL_DEPLOYMENT.md) and
-[embedding build sessions](development/EMBEDDING_BUILD_SESSIONS.md).
+See [deployment and recovery](../LOCAL_DEPLOYMENT.md) and
+[embedding build sessions](../development/EMBEDDING_BUILD_SESSIONS.md).
 
 ## Real MCP diagnostic results
 

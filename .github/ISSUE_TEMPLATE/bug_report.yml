@@ -1,0 +1,59 @@
+name: Bug report
+description: Something does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not paste private paper content, note text,
+        Zotero keys, local paths you consider sensitive, or API keys.
+        Security problems belong in a private report — see SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Commands or agent prompts, in order. Mention whether `scripts/demo.py` passes.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Setup / installation
+        - Note generation (scanner / backends)
+        - Indexing (build_indexes)
+        - Retrieval / MCP tools
+        - Skills / agent workflow
+        - Domain pack
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, MCP client (Claude Code, Codex, …) and version.
+      placeholder: macOS 15, Python 3.11, Claude Code 2.x
+    validations:
+      required: true
+  - type: input
+    id: providers
+    attributes:
+      label: Backends
+      description: Note-generation backend and embedding provider/model.
+      placeholder: subagent + fastembed (default)
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Output of `scanner/doctor.py` and, if relevant, the `index_status` MCP tool. Redact paths as needed.
+      render: text

@@ -39,10 +39,21 @@ def test_marketplace_install_is_skills_only():
     plugin = marketplace["plugins"][0]
 
     assert plugin["strict"] is False
-    assert len(plugin["skills"]) == 8
     assert "mcpServers" not in plugin
-    for skill_path in plugin["skills"]:
+    published = sorted(plugin["skills"])
+    assert published == sorted(
+        f"./skills/{child.name}"
+        for child in (REPO_ROOT / "skills").iterdir()
+        if child.is_dir()
+    )
+    for skill_path in published:
         assert (REPO_ROOT / skill_path / "SKILL.md").is_file()
+
+
+def test_published_skill_names_match_directories():
+    for skill_md in (REPO_ROOT / "skills").glob("*/SKILL.md"):
+        header = skill_md.read_text(encoding="utf-8").split("---")[1]
+        assert f"name: {skill_md.parent.name}" in header
 
 
 def test_local_codex_state_is_ignored():
@@ -59,11 +70,11 @@ def test_readmes_link_to_each_other():
     assert "[English](README.md)" in chinese
 
 
-def test_published_skills_describe_current_embedding_defaults():
+def test_contrib_skills_describe_current_embedding_defaults():
     skill_paths = [
-        REPO_ROOT / "skills" / "rag-engineer" / "SKILL.md",
-        REPO_ROOT / "skills" / "embedding-strategies" / "SKILL.md",
-        REPO_ROOT / "skills" / "vector-database-engineer" / "SKILL.md",
+        REPO_ROOT / "contrib" / "skills" / "rag-engineer" / "SKILL.md",
+        REPO_ROOT / "contrib" / "skills" / "embedding-strategies" / "SKILL.md",
+        REPO_ROOT / "contrib" / "skills" / "vector-database-engineer" / "SKILL.md",
     ]
 
     for path in skill_paths:

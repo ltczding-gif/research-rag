@@ -87,6 +87,22 @@ It is not a Zotero replacement, a hosted SaaS, or an automatic truth engine. It 
 a transparent pipeline for turning a literature library into durable, retrievable
 research context.
 
+## How it compares
+
+`research-rag` is one layer of a research stack, and it can sit next to the
+tools below rather than replace them.
+
+| Tool family | Their focus | Where research-rag differs |
+|---|---|---|
+| [PaperQA2](https://github.com/Future-House/paper-qa) | Agentic question answering over scientific PDFs with cited answers | Persists reviewable, schema-driven Markdown notes; keeps main text and SI as one unit; leaves answering to your MCP client and checks its citations against source coordinates |
+| Zotero MCP servers (for example [zotero-mcp](https://github.com/54yyyu/zotero-mcp)) | Live access to Zotero items, full text, annotations and semantic search; some can also edit the library | Builds derived knowledge (structured notes) and a versioned, verified evidence index with main text and SI grouped per paper |
+| Document RAG platforms (RAGFlow, Kotaemon, AnythingLLM) | Web UI, broad document types, general-purpose chat | No UI of its own; research-specific domain packs, SI grouping and source-anchored citations for terminal agents |
+| Hosted assistants (NotebookLM, Elicit) | Zero-setup reading and synthesis | Local and inspectable; notes and indexes stay in your directories; generation and embedding models are your choice |
+
+Choose `research-rag` when the durable artifact matters: a growing library whose
+notes you want to review, version and reuse, and whose answers you want to trace
+back to an exact page and span.
+
 ## What ships today
 
 - Zotero-aware discovery for stored, linked, and absolute-path PDF attachments.
@@ -95,9 +111,8 @@ research context.
 - Three embedding providers: in-process FastEmbed, Ollama, and OpenAI-compatible.
 - Six stdio MCP tools: `search_notes`, `search_papers`, `get_note`, `index_status`, `prepare_answer`, and `check_answer`.
 - [Cited answer workflow](docs/ANSWER_WORKFLOW.md): prepare a deduplicated evidence packet within an 8000-character source budget, answer with your MCP client, then check source citations.
-- [Full-library validation and rollout plan](docs/FULL_LIBRARY_VALIDATION.md): inventory coverage, legacy-context repairs, measured limits, and the canonical migration acceptance gate.
 - [Local deployment and recovery](docs/LOCAL_DEPLOYMENT.md): reconcile sources, build a separate candidate, verify the actual client entrypoint, and retain a rollback target.
-- [Canonical library release](docs/CANONICAL_RELEASE.md): Modules 4–5 source coverage, build recovery, real-client acceptance and measured limitations.
+- [Validation reports](docs/reports/) from the maintainer's ~2,100-paper library: source coverage, build recovery, retrieval evidence coverage and real-client answer review, including what did not pass.
 - Cross-platform guided setup, a synthetic demo that needs no Zotero library or LLM API key, health checks, and recovery commands.
 - A ready-to-use catalysis domain pack plus a template for creating new fields.
 
@@ -180,7 +195,7 @@ Close Zotero before scanning. The easiest default route is to open Claude Code o
 Codex in the repository and ask the agent:
 
 ```text
-Use the gemini-literature-processor workflow to process one Zotero paper.
+Use the literature-processor workflow to process one Zotero paper.
 Use the subagent backend, publish the note, build both indexes, then verify index_status.
 ```
 
@@ -274,7 +289,7 @@ flowchart LR
 | `domain-packs/` | Field-specific prompts, schemas, templates, quality rules, routing | `catalysis/`, `_template/` |
 | `service/` | Note/PDF ingestion, embeddings, query core, HTTP compatibility layer, MCP | `build_notes_db.py`, `build_pdf_db.py`, `query_server.py`, `mcp_server.py` |
 | `scripts/` | Cross-platform entry points and verification | `run_mcp_server.py`, `build_indexes.py`, `demo.py` |
-| `skills/` | Agent-facing workflows layered over the six MCP tools | `search-literature`, `gemini-literature-processor`, leaf skills |
+| `skills/` | Agent-facing workflows layered over the six MCP tools | `search-literature`, `literature-processor`, leaf skills |
 
 ## Detailed generation flow
 
@@ -325,7 +340,7 @@ stateDiagram-v2
 Run directories are keyed by the paper hash so output from one paper cannot be resumed
 into another. Empty, partial, or schema-invalid JSON is quarantined and redispatched.
 The exact host contract is in
-[`skills/gemini-literature-processor/references/subagent-host-contract.md`](skills/gemini-literature-processor/references/subagent-host-contract.md).
+[`skills/literature-processor/references/subagent-host-contract.md`](skills/literature-processor/references/subagent-host-contract.md).
 
 ## Indexing and retrieval flow
 
@@ -358,6 +373,8 @@ optional HTTP compatibility layer over the same query functions.
 | `search_notes` | Semantic discovery over note sections; best section per note |
 | `search_papers` | Verified page/span evidence; AND filters for parent, attachment, main/SI and filename |
 | `get_note` | Fetch a complete indexed note by filename or Zotero parent key |
+| `prepare_answer` | Build a deduplicated, budgeted evidence packet for a cited answer |
+| `check_answer` | Check a structured answer's citations and quotes against the packet's source text |
 | `index_status` | Check active generation, latest build attempt, counts and embedding contract |
 
 The typical retrieval strategy is broad-to-narrow: discover relevant notes, extract
@@ -485,7 +502,14 @@ the runtime dependencies.
 /plugin install research-rag@research-rag
 ```
 
-You can also copy `skills/*` into your agent's skill directory during the walkthrough.
+The plugin publishes four skills: `search-literature`, `search-notes`, `search-papers`
+and `literature-processor`. You can also copy `skills/*` into your agent's skill
+directory during the walkthrough. Contributor-oriented reference skills live in
+[`contrib/skills/`](contrib/skills/) and are not installed by default.
+
+> Upgrading from an earlier checkout: the note-generation skill was renamed from
+> `gemini-literature-processor` to `literature-processor`. Remove the old copy
+> from `~/.claude/skills/` or `~/.agents/skills/` to avoid duplicate triggers.
 
 ## Domain packs
 
@@ -510,25 +534,55 @@ python -m pytest tests/test_entrypoint_smoke.py tests/test_mcp_server.py -q
 CI covers Windows, macOS, and Linux on supported Python versions. The synthetic demo
 is the user-facing end-to-end retrieval check; real cloud calls remain opt-in.
 
-Current contracts and guides:
+Current contracts and guides (full index in [`docs/README.md`](docs/README.md)):
 
 - [`docs/Domain_Pack_Authoring_Guide.md`](docs/Domain_Pack_Authoring_Guide.md)
-- [`skills/gemini-literature-processor/references/subagent-host-contract.md`](skills/gemini-literature-processor/references/subagent-host-contract.md)
+- [`skills/literature-processor/references/subagent-host-contract.md`](skills/literature-processor/references/subagent-host-contract.md)
 - [`scanner/references/workflow-runbook.md`](scanner/references/workflow-runbook.md)
 - [`tests/README.md`](tests/README.md)
 
-Files under `docs/audits/`, `docs/investigation/`, and `docs/plans/`, plus older
-architecture/status snapshots, are historical evidence. They are not the current
+Files under [`docs/archive/`](docs/archive/) (audits, investigations, plans and older
+architecture/status snapshots) are historical evidence. They are not the current
 installation contract; this README and the live code take precedence.
+
+## Contributing
+
+Bug reports, domain packs and retrieval-quality improvements are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the development setup and pull-request
+checklist, [CHANGELOG.md](CHANGELOG.md) for release notes, and
+[SECURITY.md](SECURITY.md) for reporting vulnerabilities privately.
 
 ## Known limitations
 
+- Retrieval is dense-vector only: there is no keyword/BM25 fusion or reranking yet, so
+  exact formulas, numeric values and abbreviations can be missed. On the maintainer's
+  library, top-10 retrieval covered 17 of 31 labelled evidence spans
+  ([report](docs/reports/CANONICAL_RELEASE.md#real-mcp-diagnostic-results)).
+- The default FastEmbed model (`paraphrase-multilingual-MiniLM-L12-v2`, 128-token window)
+  is chosen for zero-setup, not quality. The measured results above used Ollama
+  `qwen3-embedding:4b`.
+- PDF passages come from `pdfplumber` page text; tables, equations and figure content are
+  not preserved as structure.
+- The search skills are written primarily in Chinese; the MCP tools are language-neutral.
+- The public benchmark ledgers are still empty pending human review; see
+  [`benchmarks/README.md`](benchmarks/README.md).
 - There is no redistributable real-paper corpus; `scripts/demo.py` uses synthetic notes.
 - The notes builder scans only top-level files matching the configured suffix.
 - The OpenAI-compatible generation backend sends extracted text, so figures and layout are lost.
 - The default subagent path depends on a capable terminal-agent host and may consume that provider's quota.
 - First-use FastEmbed model download requires internet access.
 - Generated scientific claims still need human verification against the source PDFs.
+
+## Roadmap
+
+Planned directions, in priority order:
+
+1. **Retrieval quality**: hybrid keyword + vector retrieval, cross-encoder reranking and
+   a stronger default embedding model, each measured on the benchmark suite.
+2. **Parsing quality**: optional layout-aware PDF extractors that keep tables, equations
+   and figure captions while reusing the same page/span evidence coordinates.
+3. **Packaging**: an installable package with a one-line MCP server launch.
+4. **Domain depth**: more domain packs and structured cross-paper data extraction.
 
 ## License
 

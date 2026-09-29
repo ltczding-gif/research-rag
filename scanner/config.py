@@ -101,7 +101,7 @@ LOCALRAG_RAG_PYTHON: str = os.environ.get("LOCALRAG_RAG_PYTHON", "python3")
 
 CANONICAL_SKILL_ROOT: Path = _env_path(
     "GEMINI_LITERATURE_SKILL_ROOT",
-    REPO_ROOT / "skills" / "gemini-literature-processor",
+    REPO_ROOT / "skills" / "literature-processor",
 )
 PIPELINE_REPORT_ROOT: Path = _env_path(
     "GEMINI_INCREMENTAL_ALIGNMENT_REPORT_ROOT",

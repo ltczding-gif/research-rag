@@ -161,7 +161,7 @@ Stage B (Note Generator) writes the structured note using the chosen template.
 
 Why two stages: classification needs only first-3-pages context; generation
 needs the full document. Splitting saves ~45% input tokens per paper. See
-`docs/Project_Architecture_Blueprint.md` ADR-1.
+`docs/archive/Project_Architecture_Blueprint.md` (historical) ADR-1.
 
 ### 2. Evidence citation contract
 
@@ -583,8 +583,9 @@ universal-vs-domain boundaries get sharper with more examples.
 
 - `domain-packs/catalysis/` — full reference pack (browse the source)
 - `domain-packs/_template/README.md` — what each file does in one page
-- `docs/Project_Architecture_Blueprint.md` — system architecture if you
-  need to understand how the pack is loaded
+- `README.md#architecture-at-a-glance` — current system architecture;
+  `docs/archive/Project_Architecture_Blueprint.md` is an older, more
+  detailed snapshot of how packs are loaded
 - `prompts/_universal_rules.txt` — the field-invariant baseline
 - `scanner/bootstrap_domain_pack.py` — the CLI source if you want to
   understand exactly what gets patched

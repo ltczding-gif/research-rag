@@ -79,6 +79,20 @@ Zotero 仍然是只读的源文献库；Markdown 成为可检查、可迁移的�
 它不是 Zotero 的替代品，不是托管 SaaS，也不是自动真理机器。它是一套透明的流水线，
 负责把文献库转化为可长期保存、可检索、可回到原文核验的研究上下文。
 
+## 与同类工具的区别
+
+`research-rag` 是研究工具链中的一层，可以与下列工具并存，而不是替代它们。
+
+| 工具类型 | 它们的侧重 | research-rag 的不同 |
+|---|---|---|
+| [PaperQA2](https://github.com/Future-House/paper-qa) | 面向科学 PDF 的 agentic 问答，给出带引用的回答 | 沉淀可审阅、按 schema 结构化的 Markdown 笔记；主文与 SI 作为一个单元；回答交给你的 MCP 客户端，并按源坐标校验其引用 |
+| Zotero MCP 服务（如 [zotero-mcp](https://github.com/54yyyu/zotero-mcp)） | 实时访问 Zotero 条目、全文、批注与语义检索，部分支持编辑文献库 | 生成派生知识（结构化笔记）和带版本、可校验的证据索引，并按论文把主文与 SI 归组 |
+| 文档 RAG 平台（RAGFlow、Kotaemon、AnythingLLM） | Web UI、广泛的文档类型、通用对话 | 不自带 UI；面向科研的 Domain Pack、SI 归组，以及为终端 Agent 提供锚定原文的引用 |
+| 托管助手（NotebookLM、Elicit） | 零配置阅读与综述 | 本地、可检查；笔记和索引保存在你的目录；生成与嵌入模型由你选择 |
+
+当你在意的是长期产物——一座持续增长、笔记需要审阅、版本化和复用，答案需要追溯到具体页码和
+区间的文献库——就适合使用 `research-rag`。
+
 ## 当前已经交付
 
 - 识别 Zotero storage、linked-file 与绝对路径 PDF，并按父条目组织文献。
@@ -87,6 +101,8 @@ Zotero 仍然是只读的源文献库；Markdown 成为可检查、可迁移的�
 - 三种嵌入提供方：进程内 FastEmbed、Ollama 和 OpenAI-compatible。
 - 六个 stdio MCP 工具：`search_notes`、`search_papers`、`get_note`、`index_status`、`prepare_answer` 和 `check_answer`。
 - [带引用回答流程](docs/ANSWER_WORKFLOW.md)：将原文按源坐标去重并控制在 8000 字符预算内，由 MCP 客户端生成回答，再校验引用。
+- [本地部署与恢复](docs/LOCAL_DEPLOYMENT.md)：核对源文件、构建独立候选版本、验证真实客户端入口，并保留回滚目标。
+- [验证报告](docs/reports/)：维护者约 2,100 篇文献库上的实测结果，包括源覆盖、构建恢复、检索证据覆盖与真实客户端回答审查，也如实记录未通过的部分。
 - 跨平台引导式安装、无需 Zotero 和 LLM API key 的合成演示、健康检查与恢复命令。
 - 一个可直接使用的催化领域 Domain Pack，以及创建新领域包的模板。
 
@@ -165,7 +181,7 @@ Windows PowerShell：
 然后告诉 Agent：
 
 ```text
-使用 gemini-literature-processor 工作流处理一篇 Zotero 论文。
+使用 literature-processor 工作流处理一篇 Zotero 论文。
 使用 subagent 后端，发布笔记，构建两个索引，然后验证 index_status。
 ```
 
@@ -258,7 +274,7 @@ flowchart LR
 | `domain-packs/` | 领域提示词、Schema、模板、质量规则与路由 | `catalysis/`、`_template/` |
 | `service/` | 笔记/PDF 入库、嵌入、查询核心、HTTP 兼容层与 MCP | `build_notes_db.py`、`build_pdf_db.py`、`query_server.py`、`mcp_server.py` |
 | `scripts/` | 跨平台入口与验证 | `run_mcp_server.py`、`build_indexes.py`、`demo.py` |
-| `skills/` | 构建在六个 MCP 工具之上的 Agent 工作流 | `search-literature`、`gemini-literature-processor` 及叶级 skills |
+| `skills/` | 构建在六个 MCP 工具之上的 Agent 工作流 | `search-literature`、`literature-processor` 及叶级 skills |
 
 ## 详细生成流程
 
@@ -304,7 +320,7 @@ stateDiagram-v2
 
 Run 目录以论文哈希为 key，因此一篇论文的输出不会被错误地恢复到另一篇。空 JSON、
 不完整 JSON 或未通过 Schema 校验的 JSON 会被隔离并重新派发。完整宿主合约位于
-[`skills/gemini-literature-processor/references/subagent-host-contract.md`](skills/gemini-literature-processor/references/subagent-host-contract.md)。
+[`skills/literature-processor/references/subagent-host-contract.md`](skills/literature-processor/references/subagent-host-contract.md)。
 
 ## 索引与检索流程
 
@@ -330,6 +346,8 @@ Run 目录以论文哈希为 key，因此一篇论文的输出不会被错误地
 | `search_notes` | 按笔记分节检索，默认每篇返回最佳片段 |
 | `search_papers` | 返回验证过的页码/span；parent、附件、MAIN/SI、文件名组合过滤 |
 | `get_note` | 根据文件名或 Zotero parent key 取得完整索引笔记 |
+| `prepare_answer` | 为带引用回答构建去重、控制预算的证据包 |
+| `check_answer` | 按证据包原文校验结构化回答中的引用与引文 |
 | `index_status` | 分别检查 active 版本、最近构建尝试、数量与嵌入合同 |
 
 典型检索策略是先宽后窄：先发现相关笔记，提取它们的 `zotero_parent_key`，再搜索对应的
@@ -451,7 +469,13 @@ Plugin 只安装 Agent 工作流层，不会安装 Python、ChromaDB 或运行�
 /plugin install research-rag@research-rag
 ```
 
-也可以在配置向导中把 `skills/*` 复制到 Agent 的 skill 目录。
+插件发布四个 skill：`search-literature`、`search-notes`、`search-papers` 和
+`literature-processor`。也可以在配置向导中把 `skills/*` 复制到 Agent 的 skill 目录。
+面向贡献者的参考 skill 位于 [`contrib/skills/`](contrib/skills/)，默认不会安装。
+
+> 从旧版本升级：笔记生成 skill 已由 `gemini-literature-processor` 更名为
+> `literature-processor`。请删除 `~/.claude/skills/` 或 `~/.agents/skills/` 中的旧副本，
+> 以免重复触发。
 
 ## Domain Pack
 
@@ -476,24 +500,48 @@ python -m pytest tests/test_entrypoint_smoke.py tests/test_mcp_server.py -q
 CI 在支持的 Python 版本上覆盖 Windows、macOS 和 Linux。合成演示是面向用户的端到端
 检索检查；真实云端调用始终需要用户主动选择。
 
-当前合约与指南：
+当前合约与指南（完整索引见 [`docs/README.md`](docs/README.md)）：
 
 - [`docs/Domain_Pack_Authoring_Guide.md`](docs/Domain_Pack_Authoring_Guide.md)
-- [`skills/gemini-literature-processor/references/subagent-host-contract.md`](skills/gemini-literature-processor/references/subagent-host-contract.md)
+- [`skills/literature-processor/references/subagent-host-contract.md`](skills/literature-processor/references/subagent-host-contract.md)
 - [`scanner/references/workflow-runbook.md`](scanner/references/workflow-runbook.md)
 - [`tests/README.md`](tests/README.md)
 
-`docs/audits/`、`docs/investigation/`、`docs/plans/` 以及更早的架构/状态快照属于历史证据，
+[`docs/archive/`](docs/archive/) 中的审计、调查、计划以及更早的架构/状态快照属于历史证据，
 不是当前安装合约；应以本 README 和现行代码为准。
+
+## 参与贡献
+
+欢迎提交问题报告、Domain Pack 和检索质量改进。开发环境与 PR 检查清单见
+[CONTRIBUTING.md](CONTRIBUTING.md)，版本说明见 [CHANGELOG.md](CHANGELOG.md)，
+安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
 ## 已知限制
 
+- 检索目前只使用稠密向量：尚无关键词/BM25 融合与重排，因此可能漏掉精确的化学式、数值和缩写。
+  在维护者的文献库上，top-10 检索覆盖了 31 个标注证据区间中的 17 个
+  （[报告](docs/reports/CANONICAL_RELEASE.md#real-mcp-diagnostic-results)）。
+- 默认 FastEmbed 模型（`paraphrase-multilingual-MiniLM-L12-v2`，128 token 窗口）是为零配置
+  而选，并非为质量而选；上述实测使用的是 Ollama `qwen3-embedding:4b`。
+- PDF 段落来自 `pdfplumber` 的页面文本；表格、公式和图片内容不会作为结构保留。
+- 检索 skill 主要以中文编写；MCP 工具本身与语言无关。
+- 公开 benchmark 的标注账本仍为空，等待人工审阅；见 [`benchmarks/README.md`](benchmarks/README.md)。
 - 仓库没有可再分发的真实论文语料；`scripts/demo.py` 使用合成笔记。
 - 笔记构建器只扫描顶层目录中匹配指定后缀的文件。
 - OpenAI-compatible 生成后端发送本地提取的文本，因此会丢失图片和版面信息。
 - 默认 subagent 路径依赖能力足够的终端 Agent 宿主，并可能消耗该提供方的配额。
 - FastEmbed 首次下载模型时需要联网。
 - 生成的科学结论仍需人工对照源 PDF 核验。
+
+## 路线图
+
+按优先级排列的计划方向：
+
+1. **检索质量**：关键词 + 向量混合检索、cross-encoder 重排和更强的默认嵌入模型，每一步都在
+   benchmark 上度量。
+2. **解析质量**：可选的版面感知 PDF 解析器，保留表格、公式和图注，并复用同一套页码/区间证据坐标。
+3. **打包**：可安装的 Python 包，一行命令启动 MCP 服务。
+4. **领域深度**：更多 Domain Pack，以及跨论文的结构化数据抽取。
 
 ## 许可证
 

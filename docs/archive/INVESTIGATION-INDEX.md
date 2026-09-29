@@ -60,7 +60,7 @@ $REPO_ROOT/                       ← staging 仓库的根
 原系统有一个 `/write_to_feishu` 端点和飞书 OAuth + 周文档登记机制，且原始
 `.localrag/` 下 12 个开发实验脚本明文带 app secret。**本仓库已把整段飞书功能从代码、
 SKILL、配置、文档里删除**——详见 `PACKAGING-PLAN.md` 的 "✅ 飞书功能已删除" 段，以及
-[STATUS.md](../STATUS.md) 的 Phase 6。
+[STATUS.md](STATUS-2026-05-staging.md) 的 Phase 6。
 
 `investigation/03-query-server.md`、`04-skills-layer.md`、`05-packaging-portability.md`
 里关于 Feishu 的描述是**对原系统**的审计记录，作为历史证据保留不动；它们不反映

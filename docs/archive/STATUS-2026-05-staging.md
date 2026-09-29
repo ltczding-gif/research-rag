@@ -138,7 +138,7 @@ as historical audit artifacts of the original system.
 
 ## What's still rough
 
-The systematic evaluation lives in [docs/POLISH-EVALUATION.md](docs/POLISH-EVALUATION.md).
+The systematic evaluation lives in [docs/POLISH-EVALUATION.md](POLISH-EVALUATION.md).
 A 6-commit T1+T2 batch landed on 2026-05-08; below is the post-batch state.
 
 ### ✅ Resolved in the T1+T2 batch (2026-05-08)
