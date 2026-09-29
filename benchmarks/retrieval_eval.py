@@ -282,14 +282,22 @@ def load_official_suite(benchmark_root: str | Path, suite_id: str) -> Suite:
 # --------------------------------------------------------------------------
 
 
-def load_pages(reader) -> dict[tuple[str, int], dict]:
+def load_pages(reader, wanted: set[tuple[str, int]] | None = None) -> dict[tuple[str, int], dict]:
     """Canonical pages keyed by (file_hash, pdf_page_index)."""
     path = reader.artifact(reader.manifest["artifacts"]["pages"])
     pages = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
+    if wanted is not None and not wanted:
+        return pages
+    with path.open(encoding="utf-8") as source:
+        for line in source:
+            if not line.strip():
+                continue
             page = json.loads(line)
-            pages[(page["file_hash"], page["pdf_page_index"])] = page
+            key = (page["file_hash"], page["pdf_page_index"])
+            if wanted is None or key in wanted:
+                pages[key] = page
+                if wanted is not None and len(pages) == len(wanted):
+                    break
     return pages
 
 
@@ -558,9 +566,11 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
     ks = tuple(sorted(set(ks)))
     depth = max(ks)
     params = STRATEGIES[strategy]
-    pages = load_pages(core.pdf_generation)
     if not suite.queries:
         raise SuiteError(f"Eval set {suite.suite_id!r} has no queries")
+    wanted = {(span.file_hash, span.pdf_page_index)
+              for query in suite.queries for span in query.scored_evidence}
+    pages = load_pages(core.pdf_generation, wanted)
     unscorable = check_scorable(suite, pages)
     unscorable_ids = {(item["query_id"], item["evidence_id"]) for item in unscorable}
     if unscorable and not allow_unscorable:

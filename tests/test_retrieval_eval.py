@@ -210,6 +210,25 @@ def test_run_scores_a_real_generation_and_ledger_holds_no_private_text(core, tmp
     assert ev.read_ledger(ledger)[0]["run_id"] == record["run_id"]
 
 
+def test_run_streams_pages_and_keeps_only_gold_pages(core, tmp_path, monkeypatch):
+    span = _span(core, "ATTA", 1, "retains 95% activity", "e1")
+    key = (span["file_hash"], span["pdf_page_index"])
+    assert set(ev.load_pages(core.pdf_generation, {key})) == {key}
+
+    original = Path.read_text
+
+    def no_whole_page_read(path, *args, **kwargs):
+        if path.name == "pages.jsonl":
+            raise AssertionError("canonical pages must be streamed")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", no_whole_page_read)
+    suite = ev.load_suite(_write_suite(tmp_path / "s.jsonl", [
+        {"query_id": "q1", "text": "cobalt durability", "evidence": [span]}]))
+    record = ev.run_strategy(core, suite, "dense", ks=(10,), packet_budget=None)
+    assert record["metrics"]["overall"]["span_coverage@10"] == 1.0
+
+
 def test_unscorable_gold_fails_the_run_unless_explicitly_allowed(core, tmp_path):
     stale = _span(core, "ATTA", 1, "retains 95% activity", "e1")
     stale["page_text_hash"] = "f" * 64
