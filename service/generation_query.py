@@ -92,10 +92,17 @@ class GenerationReader:
             raise ValueError("Indexed chunk text hash mismatch")
         if self._pages is None:
             path = self.artifact(self.manifest["artifacts"]["pages"])
-            pages = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
-            self._pages = {(page["file_id"], page["pdf_page_index"]): page for page in pages}
-            if len(self._pages) != len(pages):
-                raise ValueError("Duplicate canonical page identity")
+            pages = {}
+            with path.open(encoding="utf-8") as source:
+                for line in source:
+                    if not line.strip():
+                        continue
+                    page = json.loads(line)
+                    key = (page["file_id"], page["pdf_page_index"])
+                    if key in pages:
+                        raise ValueError("Duplicate canonical page identity")
+                    pages[key] = page
+            self._pages = pages
         segments = []
         spans = json.loads(metadata["source_spans_json"])
         if not spans:
