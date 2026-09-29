@@ -1,38 +1,41 @@
 ---
-name: gemini-literature-processor
+name: literature-processor
 description: >
-  Use when the user wants to run `/gemini-literature-processor`,
-  batch-scan Zotero PDFs, process one or more paper PDFs with Gemini into
-  structured literature notes, repair `processed_history.txt`, or manage this
-  workflow's Vertex AI / GCS settings. Triggers: 处理新增论文, 批量生成笔记,
-  扫描 Zotero, 生成文献笔记, gemini_analyze_pdf, zotero_batch_scanner,
-  verify_and_clean, backfill_hash, cleanup_gcs_archive.
+  Use when the user wants to run `/literature-processor` (formerly
+  `/gemini-literature-processor`), batch-scan Zotero PDFs, turn one or more
+  paper PDFs (main text + SI) into structured literature notes with any
+  configured backend (default: host sub-agent), repair `processed_history.txt`,
+  or manage backend settings. Triggers: 处理新增论文, 批量生成笔记, 扫描 Zotero,
+  生成文献笔记, gemini_analyze_pdf, zotero_batch_scanner, verify_and_clean,
+  backfill_hash, cleanup_gcs_archive.
 ---
 
-# Gemini Literature Processor
+# Literature Processor
 
 The write/ingest side of the literature workflow:
 
 - batch-scan Zotero for new PDFs and generate structured notes
 - process one main PDF or a main PDF + SI pair
 - repair or audit `processed_history.txt`, `combined_hash`, and ghost/orphan records
-- manage the Vertex AI + GCS PDF-input path for this workflow
+- choose and configure the note-generation backend (sub-agent, Gemini API,
+  Anthropic, OpenAI-compatible, or Vertex AI)
 
 If the user is asking to **search or read** existing literature, prefer
 `search-literature`, `search-notes`, or `search-papers` instead.
 
-Scripts live at `scanner/` in this repo. All paths and credentials are
+Scripts live at `scanner/` in this repo. `gemini_analyze_pdf.py` keeps its
+historical name but works with every backend. All paths and credentials are
 configured via environment variables — see `.env.example` at the repo root.
 
 ## Fast Protocol
 
 1. Confirm Zotero is closed and confirm scope before running anything.
-2. Confirm the required env vars are set (Vertex AI auth, GCS bucket — see below).
+2. Confirm the selected backend and its required env vars (see below; `subagent` needs none).
 3. Pick the correct command family:
    - `scanner/zotero_batch_scanner.py` for full / incremental / recent scans
    - `scanner/gemini_analyze_pdf.py` only when the user explicitly provides a PDF path
 4. Default new notes to canary output before live-vault promotion.
-5. If notes are promoted into `$LOCALRAG_NOTES_DIR`, rebuild notes/PDF DB and restart `query_server.py`.
+5. If notes are promoted into `$LOCALRAG_NOTES_DIR`, run `scripts/build_indexes.py`, then verify with `index_status`.
 6. Report processed, skipped, failed, and current corpus counts.
 
 ## Backend selection
@@ -286,40 +289,23 @@ Candidate-first note rules:
 
 ## Post-Generation Ingest
 
-If notes were promoted into `$LOCALRAG_NOTES_DIR`, run:
+Indexing is explicit. If notes were promoted into `$LOCALRAG_NOTES_DIR`, build
+complete candidate generations for both collections:
 
-### Unix / macOS
 ```bash
-# 1. Ensure Ollama is running
-curl -sf http://localhost:11434/api/tags >/dev/null || (ollama serve &)
-sleep 2
-
-# 2. Rebuild ChromaDB collections
-python service/build_notes_db.py
-python service/build_pdf_db.py
-
-# 3. Restart query server
-pkill -f query_server.py 2>/dev/null
-sleep 1
-python service/query_server.py &
+# Unix / macOS
+.venv/bin/python scripts/build_indexes.py
 ```
 
-### Windows (PowerShell)
 ```powershell
-try {
-    Invoke-RestMethod http://localhost:11434/api/tags -TimeoutSec 3 | Out-Null
-} catch {
-    Start-Process ollama -ArgumentList "serve" -WindowStyle Hidden
-    Start-Sleep 5
-}
-
-python service\build_notes_db.py
-python service\build_pdf_db.py
-
-Get-Process python | Where-Object {$_.CommandLine -like "*query_server*"} | Stop-Process -Force
-Start-Sleep 2
-Start-Process python -ArgumentList "service\query_server.py" -WindowStyle Hidden
+# Windows
+.\.venv\Scripts\python.exe scripts\build_indexes.py
 ```
+
+The MCP server pins the active generation at startup, so start a new agent
+session (or reconnect the `research-rag` MCP server) and call `index_status`
+to confirm `notes_ready` / `papers_ready` and the new counts. If the embedding
+provider is `ollama`, make sure the daemon is running before the build.
 
 Report:
 - processed count

@@ -213,7 +213,7 @@ The protocol above is host-agnostic. Below are the host-specific bindings.
   > strictly conforms to `manifest.response_schema`. Write that JSON (no
   > extra text, no code fences) to `manifest.expected_output_path`. Do not
   > re-invoke any scanner script. Do not touch any other file.
-- **Auto-routing:** the `gemini-literature-processor` skill in this repo
+- **Auto-routing:** the `literature-processor` skill in this repo
   triggers on Chinese phrases like "处理新增论文" / "批量生成笔记".
 
 ### OpenAI Codex CLI

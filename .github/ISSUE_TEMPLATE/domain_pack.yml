@@ -1,0 +1,31 @@
+name: Domain pack proposal
+description: Propose or discuss a domain pack for a new research field.
+labels: ["domain-pack"]
+body:
+  - type: input
+    id: field
+    attributes:
+      label: Field
+      placeholder: e.g. structural biology, battery materials, econometrics
+    validations:
+      required: true
+  - type: textarea
+    id: document-types
+    attributes:
+      label: Document types and note structure
+      description: Which paper types matter (experimental, review, methods, …) and what each note must capture.
+    validations:
+      required: true
+  - type: textarea
+    id: quality-rules
+    attributes:
+      label: Domain quality rules
+      description: Conditions, units, comparators or terminology that notes must preserve to be trustworthy.
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Will you contribute the pack?
+      options:
+        - Yes, I plan to open a pull request
+        - I can review or test it
+        - No, this is a request

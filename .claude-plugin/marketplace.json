@@ -1,6 +1,6 @@
 {
   "name": "research-rag",
-  "description": "Local-first literature RAG for Zotero PDF libraries — domain-pack architecture, 5 LLM backends, and 10 search workflow families.",
+  "description": "Verifiable research evidence layer for Zotero libraries — structured notes, source-anchored PDF evidence and citation checks for MCP agents.",
   "owner": {
     "name": "ltczding-gif"
   },
@@ -8,19 +8,15 @@
     {
       "name": "research-rag",
       "source": "./",
-      "description": "Generate structured research notes from Zotero PDFs and search them through 10 workflow families. The default domain pack is catalysis; bootstrap_domain_pack.py creates packs for other fields.",
+      "description": "Generate structured research notes from Zotero PDFs (main text + SI) and search notes and source passages with verified citations. Includes a catalysis domain pack; bootstrap_domain_pack.py creates packs for other fields.",
       "strict": false,
       "skills": [
         "./skills/search-literature",
         "./skills/search-notes",
         "./skills/search-papers",
-        "./skills/gemini-literature-processor",
-        "./skills/literature-tagging-pipeline",
-        "./skills/rag-engineer",
-        "./skills/vector-database-engineer",
-        "./skills/embedding-strategies"
+        "./skills/literature-processor"
       ],
-      "tags": ["rag", "zotero", "literature", "research", "local-first", "embeddings", "chromadb"],
+      "tags": ["rag", "zotero", "literature", "research", "local-first", "mcp", "citations"],
       "category": "research"
     }
   ]

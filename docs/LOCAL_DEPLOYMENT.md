@@ -75,7 +75,7 @@ with host review; a passed citation check does not establish scientific accuracy
 Keep the corpus, questions, source labels, model, top-k and evidence budget fixed
 when comparing results. A larger corpus changes no-answer judgments. Report
 unmappable gold coordinates as unscorable. See
-[full-library validation](FULL_LIBRARY_VALIDATION.md) and the
+[full-library validation](reports/FULL_LIBRARY_VALIDATION.md) and the
 [answer workflow](ANSWER_WORKFLOW.md).
 
 ## Select the accepted runtime
@@ -129,6 +129,6 @@ observed separately from an SDK transport smoke test.
   exact fresh source/page/text/metadata agreement and full stored-vector
   readback. Preserve the failed seal; do not relabel it complete or invent a
   missing embedding-session receipt. This is an operator recovery, not automatic
-  partial-build resume; see the [recorded release](CANONICAL_RELEASE.md).
+  partial-build resume; see the [recorded release](reports/CANONICAL_RELEASE.md).
 - Clean-install/launcher CI and real-data acceptance have different purposes.
   Both must pass before reporting a release as complete.
