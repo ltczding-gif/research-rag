@@ -148,7 +148,7 @@ def test_eval_strategies_pin_their_mode_regardless_of_server_default(lexical, tm
     assert ("search", "dense") in calls and ("packet", "dense") in calls
     assert records["hybrid"]["metrics"]["overall"]["span_coverage@1"] == 1.0
     assert records["lexical"]["metrics"]["overall"]["span_coverage@1"] == 1.0
-    assert records["hybrid"]["strategy"]["params"] == {"retrieval_mode": "hybrid"}
+    assert records["hybrid"]["strategy"]["params"] == {"retrieval_mode": "hybrid", "rerank": False}
 
 
 def test_sidecar_build_rejects_chunks_whose_text_no_longer_matches(lexical):

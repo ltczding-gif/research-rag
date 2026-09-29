@@ -41,6 +41,8 @@ from config import (
     PORT,
     RETRIEVAL_MODE,
     HYBRID_CANDIDATES,
+    RERANK_CANDIDATES,
+    RERANK_DEFAULT,
 )
 from embedding_client import (
     get_embedding,
@@ -54,6 +56,7 @@ from index_generation import GenerationStore, atomic_write_json, atomic_write_te
 from generation_query import open_generation
 from answer_workflow import prepare_packet, check_answer as check_answer_sources
 from lexical_index import LexicalIndex, LexicalIndexError, reciprocal_rank_fusion
+import reranker
 
 app = Flask(__name__)
 
@@ -147,6 +150,8 @@ def index_state():
         "ready": False, "reason": _index_errors.get("papers_lexical", "no canonical papers generation")}
     lexical["retrieval_mode"] = _resolve_retrieval_mode(None)[0] if result["papers"]["ready"] else None
     result["papers"]["keyword_index"] = lexical
+    result["papers"]["reranker"] = {"configured": reranker.configured(), "provider": reranker.RERANKER,
+                                    "default_on": RERANK_DEFAULT, "candidates": RERANK_CANDIDATES}
     return result
 
 
@@ -175,6 +180,22 @@ def _candidate_depth(n):
     or 20 results, so evaluation at depth 20 measures what agents receive.
     """
     return max(HYBRID_CANDIDATES, n)
+
+
+def _rerank_pool_depth(n):
+    """First-stage candidates reranked; independent of n up to the limit."""
+    return max(RERANK_CANDIDATES, n)
+
+
+def _rerank_hits(question, hits):
+    """Reorder first-stage hits with the configured cross-encoder; never adds hits."""
+    order = reranker.rerank_order(question, [hit[1] for hit in hits])
+    reordered = []
+    for stage1_index, score in order:
+        hit_id, doc, meta, distance, retrieval = hits[stage1_index]
+        reordered.append((hit_id, doc, meta, distance,
+                          {**retrieval, "reranked": True, "stage1_rank": stage1_index + 1, "rerank_score": score}))
+    return reordered
 
 
 def _candidate_hits(mode, effective_query, n, where, filters, query_args, candidate_pool_depth=None):
@@ -881,7 +902,7 @@ def search_papers_chroma(
     query, n=3, zotero_parent_key=None, paper_group=None, pdf_filename=None,
     second_query=None, include_context=False, zotero_attachment_key=None,
     source_role=None, source_type=None, retrieval_mode=None, query_vector=None,
-    candidate_pool_depth=None,
+    candidate_pool_depth=None, rerank=None, rerank_pool_depth=None,
 ):
     """Search one pinned generation; all supplied source filters are ANDed.
 
@@ -890,9 +911,17 @@ def search_papers_chroma(
     The caller must have verified it against the generation's embedding contract.
     candidate_pool_depth (core only) keeps hybrid diagnostics on the same
     candidate pool as the scored search, even when requesting deeper results.
+    rerank reorders the first LOCALRAG_RERANK_CANDIDATES first-stage hits with
+    the configured cross-encoder (None follows LOCALRAG_RERANK_DEFAULT);
+    rerank_pool_depth (core only) pins that pool for diagnostics.
     """
     if not chroma_ready or pdf_col is None:
         return {"error": "ChromaDB not initialized"}, 503
+    use_rerank = RERANK_DEFAULT if rerank is None else rerank
+    if not isinstance(use_rerank, bool):
+        return {"error": "rerank must be true or false"}, 400
+    if use_rerank and not reranker.configured():
+        return {"error": "Reranking requested but no reranker is configured (LOCALRAG_RERANKER)"}, 409
     mode, mode_error = _resolve_retrieval_mode(retrieval_mode)
     if mode_error:
         return {"error": mode_error}, 400 if "must be one of" in mode_error else 409
@@ -940,10 +969,13 @@ def search_papers_chroma(
         retrieval_started = perf_counter()
         lexical_filters = {"zotero_parent_key": zotero_parent_key, "zotero_attachment_key": zotero_attachment_key,
                            "source_role": source_role, "pdf_filename": pdf_filename}
+        stage1_n = (rerank_pool_depth or _rerank_pool_depth(n)) if use_rerank else n
+        candidates = _candidate_hits(mode, effective_query, stage1_n, where, lexical_filters, query_args,
+                                     candidate_pool_depth=candidate_pool_depth)
+        if use_rerank:
+            candidates = _rerank_hits(query, candidates)
         formatted_results = []
-        for hit_id, content, meta, distance, retrieval in _candidate_hits(
-                mode, effective_query, n, where, lexical_filters, query_args,
-                candidate_pool_depth=candidate_pool_depth):
+        for hit_id, content, meta, distance, retrieval in candidates[:n]:
             item = {"id": hit_id, "content": content, "metadata": meta,
                     "distance": distance, "retrieval": retrieval}
             if pdf_generation:
@@ -968,7 +1000,7 @@ def search_papers_chroma(
                                           f"[MATCH]{content}[/MATCH]", neighbor_docs.get(following, "")]))
             formatted_results.append(item)
         payload = {"results": formatted_results, "query": query, "effective_query": effective_query,
-                   "filters": where, "retrieval_mode": mode,
+                   "filters": where, "retrieval_mode": mode, "reranked": use_rerank,
                    "index_mode": "canonical" if pdf_generation else "legacy_unverified"}
         if not pdf_generation:
             payload["timing_note"] = "Legacy embedding is included in retrieval; stages are not separated."
@@ -1004,13 +1036,14 @@ def search_papers():
         source_role=data.get('source_role'),
         source_type=data.get('source_type'),
         retrieval_mode=data.get('retrieval_mode'),
+        rerank=data.get('rerank'),
     )
     return jsonify(payload), status
 
 
 def prepare_answer_payload(query, n=10, budget_codepoints=8000, zotero_parent_key=None,
                            second_query=None, zotero_attachment_key=None, source_role=None,
-                           pdf_filename=None, retrieval_mode=None, query_vector=None):
+                           pdf_filename=None, retrieval_mode=None, query_vector=None, rerank=None):
     """Search then prepare bounded canonical evidence for the host's answer model."""
     if not isinstance(query, str) or not query.strip():
         return {'error': 'query must be a nonempty string'}, 400
@@ -1020,7 +1053,7 @@ def prepare_answer_payload(query, n=10, budget_codepoints=8000, zotero_parent_ke
         return {'error': 'budget_codepoints must be an integer between 256 and 8000'}, 400
     payload, status = search_papers_chroma(query, n=n, zotero_parent_key=zotero_parent_key,
         second_query=second_query, zotero_attachment_key=zotero_attachment_key, source_role=source_role,
-        pdf_filename=pdf_filename, retrieval_mode=retrieval_mode, query_vector=query_vector)
+        pdf_filename=pdf_filename, retrieval_mode=retrieval_mode, query_vector=query_vector, rerank=rerank)
     if status != 200:
         return payload, status
     try:
@@ -1049,7 +1082,8 @@ def prepare_answer_route():
         budget_codepoints=data.get('budget_codepoints', 8000),
         zotero_parent_key=data.get('zotero_parent_key'), second_query=data.get('second_query'),
         zotero_attachment_key=data.get('zotero_attachment_key'), source_role=data.get('source_role'),
-        pdf_filename=data.get('pdf_filename'), retrieval_mode=data.get('retrieval_mode'))
+        pdf_filename=data.get('pdf_filename'), retrieval_mode=data.get('retrieval_mode'),
+        rerank=data.get('rerank'))
     return jsonify(payload), status
 
 

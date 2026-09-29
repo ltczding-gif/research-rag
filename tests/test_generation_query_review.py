@@ -199,6 +199,7 @@ def test_mcp_forwards_canonical_attachment_filters(monkeypatch):
                 "source_role": "si",
                 "pdf_filename": "supplement.pdf",
                 "retrieval_mode": None,
+                "rerank": None,
             }
         ]
     finally:

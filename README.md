@@ -560,7 +560,8 @@ checklist, [CHANGELOG.md](CHANGELOG.md) for release notes, and
   ([report](docs/reports/CANONICAL_RELEASE.md#real-mcp-diagnostic-results)). Hybrid
   keyword + vector retrieval is available as an opt-in (`retrieval_mode=hybrid` or
   `LOCALRAG_RETRIEVAL_MODE`) and becomes the default only once it wins on the
-  [retrieval evaluation](docs/RETRIEVAL_EVAL.md). There is no reranking yet.
+  [retrieval evaluation](docs/RETRIEVAL_EVAL.md). Cross-encoder reranking is likewise
+  opt-in (`LOCALRAG_RERANKER`, `rerank=true`).
 - The default FastEmbed model (`paraphrase-multilingual-MiniLM-L12-v2`, 128-token window)
   is chosen for zero-setup, not quality. The measured results above used Ollama
   `qwen3-embedding:4b`.
