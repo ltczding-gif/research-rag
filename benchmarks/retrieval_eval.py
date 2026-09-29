@@ -36,10 +36,13 @@ FILTER_FIELDS = ("zotero_parent_key", "zotero_attachment_key", "source_role", "p
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA_RE = re.compile(r"^[a-f0-9]{64}$")
 
-# Retrieval strategies: keyword arguments for query_server.search_papers_chroma.
-# New strategies (hybrid, reranking, ...) register here with their parameters.
+# Retrieval strategies: keyword arguments for query_server.search_papers_chroma
+# and prepare_answer_payload. Each pins its mode explicitly so a server-side
+# LOCALRAG_RETRIEVAL_MODE default can never change what a strategy measures.
 STRATEGIES: dict[str, dict[str, Any]] = {
-    "dense": {},
+    "dense": {"retrieval_mode": "dense"},
+    "lexical": {"retrieval_mode": "lexical"},
+    "hybrid": {"retrieval_mode": "hybrid"},
 }
 
 
@@ -462,8 +465,76 @@ def evidence_fingerprint(suite: Suite, excluded: set[tuple[str, str]]) -> str:
     return hashlib.sha256(json.dumps(items).encode("utf-8")).hexdigest()
 
 
+VECTORS_SCHEMA = "retrieval-eval-query-vectors-v1"
+
+
+def effective_text(query: EvalQuery) -> str:
+    """The text the server embeds: second_query when given, else the question."""
+    return query.second_query or query.text
+
+
+def embed_queries(suite: Suite, embed: Callable[[str], list], contract: Callable[..., dict]) -> dict:
+    """Embed every query once, bound to the provider's embedding contract.
+
+    Lets a machine that cannot hold the embedding model and the index at the
+    same time compute query vectors first, then score retrieval separately.
+    """
+    vectors = {}
+    for query in suite.queries:
+        text = effective_text(query)
+        vector = [float(value) for value in embed(text)]
+        if not vector or not all(math.isfinite(value) for value in vector):
+            raise SuiteError(f"{query.query_id}: embedding provider returned an invalid vector")
+        vectors[query.query_id] = {"text_sha256": sha256_text(text), "vector": vector}
+    dimensions = {len(item["vector"]) for item in vectors.values()}
+    if len(dimensions) != 1:
+        raise SuiteError("Query vectors have inconsistent dimensions")
+    return {"schema": VECTORS_SCHEMA, "suite_id": suite.suite_id, "suite_sha256": suite.sha256,
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "embedding": contract(dimensions=dimensions.pop()), "vectors": vectors}
+
+
+def load_query_vectors(path: str | Path, suite: Suite, reader) -> tuple[dict[str, list], str]:
+    """Validate precomputed vectors against the eval set and the active generation."""
+    raw = Path(path).read_bytes()
+    data = json.loads(raw)
+    _require(data.get("schema") == VECTORS_SCHEMA, f"{path}: not a {VECTORS_SCHEMA} file")
+    _require(data.get("suite_sha256") == suite.sha256,
+             f"{path}: vectors were computed for a different version of the eval set")
+    expected = reader.manifest["contract"]["embedding"]
+    _require(data.get("embedding") == expected,
+             f"{path}: embedding contract differs from the active generation's; "
+             "recompute the vectors with the model that built this index")
+    vectors = {}
+    for query in suite.queries:
+        item = data.get("vectors", {}).get(query.query_id)
+        _require(item is not None, f"{path}: no vector for {query.query_id}")
+        _require(item.get("text_sha256") == sha256_text(effective_text(query)),
+                 f"{path}: {query.query_id} text changed since its vector was computed")
+        _require(len(item["vector"]) == expected["dimensions"], f"{path}: {query.query_id} has wrong dimensions")
+        vectors[query.query_id] = item["vector"]
+    return vectors, hashlib.sha256(raw).hexdigest()
+
+
+def first_covered_ranks(query: EvalQuery, hits: list[dict]) -> list[int | None]:
+    """Per scored span, the smallest k at which the top-k hits fully cover it."""
+    ranks = []
+    for span in query.scored_evidence:
+        seen: list[Interval] = []
+        found = None
+        for rank, hit in enumerate(hits, 1):
+            seen.extend(evidence_intervals(hit.get("evidence") or {}))
+            if span_covered(span, seen):
+                found = rank
+                break
+        ranks.append(found)
+    return sorted(ranks, key=lambda r: (r is None, r or 0))
+
+
 def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetitions: int = 1,
                  packet_budget: int | None = None, allow_unscorable: bool = False,
+                 query_vectors: dict[str, list] | None = None, query_vectors_sha256: str | None = None,
+                 diagnostic_depth: int | None = None,
                  clock: Callable[[], float] = time.perf_counter,
                  progress: Callable[[str], None] | None = None) -> dict:
     """Evaluate one strategy on every query; returns a ledger-ready record.
@@ -472,6 +543,11 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
     re-extracted) fail the run unless allow_unscorable is set; then they are
     excluded and the run's evidence fingerprint changes, so `compare` refuses
     to pair it with runs that scored a different evidence set.
+
+    query_vectors (from load_query_vectors) replace provider calls; latency is
+    then retrieval-only. diagnostic_depth adds a separate, deeper search that
+    records the rank at which each gold span is first covered; it never
+    changes the metrics at the requested k.
     """
     if strategy not in STRATEGIES:
         raise SuiteError(f"Unknown strategy {strategy!r}; known: {', '.join(sorted(STRATEGIES))}")
@@ -499,12 +575,13 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
     for index, query in enumerate(suite.queries, 1):
         scored = EvalQuery(**{**query.__dict__, "evidence": [
             span for span in query.evidence if (query.query_id, span.evidence_id) not in unscorable_ids]})
+        vector = {"query_vector": query_vectors[query.query_id]} if query_vectors else {}
         runs = []
         for _ in range(max(1, repetitions)):
             started = clock()
             payload, status = core.search_papers_chroma(
                 query=query.text, n=depth, second_query=query.second_query,
-                include_context=False, **query.filters, **params)
+                include_context=False, **query.filters, **params, **vector)
             latencies.append(clock() - started)
             if status != 200:
                 raise SuiteError(f"{query.query_id}: search failed ({status}): {payload.get('error')}")
@@ -514,10 +591,19 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
             # Same filters as retrieval: packet and search scores share one scope.
             packet, status = core.prepare_answer_payload(
                 query.text, n=10, budget_codepoints=packet_budget, second_query=query.second_query,
-                **query.filters)
+                **query.filters, **params, **vector)
             if status != 200:
                 raise SuiteError(f"{query.query_id}: prepare_answer failed ({status}): {packet.get('error')}")
         per_query[query.query_id] = score_query(scored, runs[0], ks, packet)
+        if diagnostic_depth and diagnostic_depth > depth:
+            deep, status = core.search_papers_chroma(
+                query=query.text, n=diagnostic_depth, second_query=query.second_query,
+                include_context=False, **query.filters, **params, **vector)
+            if status != 200:
+                raise SuiteError(f"{query.query_id}: diagnostic search failed ({status}): {deep.get('error')}")
+            ranks = first_covered_ranks(scored, deep["results"])
+            per_query[query.query_id]["span_first_covered_ranks"] = ranks
+            per_query[query.query_id][f"spans_covered@{diagnostic_depth}"] = sum(r is not None for r in ranks)
         ids = [[hit["id"] for hit in result] for result in runs]
         stability["membership_identical"] += all(set(i) == set(ids[0]) for i in ids)
         stability["order_identical"] += all(i == ids[0] for i in ids)
@@ -525,7 +611,15 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
             slices.setdefault(name, []).append(query.query_id)
         if progress:
             progress(f"[{strategy}] {index}/{len(suite.queries)} {query.query_id}")
-    metrics = {"overall": aggregate(per_query, ks, bool(packet_budget)),
+    overall = aggregate(per_query, ks, bool(packet_budget))
+    if diagnostic_depth and diagnostic_depth > depth:
+        scored_total = sum(row["evidence_spans"] for row in per_query.values())
+        found = [rank for row in per_query.values() for rank in row.get("span_first_covered_ranks", [])]
+        overall[f"span_coverage@{diagnostic_depth}"] = round(
+            sum(r is not None for r in found) / scored_total, 6) if scored_total else None
+        present = sorted(r for r in found if r is not None)
+        overall["covered_rank_median"] = present[len(present) // 2] if present else None
+    metrics = {"overall": overall,
                "by_slice": {name: aggregate({q: per_query[q] for q in ids}, ks, bool(packet_budget))
                             for name, ids in sorted(slices.items())}}
     created = datetime.now(timezone.utc)
@@ -544,8 +638,12 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
         "index": index_fingerprint(core),
         "strategy": {"name": strategy, "params": params, "depth": depth},
         "settings": {"ks": list(ks), "repetitions": max(1, repetitions), "packet_budget": packet_budget,
-                     "primary_metric": PRIMARY_METRIC},
+                     "primary_metric": PRIMARY_METRIC,
+                     "diagnostic_depth": diagnostic_depth if diagnostic_depth and diagnostic_depth > depth else None},
+        "query_vectors": ({"precomputed": True, "sha256": query_vectors_sha256}
+                          if query_vectors else {"precomputed": False}),
         "metrics": metrics,
+        "latency_scope": "retrieval_only" if query_vectors else "end_to_end",
         "latency_seconds": {"p50": _percentile(latencies, 0.5), "p95": _percentile(latencies, 0.95),
                             "max": round(max(latencies), 4) if latencies else None,
                             "first_query": round(first_calls[0], 4) if first_calls else None},
@@ -553,7 +651,8 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
         "unscorable": unscorable,
         "per_query": {qid: {key: value for key, value in row.items()
                             if key.startswith(("span_coverage@", "query_complete@", "packet_span_coverage",
-                                               "packet_complete", "first_evidence_rank", "doc_recall@"))}
+                                               "packet_complete", "first_evidence_rank", "doc_recall@",
+                                               "span_first_covered_ranks"))}
                       for qid, row in per_query.items()},
     }
 

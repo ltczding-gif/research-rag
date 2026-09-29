@@ -17,6 +17,7 @@ ChromaDB connection (useful for tests).
 from flask import Flask, request, jsonify
 import chromadb
 import json
+import math
 import os
 import re
 import yaml
@@ -38,6 +39,8 @@ from config import (
     SKIP_CHROMA_INIT,
     HOST,
     PORT,
+    RETRIEVAL_MODE,
+    HYBRID_CANDIDATES,
 )
 from embedding_client import (
     get_embedding,
@@ -50,6 +53,7 @@ from embedding_client import (
 from index_generation import GenerationStore, atomic_write_json, atomic_write_text
 from generation_query import open_generation
 from answer_workflow import prepare_packet, check_answer as check_answer_sources
+from lexical_index import LexicalIndex, LexicalIndexError, reciprocal_rank_fusion
 
 app = Flask(__name__)
 
@@ -64,6 +68,7 @@ _QUERY_LOG_WRITE_LOCK = RLock()
 client = None
 pdf_col = notes_col = ef = None
 pdf_generation = notes_generation = None
+pdf_lexical = None
 chroma_ready = notes_ready = False
 _dim_warnings = []
 _index_errors = {}
@@ -103,6 +108,11 @@ if not SKIP_CHROMA_INIT:
                     notes_col, notes_generation, notes_ready = _collection, _reader, True
             except Exception as exc:
                 _index_errors[_logical] = str(exc)
+    if pdf_generation is not None:
+        try:
+            pdf_lexical = LexicalIndex.open_for(pdf_generation)
+        except (LexicalIndexError, OSError) as exc:
+            _index_errors["papers_lexical"] = str(exc)
 
 
 def index_state():
@@ -133,7 +143,82 @@ def index_state():
         if logical in _index_errors:
             item["error"] = _index_errors[logical]
         result[name] = item
+    lexical = pdf_lexical.status() if pdf_lexical is not None else {
+        "ready": False, "reason": _index_errors.get("papers_lexical", "no canonical papers generation")}
+    lexical["retrieval_mode"] = _resolve_retrieval_mode(None)[0] if result["papers"]["ready"] else None
+    result["papers"]["keyword_index"] = lexical
     return result
+
+
+RETRIEVAL_MODES = ("dense", "hybrid", "lexical", "auto")
+
+
+def _resolve_retrieval_mode(requested):
+    """Return (effective_mode, error). auto uses hybrid only when it is available."""
+    mode = requested or RETRIEVAL_MODE or "dense"
+    mode = mode.strip().lower() if isinstance(mode, str) else None
+    if mode not in RETRIEVAL_MODES:
+        return None, "retrieval_mode must be one of: " + ", ".join(RETRIEVAL_MODES)
+    available = pdf_generation is not None and pdf_lexical is not None
+    if mode == "auto":
+        return ("hybrid" if available else "dense"), None
+    if mode in ("hybrid", "lexical") and not available:
+        return None, (mode.capitalize() + " retrieval needs a keyword index for the active canonical "
+                      "papers generation; run scripts/build_lexical_index.py")
+    return mode, None
+
+
+def _candidate_depth(n):
+    """Per-retriever candidates before fusion; independent of n up to the limit.
+
+    Keeping the pool fixed makes top-k identical whether a caller asks for 10
+    or 20 results, so evaluation at depth 20 measures what agents receive.
+    """
+    return max(HYBRID_CANDIDATES, n)
+
+
+def _candidate_hits(mode, effective_query, n, where, filters, query_args):
+    """Ranked (id, document, metadata, distance, retrieval) tuples for one mode.
+
+    The keyword index only proposes IDs. Text and metadata always come from the
+    pinned Chroma collection, and the caller verifies every hit's canonical
+    source coordinates, so a damaged keyword index cannot inject text.
+    """
+    if mode == "dense":
+        results = pdf_col.query(**query_args, n_results=n, where=where)
+        distances = results.get("distances") or [[None] * len(results["ids"][0])]
+        return [(hit_id, doc, meta, distance, {"mode": "dense", "dense_rank": rank})
+                for rank, (hit_id, doc, meta, distance) in enumerate(zip(
+                    results["ids"][0], results["documents"][0], results["metadatas"][0], distances[0]), 1)]
+    depth = _candidate_depth(n)
+    rankings, dense_rows = {}, {}
+    if mode == "hybrid":
+        results = pdf_col.query(**query_args, n_results=depth, where=where)
+        distances = results.get("distances") or [[None] * len(results["ids"][0])]
+        for hit_id, doc, meta, distance in zip(results["ids"][0], results["documents"][0],
+                                                results["metadatas"][0], distances[0]):
+            dense_rows[hit_id] = (doc, meta, distance)
+        rankings["dense"] = list(results["ids"][0])
+    rankings["lexical"] = [chunk_id for chunk_id, _ in pdf_lexical.search(effective_query, depth, **filters)]
+    fused = reciprocal_rank_fusion(rankings)[:n]
+    missing = [hit_id for hit_id, _ in fused if hit_id not in dense_rows]
+    fetched = {}
+    if missing:
+        rows = pdf_col.get(ids=missing, include=["documents", "metadatas"])
+        fetched = {hit_id: (doc, meta, None) for hit_id, doc, meta in
+                   zip(rows["ids"], rows["documents"], rows["metadatas"])}
+    hits = []
+    for hit_id, info in fused:
+        row = dense_rows.get(hit_id) or fetched.get(hit_id)
+        if row is None:
+            raise ValueError("Keyword index proposed a chunk absent from the active generation")
+        doc, meta, distance = row
+        if any(value and meta.get(field) != value for field, value in filters.items()):
+            raise ValueError("Keyword index returned a chunk outside the requested filters")
+        hits.append((hit_id, doc, meta, distance,
+                     {"mode": mode, "fused_score": round(info["score"], 6),
+                      **{key: value for key, value in info.items() if key.endswith("_rank")}}))
+    return hits
 
 
 def _query_vector(query, reader):
@@ -795,11 +880,19 @@ def _same_legacy_source(hit: dict, neighbor: dict) -> bool:
 def search_papers_chroma(
     query, n=3, zotero_parent_key=None, paper_group=None, pdf_filename=None,
     second_query=None, include_context=False, zotero_attachment_key=None,
-    source_role=None, source_type=None,
+    source_role=None, source_type=None, retrieval_mode=None, query_vector=None,
 ):
-    """Search one pinned generation; all supplied source filters are ANDed."""
+    """Search one pinned generation; all supplied source filters are ANDed.
+
+    query_vector (core only, used by evaluation) supplies a precomputed query
+    embedding for the canonical generation instead of calling the provider.
+    The caller must have verified it against the generation's embedding contract.
+    """
     if not chroma_ready or pdf_col is None:
         return {"error": "ChromaDB not initialized"}, 503
+    mode, mode_error = _resolve_retrieval_mode(retrieval_mode)
+    if mode_error:
+        return {"error": mode_error}, 400 if "must be one of" in mode_error else 409
     if not query or not isinstance(n, int) or isinstance(n, bool) or n < 1:
         return {"error": "query and positive integer n are required"}, 400
     if source_role not in (None, "", "main", "si"):
@@ -825,20 +918,30 @@ def search_papers_chroma(
     started = perf_counter()
     try:
         embedding_started = perf_counter()
-        if pdf_generation:
+        if mode == "lexical":
+            query_args = {}
+        elif query_vector is not None:
+            if not pdf_generation:
+                raise ValueError("Precomputed query vectors require a canonical papers generation")
+            dimensions = pdf_generation.manifest["contract"]["embedding"]["dimensions"]
+            vector = [float(value) for value in query_vector]
+            if len(vector) != dimensions or not all(math.isfinite(value) for value in vector):
+                raise ValueError("Precomputed query vector does not match the generation's dimensions")
+            query_args = {"query_embeddings": [vector]}
+        elif pdf_generation:
             query_args = {"query_embeddings": [_query_vector(effective_query, pdf_generation)]}
         else:
             # Preserve the embedding function bound to old unverified collections.
             query_args = {"query_texts": [effective_query]}
         embedding_seconds = perf_counter() - embedding_started
         retrieval_started = perf_counter()
-        results = pdf_col.query(**query_args, n_results=n, where=where)
+        lexical_filters = {"zotero_parent_key": zotero_parent_key, "zotero_attachment_key": zotero_attachment_key,
+                           "source_role": source_role, "pdf_filename": pdf_filename}
         formatted_results = []
-        for i, content in enumerate(results["documents"][0]):
-            meta = results["metadatas"][0][i]
-            hit_id = results["ids"][0][i]
+        for hit_id, content, meta, distance, retrieval in _candidate_hits(
+                mode, effective_query, n, where, lexical_filters, query_args):
             item = {"id": hit_id, "content": content, "metadata": meta,
-                    "distance": results["distances"][0][i] if "distances" in results else None}
+                    "distance": distance, "retrieval": retrieval}
             if pdf_generation:
                 item["evidence"] = pdf_generation.evidence(meta, content, hit_id)
             else:
@@ -861,7 +964,8 @@ def search_papers_chroma(
                                           f"[MATCH]{content}[/MATCH]", neighbor_docs.get(following, "")]))
             formatted_results.append(item)
         payload = {"results": formatted_results, "query": query, "effective_query": effective_query,
-                   "filters": where, "index_mode": "canonical" if pdf_generation else "legacy_unverified"}
+                   "filters": where, "retrieval_mode": mode,
+                   "index_mode": "canonical" if pdf_generation else "legacy_unverified"}
         if not pdf_generation:
             payload["timing_note"] = "Legacy embedding is included in retrieval; stages are not separated."
         return _with_timings(payload, started, embedding_seconds, perf_counter() - retrieval_started), 200
@@ -895,13 +999,14 @@ def search_papers():
         zotero_attachment_key=data.get('zotero_attachment_key'),
         source_role=data.get('source_role'),
         source_type=data.get('source_type'),
+        retrieval_mode=data.get('retrieval_mode'),
     )
     return jsonify(payload), status
 
 
 def prepare_answer_payload(query, n=10, budget_codepoints=8000, zotero_parent_key=None,
                            second_query=None, zotero_attachment_key=None, source_role=None,
-                           pdf_filename=None):
+                           pdf_filename=None, retrieval_mode=None, query_vector=None):
     """Search then prepare bounded canonical evidence for the host's answer model."""
     if not isinstance(query, str) or not query.strip():
         return {'error': 'query must be a nonempty string'}, 400
@@ -911,7 +1016,7 @@ def prepare_answer_payload(query, n=10, budget_codepoints=8000, zotero_parent_ke
         return {'error': 'budget_codepoints must be an integer between 256 and 8000'}, 400
     payload, status = search_papers_chroma(query, n=n, zotero_parent_key=zotero_parent_key,
         second_query=second_query, zotero_attachment_key=zotero_attachment_key, source_role=source_role,
-        pdf_filename=pdf_filename)
+        pdf_filename=pdf_filename, retrieval_mode=retrieval_mode, query_vector=query_vector)
     if status != 200:
         return payload, status
     try:
@@ -939,7 +1044,8 @@ def prepare_answer_route():
     payload, status = prepare_answer_payload(data.get('query', ''), n=data.get('n', 10),
         budget_codepoints=data.get('budget_codepoints', 8000),
         zotero_parent_key=data.get('zotero_parent_key'), second_query=data.get('second_query'),
-        zotero_attachment_key=data.get('zotero_attachment_key'), source_role=data.get('source_role'))
+        zotero_attachment_key=data.get('zotero_attachment_key'), source_role=data.get('source_role'),
+        pdf_filename=data.get('pdf_filename'), retrieval_mode=data.get('retrieval_mode'))
     return jsonify(payload), status
 
 

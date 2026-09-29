@@ -32,6 +32,20 @@ include breaking changes.
   eval sets from quotes or pooled judgments, and appends every run to a
   text-free score ledger under `benchmarks/results/`. Method and decision rule:
   `docs/RETRIEVAL_EVAL.md`.
+- Opt-in hybrid retrieval for source passages: a per-generation keyword (BM25,
+  SQLite FTS5) index fused with vector results by reciprocal rank fusion.
+  `search_papers` and `prepare_answer` accept `retrieval_mode`
+  (`dense`/`hybrid`/`lexical`/`auto`). The server default,
+  `LOCALRAG_RETRIEVAL_MODE`, stays `dense` until evaluation justifies a change.
+  `scripts/build_indexes.py` now also builds the keyword index; use
+  `--no-keyword-index` to skip it. `scripts/build_lexical_index.py` adds it to
+  an existing generation without re-embedding. The retrieval evaluation adds
+  the `lexical` and `hybrid` strategies.
+- Retrieval evaluation: `embed-queries` and `run --query-vectors` score with
+  precomputed query vectors bound to the eval set and embedding contract, for
+  machines that cannot hold the embedding model and the index together.
+  `run --diagnostic-depth N` records where each gold span first appears, to
+  separate ranking misses from recall misses.
 - `CONTRIBUTING.md`, `SECURITY.md`, this changelog, issue templates and a pull
   request template.
 

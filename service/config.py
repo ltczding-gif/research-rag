@@ -135,6 +135,20 @@ OPENAI_EMBED_MODEL: str = os.environ.get(
 )
 
 
+# --- Paper retrieval mode ---
+#
+# `dense` (default): vector-only retrieval.
+# `hybrid`:          keyword (BM25) + vector candidates fused with reciprocal
+#                    rank fusion. Needs the keyword index of the active papers
+#                    generation (scripts/build_lexical_index.py).
+# `lexical`:         keyword-only; a diagnostic for evaluation.
+# `auto`:            hybrid when the keyword index exists, otherwise dense.
+# Change the default only after docs/RETRIEVAL_EVAL.md measurements justify it.
+RETRIEVAL_MODE: str = os.environ.get("LOCALRAG_RETRIEVAL_MODE", "dense").strip().lower() or "dense"
+# Candidates fetched from each retriever before fusion (at least n).
+HYBRID_CANDIDATES: int = int(os.environ.get("LOCALRAG_HYBRID_CANDIDATES", "50"))
+
+
 # --- Query server ---
 
 HOST: str = os.environ.get("LOCALRAG_HOST", "127.0.0.1")

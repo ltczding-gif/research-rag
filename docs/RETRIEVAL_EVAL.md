@@ -161,11 +161,35 @@ retrieved (Route B).
 - Freeze a version once scores are recorded. Any edit changes the suite hash,
   and `compare` warns when runs used different versions.
 
+## Strategies
+
+| Strategy | What it runs |
+|---|---|
+| `dense` | Vector search only (the server default). |
+| `lexical` | Keyword (BM25, SQLite FTS5) search only; a diagnostic. |
+| `hybrid` | `LOCALRAG_HYBRID_CANDIDATES` (default 50; more only when n exceeds it) candidates from each, fused by reciprocal rank fusion (k=60); ties keep dense order. The pool does not depend on n, so top-10 at n=20 equals top-10 at n=10. |
+
+`lexical` and `hybrid` need the keyword index of the active papers generation.
+`scripts/build_indexes.py` builds it after each papers build;
+`scripts/build_lexical_index.py` builds it for an existing generation without
+re-embedding. Each strategy pins its mode explicitly, so a server default set
+in `.env` never changes what a strategy measures. Evidence packets are
+prepared with the same mode.
+
+Keyword retrieval only proposes chunk IDs. Returned text always comes from the
+pinned Chroma collection and passes the same canonical source verification as
+dense hits. A stale or damaged keyword index can lower recall, but it cannot
+add unverified text or hits outside the requested filters.
+
 ## Recording scores
 
 ```bash
 python benchmarks/scripts/retrieval_eval.py run --suite ~/research-rag-eval/w6-v2.jsonl \
     --suite-id w6-v2 --strategy dense --label "baseline qwen3-embedding:4b"
+
+# after scripts/build_lexical_index.py, same eval set and generation:
+python benchmarks/scripts/retrieval_eval.py run --suite ~/research-rag-eval/w6-v2.jsonl \
+    --suite-id w6-v2 --strategy lexical --strategy hybrid --label "hybrid rrf k=60, 50 candidates"
 ```
 
 Defaults: k = 5, 10, 20; three repetitions per query; packet budget 8000;
@@ -189,6 +213,40 @@ Each run appends one record to `benchmarks/results/retrieval-ledger.jsonl`
 It never contains query text, passage text, paths or parent keys. The ledger
 is meant to be committed, so scores stay attached to the code history. Use
 `--details run.json` to keep the full record locally as well.
+
+### When the embedding model and the index do not fit in memory together
+
+Compute the query vectors first, with only the embedding model loaded. Then
+score with only the index loaded:
+
+```bash
+python benchmarks/scripts/retrieval_eval.py embed-queries --suite ~/research-rag-eval/w6-v2.jsonl \
+    --output ~/research-rag-eval/w6-v2.vectors.json
+# stop the embedding model, then:
+python benchmarks/scripts/retrieval_eval.py run --suite ~/research-rag-eval/w6-v2.jsonl --suite-id w6-v2 \
+    --query-vectors ~/research-rag-eval/w6-v2.vectors.json --strategy dense --strategy hybrid
+```
+
+The vector file records the eval-set hash, a hash of each query's embedded
+text (`second_query` when given), and the full embedding contract. `run`
+refuses the file if any of these differ from the eval set or from the active
+generation's contract. Scores therefore equal a live run. The ledger records
+`query_vectors.sha256`, and `latency_scope: retrieval_only` because query
+embedding time is excluded. Compare latency only between runs with the same
+scope. Keep the vector file next to the private eval set: embeddings can
+reveal what the queries are about.
+
+### Where do the misses rank?
+
+`--diagnostic-depth 100` runs one extra, deeper search per query. It records
+for each gold span the rank at which it is first fully covered
+(`span_first_covered_ranks`), plus `span_coverage@100` and
+`covered_rank_median`. Metrics at the requested k are unchanged. The deeper
+list tells a ranking problem apart from a recall problem:
+
+- spans found between rank 11 and 100 can be fixed by reranking;
+- spans absent from the top 100 need better candidates: keyword search, query
+  rewriting, a different embedding model or chunking.
 
 ## Comparing
 

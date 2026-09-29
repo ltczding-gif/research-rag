@@ -198,6 +198,7 @@ def test_mcp_forwards_canonical_attachment_filters(monkeypatch):
                 "zotero_attachment_key": "ATTACHMENT",
                 "source_role": "si",
                 "pdf_filename": "supplement.pdf",
+                "retrieval_mode": None,
             }
         ]
     finally:

@@ -68,6 +68,7 @@ def search_papers(
     zotero_attachment_key: str = "",
     source_role: str = "",
     pdf_filename: str = "",
+    retrieval_mode: str = "",
 ) -> dict:
     """Semantic search over the PDF chunk collection (original paper text).
 
@@ -84,6 +85,8 @@ def search_papers(
     unverified previous/next chunk concatenation.
     zotero_attachment_key restricts to one exact attachment; source_role is
     "main" or "si". All supplied filters are combined with AND.
+    retrieval_mode: "dense" (vector), "hybrid" (keyword + vector, needs the
+    keyword index), "lexical" or "auto"; empty uses the server default.
     """
     payload, _status = _core.search_papers_chroma(
         query=query,
@@ -94,6 +97,7 @@ def search_papers(
         zotero_attachment_key=zotero_attachment_key or None,
         source_role=source_role or None,
         pdf_filename=pdf_filename or None,
+        retrieval_mode=retrieval_mode or None,
     )
     return payload
 
@@ -101,7 +105,8 @@ def search_papers(
 @mcp.tool()
 def prepare_answer(query: str, n: int = 10, budget_codepoints: int = 8000,
                    zotero_parent_key: str = "", second_query: str = "",
-                   zotero_attachment_key: str = "", source_role: str = "") -> dict:
+                   zotero_attachment_key: str = "", source_role: str = "",
+                   retrieval_mode: str = "") -> dict:
     """Prepare source evidence for a cited answer, with deduplication and a total budget.
 
     Prefer this for answering a research question. Generate the answer yourself
@@ -110,11 +115,12 @@ def prepare_answer(query: str, n: int = 10, budget_codepoints: int = 8000,
     Then call check_answer with this unchanged packet and your structured answer.
     Only canonical PDF generations are supported. No answer model is called here.
     second_query changes retrieval only; query must remain the user's question.
+    retrieval_mode is as for search_papers; empty uses the server default.
     """
     payload, _status = _core.prepare_answer_payload(query, n=n,
         budget_codepoints=budget_codepoints, zotero_parent_key=zotero_parent_key or None,
         second_query=second_query or None, zotero_attachment_key=zotero_attachment_key or None,
-        source_role=source_role or None)
+        source_role=source_role or None, retrieval_mode=retrieval_mode or None)
     return payload
 
 
