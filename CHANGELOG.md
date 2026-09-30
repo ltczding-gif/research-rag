@@ -53,6 +53,13 @@ include breaking changes.
   accept `rerank`. The default stays off (`LOCALRAG_RERANK_DEFAULT`). The
   retrieval evaluation adds the `dense-rerank` and `hybrid-rerank` strategies
   and records the reranker's identity.
+- Retrieval evaluation: paired deltas are averaged like their metric. Span
+  coverage uses covered-span totals with a question-clustered bootstrap
+  instead of a per-question mean, which could point the other way. Per-question
+  span counts are stored in the ledger; older runs with diagnostic ranks remain
+  comparable. The diagnostic list's coverage is now `diagnostic_span_coverage`
+  with the number of hits actually returned, instead of a misleading
+  `span_coverage@<depth>`.
 - `CONTRIBUTING.md`, `SECURITY.md`, this changelog, issue templates and a pull
   request template.
 

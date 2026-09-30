@@ -627,7 +627,7 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
                 raise SuiteError(f"{query.query_id}: diagnostic ranking diverges from the scored top-{depth}")
             ranks = first_covered_ranks(scored, deep["results"])
             per_query[query.query_id]["span_first_covered_ranks"] = ranks
-            per_query[query.query_id][f"spans_covered@{diagnostic_depth}"] = sum(r is not None for r in ranks)
+            per_query[query.query_id]["diagnostic_results"] = len(deep["results"])
         ids = [[hit["id"] for hit in result] for result in runs]
         stability["membership_identical"] += all(set(i) == set(ids[0]) for i in ids)
         stability["order_identical"] += all(i == ids[0] for i in ids)
@@ -636,13 +636,19 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
         if progress:
             progress(f"[{strategy}] {index}/{len(suite.queries)} {query.query_id}")
     overall = aggregate(per_query, ks, bool(packet_budget))
+    diagnostic_returned = None
     if diagnostic_depth and diagnostic_depth > depth:
         scored_total = sum(row["evidence_spans"] for row in per_query.values())
         found = [rank for row in per_query.values() for rank in row.get("span_first_covered_ranks", [])]
-        overall[f"span_coverage@{diagnostic_depth}"] = round(
+        # Pinned pools (hybrid candidates, rerank pool) can return fewer hits than
+        # requested, so this is coverage of the diagnostic list actually returned,
+        # not "coverage@depth".
+        overall["diagnostic_span_coverage"] = round(
             sum(r is not None for r in found) / scored_total, 6) if scored_total else None
         present = sorted(r for r in found if r is not None)
         overall["covered_rank_median"] = present[len(present) // 2] if present else None
+        returned = [row["diagnostic_results"] for row in per_query.values() if "diagnostic_results" in row]
+        diagnostic_returned = {"min": min(returned), "max": max(returned)} if returned else None
     metrics = {"overall": overall,
                "by_slice": {name: aggregate({q: per_query[q] for q in ids}, ks, bool(packet_budget))
                             for name, ids in sorted(slices.items())}}
@@ -665,7 +671,8 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
                                    if key != "endpoint"} if params.get("rerank") else None)},
         "settings": {"ks": list(ks), "repetitions": max(1, repetitions), "packet_budget": packet_budget,
                      "primary_metric": PRIMARY_METRIC,
-                     "diagnostic_depth": diagnostic_depth if diagnostic_depth and diagnostic_depth > depth else None},
+                     "diagnostic_depth": diagnostic_depth if diagnostic_depth and diagnostic_depth > depth else None,
+                     "diagnostic_results_returned": diagnostic_returned},
         "query_vectors": ({"precomputed": True, "sha256": query_vectors_sha256}
                           if query_vectors else {"precomputed": False}),
         "metrics": metrics,
@@ -678,7 +685,9 @@ def run_strategy(core, suite: Suite, strategy: str, *, ks=DEFAULT_KS, repetition
         "per_query": {qid: {key: value for key, value in row.items()
                             if key.startswith(("span_coverage@", "query_complete@", "packet_span_coverage",
                                                "packet_complete", "first_evidence_rank", "doc_recall@",
-                                               "span_first_covered_ranks"))}
+                                               "span_first_covered_ranks", "evidence_spans",
+                                               "spans_covered@", "packet_spans_covered",
+                                               "diagnostic_results"))}
                       for qid, row in per_query.items()},
     }
 
@@ -714,31 +723,85 @@ def comparable(baseline: dict, candidate: dict) -> str | None:
     return None
 
 
+def _span_counts(row: dict, metric: str) -> tuple[int, int] | None:
+    """(covered, scored) spans of one query for a span-coverage metric, if recorded.
+
+    Older records lack explicit counts; runs with diagnostic ranks still carry
+    them implicitly, because ranks are prefix-consistent with the scored list.
+    """
+    ranks = row.get("span_first_covered_ranks")
+    total = row.get("evidence_spans", len(ranks) if ranks is not None else None)
+    if total is None:
+        return None
+    if metric == "packet_span_coverage":
+        covered = row.get("packet_spans_covered")
+    elif metric.startswith("span_coverage@"):
+        k = int(metric.split("@", 1)[1])
+        covered = row.get(f"spans_covered@{k}")
+        if covered is None and ranks is not None:
+            covered = sum(1 for rank in ranks if rank is not None and rank <= k)
+    else:
+        return None
+    return None if covered is None else (int(covered), int(total))
+
+
 def paired_delta(baseline: dict, candidate: dict, metric: str = PRIMARY_METRIC, *,
                  resamples: int = 2000, seed: int = 0) -> dict:
-    """Per-query paired comparison with a bootstrap 95% interval of the mean delta.
+    """Paired comparison on the same questions, averaged the way the metric is.
 
-    Runs that scored different gold evidence are never paired.
+    Span-coverage metrics are micro-averaged over gold spans, so their delta is
+    the change in total covered spans / total spans, with a cluster bootstrap
+    that resamples questions (spans of one question move together). Wins and
+    losses count questions that gained or lost covered spans. The per-question
+    mean is reported separately as mean_question_delta and never replaces it.
+    Other metrics (e.g. query_complete@k) are per-question means. Runs that
+    scored different gold evidence are never paired.
     """
     reason = comparable(baseline, candidate)
     if reason:
         return {"metric": metric, "queries": 0, "not_comparable": reason}
     shared = sorted(set(baseline["per_query"]) & set(candidate["per_query"]))
-    deltas = []
+    rng = random.Random(seed)
+
+    def interval(values: list[float]) -> list[float]:
+        values = sorted(values)
+        return [round(values[int(0.025 * resamples)], 6), round(values[int(0.975 * resamples) - 1], 6)]
+
+    question_deltas = []
     for query_id in shared:
         before = baseline["per_query"][query_id].get(metric)
         after = candidate["per_query"][query_id].get(metric)
         if before is not None and after is not None:
-            deltas.append(after - before)
-    if not deltas:
+            question_deltas.append(after - before)
+    counts = [(_span_counts(baseline["per_query"][q], metric), _span_counts(candidate["per_query"][q], metric))
+              for q in shared]
+    counts = [(a, b) for a, b in counts if not (a is None and b is None)]
+    if counts and all(a is not None and b is not None and a[1] == b[1] for a, b in counts):
+        rows = [(b[0] - a[0], a[1]) for a, b in counts if a[1] > 0]
+        if not rows:
+            return {"metric": metric, "queries": 0}
+        spans = sum(total for _, total in rows)
+        samples = []
+        for _ in range(resamples):
+            draw = rng.choices(rows, k=len(rows))
+            drawn_spans = sum(total for _, total in draw)
+            samples.append(sum(gain for gain, _ in draw) / drawn_spans if drawn_spans else 0.0)
+        gains = [gain for gain, _ in rows]
+        return {"metric": metric, "averaging": "spans", "queries": len(rows), "spans": spans,
+                "delta": round(sum(gains) / spans, 6), "delta_spans": sum(gains), "ci95": interval(samples),
+                "wins": sum(g > 0 for g in gains), "losses": sum(g < 0 for g in gains),
+                "ties": sum(g == 0 for g in gains),
+                "mean_question_delta": round(statistics.fmean(question_deltas), 6) if question_deltas else None}
+    if metric.startswith("span_coverage@") or metric == "packet_span_coverage":
+        return {"metric": metric, "queries": 0,
+                "not_comparable": "records lack per-question span counts; rerun with this harness"}
+    if not question_deltas:
         return {"metric": metric, "queries": 0}
-    rng = random.Random(seed)
-    means = sorted(statistics.fmean(rng.choices(deltas, k=len(deltas))) for _ in range(resamples))
-    return {"metric": metric, "queries": len(deltas),
-            "mean_delta": round(statistics.fmean(deltas), 6),
-            "ci95": [round(means[int(0.025 * resamples)], 6), round(means[int(0.975 * resamples) - 1], 6)],
-            "wins": sum(d > 0 for d in deltas), "losses": sum(d < 0 for d in deltas),
-            "ties": sum(d == 0 for d in deltas)}
+    samples = [statistics.fmean(rng.choices(question_deltas, k=len(question_deltas))) for _ in range(resamples)]
+    return {"metric": metric, "averaging": "questions", "queries": len(question_deltas),
+            "delta": round(statistics.fmean(question_deltas), 6), "ci95": interval(samples),
+            "wins": sum(d > 0 for d in question_deltas), "losses": sum(d < 0 for d in question_deltas),
+            "ties": sum(d == 0 for d in question_deltas)}
 
 
 def compare_table(records: list[dict], metrics: list[str], baseline_id: str | None = None,
@@ -756,6 +819,9 @@ def compare_table(records: list[dict], metrics: list[str], baseline_id: str | No
         lines.append("> Warning: some runs excluded unscorable gold spans; they are paired only with "
                      "runs that scored the same evidence.\n")
     header = ["run", "strategy", "generation", "embedding", *metrics, f"Δ {primary} (95% CI)", "W/L/T"]
+    lines.append(f"Δ is paired against the baseline and averaged like {primary} itself: over gold spans "
+                 "for span coverage (questions resampled in the interval), over questions otherwise. "
+                 "W/L/T counts questions.\n")
     lines.append("| " + " | ".join(header) + " |")
     lines.append("|" + "---|" * len(header))
     for record in records:
@@ -773,7 +839,8 @@ def compare_table(records: list[dict], metrics: list[str], baseline_id: str | No
                 cells += [f"not comparable: {delta['not_comparable']}", "–"]
             elif delta.get("queries"):
                 low, high = delta["ci95"]
-                cells += [f"{delta['mean_delta']:+.3f} ({low:+.3f}, {high:+.3f})",
+                spans = f", {delta['delta_spans']:+d} spans" if "delta_spans" in delta else ""
+                cells += [f"{delta['delta']:+.3f}{spans} ({low:+.3f}, {high:+.3f})",
                           f"{delta['wins']}/{delta['losses']}/{delta['ties']}"]
             else:
                 cells += ["n/a", "n/a"]
