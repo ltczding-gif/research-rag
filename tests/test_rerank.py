@@ -104,6 +104,9 @@ def test_hybrid_rerank_diagnostics_extend_the_scored_ranking(reranking, tmp_path
          "evidence": [_span(core, "ATTS", 0, "Co loading of 1.2 wt%", "e1")]}]))
     record = ev.run_strategy(core, suite, "hybrid-rerank", ks=(1, 2), packet_budget=None, diagnostic_depth=5)
     assert record["settings"]["diagnostic_depth"] == 5  # prefix check passed inside run_strategy
+    # The pinned rerank pool (3) is all the diagnostic can return, and the record says so.
+    assert record["settings"]["diagnostic_results_returned"] == {"min": 3, "max": 3}
+    assert record["per_query"]["q1"]["evidence_spans"] == 1 and "spans_covered@2" in record["per_query"]["q1"]
     core.pdf_lexical.close()
 
 

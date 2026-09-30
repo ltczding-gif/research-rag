@@ -170,14 +170,53 @@ def test_suite_validation_rejects_bad_records(tmp_path):
         ev.parse_query({"query_id": "q1", "text": "x", "filters": {"where": "x"}})
 
 
+def _run(per_query, fingerprint="f1"):
+    return {"suite": {"sha256": "s1", "evidence_fingerprint": fingerprint}, "per_query": per_query}
+
+
 def test_paired_delta_reports_direction_and_interval():
-    suite = {"sha256": "s1", "evidence_fingerprint": "f1"}
-    base = {"suite": suite, "per_query": {f"q{i}": {"span_coverage@10": 0.0} for i in range(10)}}
-    better = {"suite": suite, "per_query": {f"q{i}": {"span_coverage@10": 1.0 if i < 6 else 0.0} for i in range(10)}}
+    base = _run({f"q{i}": {"evidence_spans": 1, "spans_covered@10": 0, "span_coverage@10": 0.0} for i in range(10)})
+    better = _run({f"q{i}": {"evidence_spans": 1, "spans_covered@10": int(i < 6),
+                             "span_coverage@10": 1.0 if i < 6 else 0.0} for i in range(10)})
     delta = ev.paired_delta(base, better)
-    assert delta["mean_delta"] == pytest.approx(0.6)
+    assert delta["averaging"] == "spans" and delta["delta"] == pytest.approx(0.6)
     assert delta["wins"] == 6 and delta["losses"] == 0 and delta["ties"] == 4
-    assert 0 < delta["ci95"][0] <= delta["mean_delta"] <= delta["ci95"][1]
+    assert 0 < delta["ci95"][0] <= delta["delta"] <= delta["ci95"][1]
+
+
+def test_span_metric_delta_is_micro_averaged_not_a_mean_of_questions():
+    # One question gains its only span; another loses 2 of 4. Per-question mean
+    # says +0.25, but the micro-averaged primary metric falls from 4/5 to 3/5.
+    base = _run({"q1": {"evidence_spans": 1, "spans_covered@10": 0, "span_coverage@10": 0.0},
+                 "q2": {"evidence_spans": 4, "spans_covered@10": 4, "span_coverage@10": 1.0}})
+    cand = _run({"q1": {"evidence_spans": 1, "spans_covered@10": 1, "span_coverage@10": 1.0},
+                 "q2": {"evidence_spans": 4, "spans_covered@10": 2, "span_coverage@10": 0.5}})
+    delta = ev.paired_delta(base, cand)
+    assert delta["delta"] == pytest.approx(-0.2) and delta["delta_spans"] == -1
+    assert delta["mean_question_delta"] == pytest.approx(0.25)
+    assert (delta["wins"], delta["losses"], delta["ties"]) == (1, 1, 0)
+    table = ev.compare_table([{**base, "run_id": "a", "strategy": {"name": "dense"},
+                               "index": {"papers_generation_id": "g" * 8, "embedding": {}},
+                               "metrics": {"overall": {}}},
+                              {**cand, "run_id": "b", "strategy": {"name": "hybrid-rerank"},
+                               "index": {"papers_generation_id": "g" * 8, "embedding": {}},
+                               "metrics": {"overall": {}}}], [])
+    assert "-0.200, -1 spans" in table and "averaged like span_coverage@10" in table
+
+
+def test_older_records_use_diagnostic_ranks_or_refuse_to_pair():
+    # Records made before span counts were stored still carry prefix-consistent ranks.
+    base = _run({"q1": {"span_first_covered_ranks": [3, 12], "span_coverage@10": 0.5},
+                 "n1": {"span_first_covered_ranks": [], "span_coverage@10": None}})
+    cand = _run({"q1": {"span_first_covered_ranks": [1, 9], "span_coverage@10": 1.0},
+                 "n1": {"span_first_covered_ranks": [], "span_coverage@10": None}})
+    delta = ev.paired_delta(base, cand)
+    assert (delta["averaging"], delta["spans"], delta["delta_spans"]) == ("spans", 2, 1)
+    no_counts = _run({"q1": {"span_coverage@10": 0.5}})
+    assert "span counts" in ev.paired_delta(no_counts, no_counts)["not_comparable"]
+    complete = _run({"q1": {"query_complete@10": 0.0}, "q2": {"query_complete@10": 1.0}})
+    complete2 = _run({"q1": {"query_complete@10": 1.0}, "q2": {"query_complete@10": 1.0}})
+    assert ev.paired_delta(complete, complete2, "query_complete@10")["averaging"] == "questions"
 
 
 # -- end to end against a canonical generation -----------------------------------------
@@ -353,10 +392,11 @@ def test_compare_table_marks_baseline_and_suite_version_drift():
                 "suite": {"sha256": sha, "evidence_fingerprint": "f1", "unscorable_spans": 0},
                 "index": {"papers_generation_id": "abcdef1234", "embedding": {"provider": "p", "model": "m"}},
                 "metrics": {"overall": {"span_coverage@10": value}},
-                "per_query": {"q1": {"span_coverage@10": value}, "q2": {"span_coverage@10": value}}}
+                "per_query": {q: {"evidence_spans": 2, "spans_covered@10": int(2 * value),
+                                  "span_coverage@10": value} for q in ("q1", "q2")}}
 
     table = ev.compare_table([record("a", 0.5), record("b", 1.0)], ["span_coverage@10"])
-    assert "a (baseline)" in table and "+0.500" in table and "2/0/0" in table
+    assert "a (baseline)" in table and "+0.500, +2 spans" in table and "2/0/0" in table
     drift = ev.compare_table([record("a", 0.5), record("b", 1.0, sha="s2")], ["span_coverage@10"])
     assert "different versions of the eval set" in drift
 

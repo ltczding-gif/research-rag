@@ -220,7 +220,9 @@ def test_diagnostic_depth_records_first_covered_rank_without_changing_scores(cor
     plain = ev.run_strategy(core, suite, "dense", ks=(1,), packet_budget=None)
     deep = ev.run_strategy(core, suite, "dense", ks=(1,), packet_budget=None, diagnostic_depth=5)
     assert deep["metrics"]["overall"]["span_coverage@1"] == plain["metrics"]["overall"]["span_coverage@1"]
-    assert deep["metrics"]["overall"]["span_coverage@5"] == 1.0
+    assert deep["metrics"]["overall"]["diagnostic_span_coverage"] == 1.0
+    assert "span_coverage@5" not in deep["metrics"]["overall"]
+    assert deep["settings"]["diagnostic_results_returned"]["max"] <= 5
     ranks = [r for row in deep["per_query"].values() for r in row["span_first_covered_ranks"]]
     assert all(isinstance(r, int) and 1 <= r <= 5 for r in ranks)
     assert deep["settings"]["diagnostic_depth"] == 5 and plain["settings"]["diagnostic_depth"] is None

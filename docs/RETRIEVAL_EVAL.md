@@ -281,8 +281,11 @@ reveal what the queries are about.
 
 `--diagnostic-depth 100` runs one extra, deeper search per query. It records
 for each gold span the rank at which it is first fully covered
-(`span_first_covered_ranks`), plus `span_coverage@100` and
-`covered_rank_median`. Metrics at the requested k are unchanged. The deeper
+(`span_first_covered_ranks`), plus `diagnostic_span_coverage` and
+`covered_rank_median`. Metrics at the requested k are unchanged. Pinned pools
+can return fewer hits than requested, for example a 50-candidate rerank pool.
+`settings.diagnostic_results_returned` records how many hits came back, and
+`diagnostic_span_coverage` is coverage of that list, not "coverage@100". The deeper
 list tells a ranking problem apart from a recall problem. Hybrid diagnostics
 keep the same per-retriever candidate pool as the scored search; the run fails
 if the deeper result does not preserve its top-k prefix. The two default 50-candidate
@@ -300,10 +303,24 @@ python benchmarks/scripts/retrieval_eval.py compare --suite-id w6-v2 --baseline 
 ```
 
 The table shows each run's headline metrics and, against the baseline, the
-paired per-query delta of the primary metric. It includes a bootstrap 95%
-interval and wins/losses/ties. A run on a different eval-set version, or one
-that scored a different set of gold spans, is shown as *not comparable*
-instead of receiving a delta.
+paired delta of the primary metric, **averaged the same way as the metric**:
+
+- For span coverage, the delta is the change in total covered spans divided
+  by total spans. For example, `+0.129, +4 spans` means four more gold spans
+  were covered.
+- Its 95% interval comes from a cluster bootstrap that resamples questions,
+  so all spans of one question move together.
+- Wins, losses and ties count questions that gained or lost covered spans.
+
+A per-question mean can point the other way: one question gaining its only
+span and another losing two of four averages to +0.25 per question while total
+coverage falls. The API still reports the per-question mean as
+`mean_question_delta`, but it is never the headline. Records without
+per-question span counts cannot be paired on span metrics. Records made with
+`--diagnostic-depth` carry the counts implicitly and still can.
+
+A run on a different eval-set version, or one that scored a different set of
+gold spans, is shown as *not comparable* instead of receiving a delta.
 
 ## Decision rule for retrieval changes
 
